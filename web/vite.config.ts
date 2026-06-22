@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { fileURLToPath, URL } from "node:url";
 import { defineConfig, type Plugin } from "vite";
 import vue from "@vitejs/plugin-vue";
@@ -63,6 +64,21 @@ export default defineConfig({
           // the app can load fast on first paint.
           crypto: ["libsodium-wrappers-sumo"],
         },
+      },
+    },
+  },
+  test: {
+    environment: "happy-dom",
+    globals: true,
+    setupFiles: ["./src/__tests__/setup.ts"],
+    include: ["src/**/*.test.ts"],
+    server: {
+      deps: {
+        // Process libsodium through the Vite plugin pipeline so
+        // fixLibsodiumImport can rewrite the broken relative import.
+        // Without this, vitest's dep optimizer pre-bundles it and bypasses
+        // the plugin, causing the import to fail.
+        inline: ["libsodium-wrappers-sumo", "libsodium-sumo"],
       },
     },
   },
