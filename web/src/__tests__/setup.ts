@@ -1,5 +1,4 @@
-import { beforeAll, afterEach, afterAll, vi } from "vitest";
-import { setupServer } from "msw/node";
+import { beforeAll, vi } from "vitest";
 
 import { initCrypto } from "@/crypto";
 
@@ -34,9 +33,7 @@ vi.mock("localforage", () => {
   };
 });
 
-// --- msw: intercept fetch for api/client tests -------------------------------
-export const mswServer = setupServer();
-
-beforeAll(() => mswServer.listen({ onUnhandledRequest: "warn" }));
-afterEach(() => mswServer.resetHandlers());
-afterAll(() => mswServer.close());
+// Note: fetch is NOT mocked globally here. api/client tests stub `fetch`
+// per-test via vi.stubGlobal (see client.test.ts). msw was evaluated but its
+// Response body streams conflict with happy-dom's FetchResponse.text()
+// consumer ("ReadableStream is locked"), so direct vi.fn stubbing is used.
