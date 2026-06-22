@@ -1,0 +1,39 @@
+# ===== Rust =====
+/server/target/
+/server/**/*.rs.bk
+**/*.rs.bk
+Cargo.lock.bak
+
+# ===== Node / Vite =====
+/web/node_modules/
+/web/dist/
+/web/.vite/
+/web/*.tsbuildinfo
+/web/node_modules/.tmp/
+**/.eslintcache
+
+# ===== Local data & secrets =====
+/server/data/
+/server/.env
+/server/config.local.toml
+*.local.toml
+*.local
+
+# ===== IDE / OS =====
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ===== Logs =====
+*.log
+logs/
+
+# ===== Build artifacts =====
+*.exe
+*.dll
+*.so
+*.dylib

@@ -1,0 +1,49 @@
+:root {
+  --df-color-bg: #0f1115;
+  --df-color-bg-elevated: #161a22;
+  --df-color-fg: #e6e9ef;
+  --df-color-fg-muted: #9aa4b2;
+  --df-color-accent: #ff7a45;
+  --df-color-accent-fg: #ffffff;
+  --df-color-border: #232936;
+  --df-radius-sm: 6px;
+  --df-radius-md: 10px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--df-color-bg);
+  color: var(--df-color-fg);
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
+    sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+a {
+  color: var(--df-color-accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+}

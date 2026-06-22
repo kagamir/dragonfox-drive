@@ -1,0 +1,27 @@
+# DragonFox Drive - Server Configuration
+# Copy to .env or set as environment variables.
+
+# Server bind address.
+[server]
+host = "0.0.0.0"
+port = 8080
+
+# Directory where encrypted file chunks are stored on disk.
+[storage]
+data_dir = "./data"
+
+# SQLite database file path.
+[database]
+url = "sqlite://./data/dragonfox.db?mode=rwc"
+
+# JWT signing secret. CHANGE THIS in production. Use `openssl rand -hex 32`.
+[jwt]
+secret = "change-me-to-a-long-random-secret-in-production"
+access_ttl_seconds = 900         # 15 minutes
+refresh_ttl_seconds = 2592000    # 30 days
+
+# Registration & rate-limiting knobs.
+[limits]
+max_upload_bytes = 0             # 0 = unlimited (per chunk enforced elsewhere)
+max_chunk_bytes = 8388608        # 8 MiB encrypted chunk hard cap
+rate_limit_per_minute = 600
