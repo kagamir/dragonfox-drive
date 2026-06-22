@@ -136,3 +136,63 @@ impl Settings {
 fn map_config_err(e: ConfigError) -> anyhow::Error {
     anyhow::anyhow!(e.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults_match_documented_values() {
+        let s = Settings::default();
+        assert_eq!(s.server.host, "0.0.0.0");
+        assert_eq!(s.server.port, 8080);
+        assert_eq!(s.storage.data_dir, std::path::PathBuf::from("./data"));
+        assert_eq!(s.database.url, "sqlite://./data/dragonfox.db?mode=rwc");
+        assert_eq!(s.jwt.access_ttl_seconds, 900);
+        assert_eq!(s.jwt.refresh_ttl_seconds, 2_592_000);
+        assert_eq!(s.limits.max_upload_bytes, 0);
+        assert_eq!(s.limits.max_chunk_bytes, 8 * 1024 * 1024);
+        assert_eq!(s.limits.rate_limit_per_minute, 600);
+    }
+
+    #[test]
+    fn jwt_default_secret_is_the_documented_placeholder() {
+        assert_eq!(
+            Settings::default().jwt.secret,
+            "change-me-to-a-long-random-secret-in-production",
+        );
+    }
+
+    /// WARNING: mutates process CWD and env. Run the suite with --test-threads=1.
+    #[test]
+    fn load_merges_toml_file_and_env_overrides() {
+        let dir = tempfile::tempdir().unwrap();
+        let original_cwd = std::env::current_dir().unwrap();
+
+        struct Restore {
+            cwd: std::path::PathBuf,
+        }
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                let _ = std::env::set_current_dir(&self.cwd);
+                std::env::remove_var("DRAGONFOX__SERVER__HOST");
+            }
+        }
+        let _guard = Restore {
+            cwd: original_cwd.clone(),
+        };
+
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[server]\nport = 9999\nhost = \"0.0.0.0\"\n",
+        )
+        .unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+        std::env::set_var("DRAGONFOX__SERVER__HOST", "127.0.0.1");
+
+        let settings = Settings::load().unwrap();
+
+        assert_eq!(settings.server.port, 9999);
+        assert_eq!(settings.server.host, "127.0.0.1");
+    }
+}
