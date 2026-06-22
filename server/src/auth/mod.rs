@@ -109,3 +109,121 @@ impl FromRequestParts<AppState> for AuthUser {
 // `State<AppState>` is used by handlers in api/auth.rs via `extract::State`.
 #[allow(dead_code)]
 fn _state_used(_: State<AppState>) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Settings;
+    use crate::db;
+    use crate::state::AppState;
+    use axum::extract::FromRequestParts;
+    use axum::http::Request;
+    use std::sync::Arc;
+
+    async fn test_state() -> AppState {
+        let mut settings = Settings::default();
+        settings.jwt.secret = "test-secret".into();
+        let pool = db::connect("sqlite::memory:").await.unwrap();
+        AppState::new(Arc::new(settings), pool)
+    }
+
+    #[tokio::test]
+    async fn issue_and_verify_round_trip() {
+        let state = test_state().await;
+        let pair = issue_token_pair(&state, "user-1", Some("dev-1")).unwrap();
+        let claims = verify_access_token(&state, &pair.access_token).unwrap();
+        assert_eq!(claims.sub, "user-1");
+        assert_eq!(claims.dev.as_deref(), Some("dev-1"));
+    }
+
+    #[tokio::test]
+    async fn refresh_token_has_later_expiry_than_access() {
+        let state = test_state().await;
+        let pair = issue_token_pair(&state, "u", None).unwrap();
+        assert_ne!(pair.access_token, pair.refresh_token);
+        let access = verify_access_token(&state, &pair.access_token).unwrap();
+        let refresh = verify_access_token(&state, &pair.refresh_token).unwrap();
+        assert!(refresh.exp > access.exp, "refresh must outlive access");
+    }
+
+    #[tokio::test]
+    async fn verify_rejects_token_signed_with_a_different_secret() {
+        let state = test_state().await;
+        let pair = issue_token_pair(&state, "u", None).unwrap();
+        let mut other_state = test_state().await;
+        Arc::get_mut(&mut other_state.settings)
+            .unwrap()
+            .jwt
+            .secret = "different-secret".into();
+        match verify_access_token(&other_state, &pair.access_token) {
+            Err(ApiError::Unauthorized) => {}
+            other => panic!("expected Unauthorized, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_rejects_malformed_token() {
+        let state = test_state().await;
+        assert!(matches!(
+            verify_access_token(&state, "not.a.jwt"),
+            Err(ApiError::Unauthorized)
+        ));
+    }
+
+    #[tokio::test]
+    async fn verify_rejects_expired_token() {
+        let state = test_state().await;
+        let expired = AccessClaims {
+            sub: "u".into(),
+            dev: None,
+            exp: (Utc::now() - Duration::seconds(300)).timestamp(),
+        };
+        let encoding = EncodingKey::from_secret(b"test-secret");
+        let token = encode(&Header::default(), &expired, &encoding).unwrap();
+        assert!(matches!(
+            verify_access_token(&state, &token),
+            Err(ApiError::Unauthorized)
+        ));
+    }
+
+    #[tokio::test]
+    async fn auth_user_extractor_accepts_a_valid_bearer_token() {
+        let state = test_state().await;
+        let pair = issue_token_pair(&state, "user-x", Some("dev-x")).unwrap();
+        let req = Request::builder()
+            .header("authorization", format!("Bearer {}", pair.access_token))
+            .body::<String>(String::new())
+            .unwrap();
+        let (mut parts, _body) = req.into_parts();
+        let user = AuthUser::from_request_parts(&mut parts, &state)
+            .await
+            .unwrap();
+        assert_eq!(user.user_id, "user-x");
+        assert_eq!(user.device_id.as_deref(), Some("dev-x"));
+    }
+
+    #[tokio::test]
+    async fn auth_user_extractor_rejects_missing_header() {
+        let state = test_state().await;
+        let req = Request::<String>::default();
+        let (mut parts, _body) = req.into_parts();
+        assert!(matches!(
+            AuthUser::from_request_parts(&mut parts, &state).await,
+            Err(ApiError::Unauthorized)
+        ));
+    }
+
+    #[tokio::test]
+    async fn auth_user_extractor_rejects_non_bearer_scheme() {
+        let state = test_state().await;
+        let req = Request::builder()
+            .header("authorization", "Basic dXNlcjpwdw==")
+            .body::<String>(String::new())
+            .unwrap();
+        let (mut parts, _body) = req.into_parts();
+        assert!(matches!(
+            AuthUser::from_request_parts(&mut parts, &state).await,
+            Err(ApiError::Unauthorized)
+        ));
+    }
+}
