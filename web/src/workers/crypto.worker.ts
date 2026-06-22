@@ -25,7 +25,7 @@ import {
   type WrappedKey,
 } from "@/crypto/keys";
 
-const api = {
+export const api = {
   async init() {
     await initCrypto();
   },
