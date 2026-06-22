@@ -92,4 +92,4 @@ variables (e.g. `DRAGONFOX__JWT__SECRET=...`).
 
 ## License
 
-Dual-licensed under MIT or Apache-2.0, at your option.
+GNU AFFERO GENERAL PUBLIC LICENSE Version 3
