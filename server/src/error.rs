@@ -70,3 +70,100 @@ impl IntoResponse for ApiError {
         (status, body).into_response()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::to_bytes;
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+    use sqlx::Error as SqlxError;
+
+    #[test]
+    fn bad_request_maps_to_400() {
+        let resp = ApiError::BadRequest("nope".into()).into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn unauthorized_maps_to_401() {
+        assert_eq!(
+            ApiError::Unauthorized.into_response().status(),
+            StatusCode::UNAUTHORIZED,
+        );
+    }
+
+    #[test]
+    fn forbidden_maps_to_403() {
+        assert_eq!(
+            ApiError::Forbidden.into_response().status(),
+            StatusCode::FORBIDDEN,
+        );
+    }
+
+    #[test]
+    fn not_found_maps_to_404() {
+        assert_eq!(
+            ApiError::NotFound.into_response().status(),
+            StatusCode::NOT_FOUND,
+        );
+    }
+
+    #[test]
+    fn conflict_maps_to_409() {
+        assert_eq!(
+            ApiError::Conflict("dup".into()).into_response().status(),
+            StatusCode::CONFLICT,
+        );
+    }
+
+    #[test]
+    fn payload_too_large_maps_to_413() {
+        assert_eq!(
+            ApiError::PayloadTooLarge.into_response().status(),
+            StatusCode::PAYLOAD_TOO_LARGE,
+        );
+    }
+
+    #[test]
+    fn internal_maps_to_500() {
+        assert_eq!(
+            ApiError::Internal(anyhow::anyhow!("boom")).into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        );
+    }
+
+    #[tokio::test]
+    async fn internal_body_does_not_leak_detail() {
+        let resp =
+            ApiError::Internal(anyhow::anyhow!("secret detail")).into_response();
+        let bytes = to_bytes(resp.into_body(), 1024).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"], "internal server error");
+        assert!(
+            !bytes.windows(6).any(|w| w == b"secret"),
+            "internal detail must not appear in the response body"
+        );
+    }
+
+    #[tokio::test]
+    async fn bad_request_body_contains_the_message() {
+        let resp =
+            ApiError::BadRequest("a specific reason".into()).into_response();
+        let bytes = to_bytes(resp.into_body(), 1024).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"], "invalid request: a specific reason");
+    }
+
+    #[test]
+    fn sqlx_row_not_found_maps_to_api_not_found() {
+        let err: ApiError = SqlxError::RowNotFound.into();
+        assert!(matches!(err, ApiError::NotFound));
+    }
+
+    #[test]
+    fn sqlx_other_error_maps_to_internal() {
+        let err: ApiError = SqlxError::PoolClosed.into();
+        assert!(matches!(err, ApiError::Internal(_)));
+    }
+}
