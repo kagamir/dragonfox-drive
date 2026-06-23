@@ -195,4 +195,32 @@ mod tests {
         assert_eq!(settings.server.port, 9999);
         assert_eq!(settings.server.host, "127.0.0.1");
     }
+
+    /// Regression guard: a `[limits]` section in config.toml MUST override the
+    /// code default. A stale `max_upload_bytes = 0` in the file previously
+    /// collapsed the router-wide `DefaultBodyLimit` to zero, returning 413 for
+    /// every request body (including tiny auth JSON). WARNING: mutates CWD —
+    /// run the suite with --test-threads=1.
+    #[test]
+    fn load_lets_toml_override_max_upload_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let original_cwd = std::env::current_dir().unwrap();
+        struct Restore(PathBuf);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                let _ = std::env::set_current_dir(&self.0);
+            }
+        }
+        let _guard = Restore(original_cwd);
+
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[limits]\nmax_upload_bytes = 42\n",
+        )
+        .unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+
+        let settings = Settings::load().unwrap();
+        assert_eq!(settings.limits.max_upload_bytes, 42);
+    }
 }

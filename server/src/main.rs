@@ -93,3 +93,150 @@ fn build_router(state: AppState) -> Router {
         .layer(compression)
         .with_state(state)
 }
+
+#[cfg(test)]
+mod tests {
+    //! Router-level integration tests.
+    //!
+    //! The per-handler unit tests in `api/*.rs` call handler functions directly
+    //! and therefore bypass axum's middleware stack. These tests exercise the
+    //! real `build_router` output via `tower::ServiceExt::oneshot` so that the
+    //! router-wide `DefaultBodyLimit`, the `AuthUser` extractor, and route
+    //! registration are all covered. This is the layer where the
+    //! "413 on prelogin" regression lived (a `max_upload_bytes = 0` in
+    //! config.toml collapsed the body limit to zero).
+
+    use super::*;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    use crate::auth::issue_token_pair;
+
+    /// Build a router backed by an in-memory DB. Returns the router and the
+    /// cloned `AppState` so tests can mint JWTs signed with the same secret.
+    async fn test_router(max_upload: u64) -> (Router, AppState) {
+        let mut settings = Settings::default();
+        settings.jwt.secret = "test".into();
+        settings.limits.max_upload_bytes = max_upload;
+        let pool = db::connect("sqlite::memory:").await.unwrap();
+        db::migrate(&pool).await.unwrap();
+        let state = AppState::new(Arc::new(settings), pool);
+        (build_router(state.clone()), state)
+    }
+
+    fn bearer(state: &AppState, user_id: &str) -> String {
+        let pair = issue_token_pair(state, user_id, None).unwrap();
+        format!("Bearer {}", pair.access_token)
+    }
+
+    #[tokio::test]
+    async fn health_returns_200_without_a_body() {
+        let (app, _state) = test_router(104857600).await;
+        let res = app
+            .oneshot(Request::builder().uri("/api/health").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    /// Regression guard for the 413-on-prelogin incident: a normal-sized auth
+    /// JSON body must reach the handler, not be rejected by the router-wide
+    /// `DefaultBodyLimit`.
+    #[tokio::test]
+    async fn small_json_body_is_not_rejected_by_the_body_limit() {
+        let (app, _state) = test_router(104857600).await;
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/auth/prelogin")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"username":"nobody"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // 404 = prelogin reached the handler and reported an unknown user.
+        // The regression would have produced 413 here.
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn oversized_body_is_rejected_with_413() {
+        let (app, _state) = test_router(100).await; // deliberately tiny limit
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/auth/prelogin")
+                    .header("content-type", "application/json")
+                    .body(Body::from(vec![b'x'; 101]))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn zero_body_limit_rejects_every_body_with_413() {
+        // Direct guard for the exact regression: max_upload_bytes = 0 must
+        // not silently pass through; the symptom is 413 on any body.
+        let (app, _state) = test_router(0).await;
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/auth/prelogin")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"username":"nobody"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn protected_route_rejects_missing_authorization_with_401() {
+        let (app, _state) = test_router(104857600).await;
+        let res = app
+            .oneshot(Request::builder().uri("/api/files").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn protected_route_accepts_a_valid_bearer_token() {
+        let (app, state) = test_router(104857600).await;
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/files")
+                    .header("authorization", bearer(&state, "user-1"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn protected_route_rejects_a_malformed_authorization_header() {
+        let (app, _state) = test_router(104857600).await;
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/files")
+                    .header("authorization", "Basic dXNlcjpwdw==")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+}
