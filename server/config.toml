@@ -23,8 +23,8 @@ refresh_ttl_seconds = 2592000    # 30 days
 # Sizing knobs.
 [limits]
 # Total per-file cap, checked by POST /api/files on `total_size`. Must be > 0
-# (a value of 0 disables the total-size check). Default 10 GiB.
-max_file_bytes = 10737418240
+# (a value of 0 disables the total-size check). Default 100 GiB.
+max_file_bytes = 107374182400        # 100 GiB total-file cap (checked by POST /api/files on total_size)
 # Per request/chunk body cap, applied as the router-wide DefaultBodyLimit so
 # it bounds every request body (auth JSON is tiny; an encrypted chunk is the
 # real consumer). Must be > 0 — a value of 0 rejects ALL bodies (HTTP 413).

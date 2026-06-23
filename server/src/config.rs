@@ -101,7 +101,7 @@ impl Default for JwtSettings {
 impl Default for LimitSettings {
     fn default() -> Self {
         Self {
-            max_file_bytes: 10 * 1024 * 1024 * 1024,
+            max_file_bytes: 100 * 1024 * 1024 * 1024,
             max_chunk_bytes: 8 * 1024 * 1024,
             rate_limit_per_minute: 600,
         }
@@ -150,7 +150,7 @@ mod tests {
         assert_eq!(s.database.url, "sqlite://./data/dragonfox.db?mode=rwc");
         assert_eq!(s.jwt.access_ttl_seconds, 900);
         assert_eq!(s.jwt.refresh_ttl_seconds, 2_592_000);
-        assert_eq!(s.limits.max_file_bytes, 10 * 1024 * 1024 * 1024);
+        assert_eq!(s.limits.max_file_bytes, 100 * 1024 * 1024 * 1024);
         assert_eq!(s.limits.max_chunk_bytes, 8 * 1024 * 1024);
         assert_eq!(s.limits.rate_limit_per_minute, 600);
     }
