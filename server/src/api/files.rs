@@ -5,7 +5,9 @@
 //! file name, mime, etc.) is also stored as an opaque blob.
 
 use axum::{
+    body::Bytes,
     extract::{Path, State},
+    http::header,
     response::IntoResponse,
     Json,
 };
@@ -16,6 +18,7 @@ use crate::auth::AuthUser;
 use crate::error::{ApiError, ApiResult};
 use crate::models::FileRow;
 use crate::state::AppState;
+use crate::storage;
 
 #[derive(Debug, Serialize)]
 pub struct FileMeta {
@@ -154,25 +157,61 @@ pub async fn put_manifest(
 
 pub async fn get_chunk(
     State(state): State<AppState>,
-    _user: AuthUser,
-    Path((_id, _idx)): Path<(String, u32)>,
+    user: AuthUser,
+    Path((id, idx)): Path<(String, u32)>,
 ) -> ApiResult<impl IntoResponse> {
-    let _ = state;
-    Err::<Vec<u8>, ApiError>(ApiError::Internal(anyhow::anyhow!(
-        "files::get_chunk not yet implemented (p2 milestone)"
-    )))
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT status FROM files WHERE id = ? AND owner_id = ?")
+        .bind(&id).bind(&user.user_id)
+        .fetch_optional(&state.db).await?;
+    match row {
+        None => Err(ApiError::NotFound),
+        Some((status,)) if status != "ready" => {
+            Err(ApiError::BadRequest("file is not ready".into()))
+        }
+        Some(_) => {
+            let bytes = storage::read_chunk(&state, &id, idx)
+                .await?
+                .ok_or(ApiError::NotFound)?;
+            Ok((
+                [(header::CONTENT_TYPE, "application/octet-stream")],
+                bytes,
+            ))
+        }
+    }
 }
 
 pub async fn put_chunk(
     State(state): State<AppState>,
-    _user: AuthUser,
-    Path((_id, _idx)): Path<(String, u32)>,
-    _body: axum::body::Body,
+    user: AuthUser,
+    Path((id, idx)): Path<(String, u32)>,
+    bytes: Bytes,
 ) -> ApiResult<Json<Value>> {
-    let _ = state;
-    Err(ApiError::Internal(anyhow::anyhow!(
-        "files::put_chunk not yet implemented (p2 milestone)"
-    )))
+    let max = state.settings.limits.max_upload_bytes;
+    if max > 0 && (bytes.len() as u64) > max {
+        return Err(ApiError::PayloadTooLarge);
+    }
+    let exists: Option<(String,)> = sqlx::query_as(
+        "SELECT id FROM files WHERE id = ? AND owner_id = ?")
+        .bind(&id).bind(&user.user_id)
+        .fetch_optional(&state.db).await?;
+    if exists.is_none() {
+        return Err(ApiError::NotFound);
+    }
+    storage::write_chunk(&state, &id, idx, &bytes).await?;
+    let path = storage::chunk_path(&state.settings.storage.data_dir, &id, idx);
+    sqlx::query(
+        "INSERT INTO file_chunks (file_id, idx, cipher_size, storage_path) \
+         VALUES (?, ?, ?, ?) \
+         ON CONFLICT(file_id, idx) DO UPDATE SET \
+            cipher_size = excluded.cipher_size, \
+            storage_path = excluded.storage_path")
+        .bind(&id)
+        .bind(idx as i32)
+        .bind(bytes.len() as i64)
+        .bind(path.to_string_lossy().to_string())
+        .execute(&state.db).await?;
+    Ok(Json(json!({ "ok": true })))
 }
 
 pub async fn finalize(
@@ -213,6 +252,9 @@ mod tests {
         let mut settings = Settings::default();
         settings.jwt.secret = "test".into();
         let dir = tempfile::tempdir().unwrap();
+        // Isolate blob storage under the same tempdir so chunk-writing tests
+        // don't race on the shared `./data` default across parallel tests.
+        settings.storage.data_dir = dir.path().join("data");
         let db_path = dir.path().join("t.db").to_string_lossy().replace('\\', "/");
         let url = format!("sqlite://{}?mode=rwc", db_path);
         let pool = db::connect(&url).await.unwrap();
@@ -351,5 +393,67 @@ mod tests {
             Json(PutManifestRequest { encrypted_manifest: "x".into(), encrypted_manifest_nonce: "y".into() }),
         ).await.unwrap_err();
         assert!(matches!(err, ApiError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn put_chunk_writes_bytes_and_row() {
+        let (state, _guard) = files_state().await;
+        seed_user(&state, "u1").await;
+        seed_ready_file(&state, "f1", "u1").await;
+        let body = Bytes::from_static(b"cipherdata");
+        put_chunk(
+            State(state.clone()), auth("u1"),
+            Path(("f1".to_string(), 0u32)), body,
+        ).await.unwrap();
+        let on_disk = storage::read_chunk(&state, "f1", 0).await.unwrap();
+        assert_eq!(on_disk, Some(b"cipherdata".to_vec()));
+        let count: (i64,) = sqlx::query_as("SELECT count(*) FROM file_chunks WHERE file_id = 'f1'")
+            .fetch_one(&state.db).await.unwrap();
+        assert_eq!(count.0, 1);
+    }
+
+    #[tokio::test]
+    async fn put_chunk_returns_413_when_oversized() {
+        let (mut state, _guard) = files_state().await;
+        // Shrink the limit so the test allocates a few bytes, not ~100 MiB.
+        Arc::get_mut(&mut state.settings).unwrap().limits.max_upload_bytes = 5;
+        seed_user(&state, "u1").await;
+        seed_ready_file(&state, "f1", "u1").await;
+        let big = Bytes::from_static(b"123456"); // 6 bytes > 5
+        let err = put_chunk(
+            State(state.clone()), auth("u1"),
+            Path(("f1".to_string(), 0u32)), big,
+        ).await.unwrap_err();
+        assert!(matches!(err, ApiError::PayloadTooLarge));
+    }
+
+    #[tokio::test]
+    async fn put_chunk_returns_404_for_non_owner() {
+        let (state, _guard) = files_state().await;
+        seed_user(&state, "u1").await;
+        seed_user(&state, "u2").await;
+        seed_ready_file(&state, "f1", "u1").await;
+        let err = put_chunk(
+            State(state.clone()), auth("u2"),
+            Path(("f1".to_string(), 0u32)), Bytes::from_static(b"x"),
+        ).await.unwrap_err();
+        assert!(matches!(err, ApiError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn get_chunk_returns_stored_bytes() {
+        let (state, _guard) = files_state().await;
+        seed_user(&state, "u1").await;
+        seed_ready_file(&state, "f1", "u1").await;
+        storage::write_chunk(&state, "f1", 0, b"payload").await.unwrap();
+        sqlx::query("UPDATE files SET status = 'ready' WHERE id = 'f1'")
+            .execute(&state.db).await.unwrap();
+        let resp = get_chunk(
+            State(state.clone()), auth("u1"),
+            Path(("f1".to_string(), 0u32)),
+        ).await.unwrap().into_response();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
+        assert_eq!(&bytes[..], b"payload");
     }
 }
