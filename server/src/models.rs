@@ -12,3 +12,18 @@ pub struct User {
     pub created_at: String,
     pub updated_at: String,
 }
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct FileRow {
+    pub id: String,
+    pub owner_id: String,
+    pub status: String,
+    pub total_size: i64,
+    pub chunk_count: i32,
+    pub encrypted_manifest: Option<String>,
+    pub encrypted_manifest_nonce: Option<String>,
+    pub encrypted_file_key: Option<String>,
+    pub encrypted_file_key_nonce: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}

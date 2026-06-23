@@ -24,6 +24,13 @@ import {
   wrapMasterKey,
   type WrappedKey,
 } from "@/crypto/keys";
+import {
+  decryptFile as decryptFilePayload,
+  decryptManifest as decryptManifestPayload,
+  encryptFile as encryptFilePayload,
+  type EncryptedFilePayload,
+  type Manifest,
+} from "@/crypto/file";
 
 export const api = {
   async init() {
@@ -85,6 +92,44 @@ export const api = {
   ): Promise<Uint8Array> {
     const iv = chunkIv(ivBase, chunkIndex);
     return decryptChunk(key, iv, ciphertext);
+  },
+
+  // --- Whole-file orchestration -----------------------------------------
+
+  async encryptFile(
+    masterKey: RawKey,
+    plaintext: Uint8Array,
+    name: string,
+    mime: string,
+  ): Promise<EncryptedFilePayload> {
+    return encryptFilePayload(masterKey, plaintext, name, mime);
+  },
+
+  async decryptManifest(
+    masterKey: RawKey,
+    encryptedFileKey: string,
+    encryptedFileKeyNonce: string,
+    encryptedManifest: string,
+    encryptedManifestNonce: string,
+  ): Promise<Manifest> {
+    return decryptManifestPayload(
+      masterKey, encryptedFileKey, encryptedFileKeyNonce,
+      encryptedManifest, encryptedManifestNonce,
+    );
+  },
+
+  async decryptFile(
+    masterKey: RawKey,
+    encryptedFileKey: string,
+    encryptedFileKeyNonce: string,
+    encryptedManifest: string,
+    encryptedManifestNonce: string,
+    ciphertext: Uint8Array,
+  ): Promise<{ plaintext: Uint8Array; manifest: Manifest }> {
+    return decryptFilePayload(
+      masterKey, encryptedFileKey, encryptedFileKeyNonce,
+      encryptedManifest, encryptedManifestNonce, ciphertext,
+    );
   },
 };
 

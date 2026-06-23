@@ -14,7 +14,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use axum::{serve, Router};
+use axum::{extract::DefaultBodyLimit, serve, Router};
 use tower_http::{compression::CompressionLayer, cors::CorsLayer, trace::TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
@@ -82,10 +82,12 @@ fn init_tracing() {
 fn build_router(state: AppState) -> Router {
     let cors = CorsLayer::very_permissive();
     let compression = CompressionLayer::new().br(true);
+    let max_body = state.settings.limits.max_upload_bytes as usize;
 
     Router::new()
         .merge(api::routes())
         .fallback(api::assets::fallback)
+        .layer(DefaultBodyLimit::max(max_body))
         .layer(TraceLayer::new_for_http())
         .layer(cors)
         .layer(compression)
