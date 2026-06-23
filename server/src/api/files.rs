@@ -106,13 +106,22 @@ pub async fn create(
 
 pub async fn get_manifest(
     State(state): State<AppState>,
-    _user: AuthUser,
-    Path(_id): Path<String>,
+    user: AuthUser,
+    Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let _ = state;
-    Err(ApiError::Internal(anyhow::anyhow!(
-        "files::get_manifest not yet implemented"
-    )))
+    let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT encrypted_manifest, encrypted_manifest_nonce FROM files \
+         WHERE id = ? AND owner_id = ?")
+        .bind(&id)
+        .bind(&user.user_id)
+        .fetch_optional(&state.db).await?;
+    match row {
+        None => Err(ApiError::NotFound),
+        Some((m, n)) => Ok(Json(json!({
+            "encrypted_manifest": m,
+            "encrypted_manifest_nonce": n,
+        }))),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -123,14 +132,24 @@ pub struct PutManifestRequest {
 
 pub async fn put_manifest(
     State(state): State<AppState>,
-    _user: AuthUser,
-    Path(_id): Path<String>,
-    Json(_req): Json<PutManifestRequest>,
+    user: AuthUser,
+    Path(id): Path<String>,
+    Json(req): Json<PutManifestRequest>,
 ) -> ApiResult<Json<Value>> {
-    let _ = state;
-    Err(ApiError::Internal(anyhow::anyhow!(
-        "files::put_manifest not yet implemented"
-    )))
+    let now = chrono::Utc::now().to_rfc3339();
+    let res = sqlx::query(
+        "UPDATE files SET encrypted_manifest = ?, encrypted_manifest_nonce = ?, updated_at = ? \
+         WHERE id = ? AND owner_id = ?")
+        .bind(&req.encrypted_manifest)
+        .bind(&req.encrypted_manifest_nonce)
+        .bind(&now)
+        .bind(&id)
+        .bind(&user.user_id)
+        .execute(&state.db).await?;
+    if res.rows_affected() == 0 {
+        return Err(ApiError::NotFound);
+    }
+    Ok(Json(json!({ "ok": true })))
 }
 
 pub async fn get_chunk(
@@ -285,5 +304,52 @@ mod tests {
         };
         let err = create(State(state.clone()), auth("u1"), Json(req)).await.unwrap_err();
         assert!(matches!(err, ApiError::PayloadTooLarge));
+    }
+
+    async fn seed_ready_file(state: &AppState, id: &str, owner: &str) {
+        sqlx::query(
+            "INSERT INTO files (id, owner_id, status, total_size, chunk_count, \
+             encrypted_file_key, encrypted_file_key_nonce) \
+             VALUES (?, ?, 'pending', 10, 1, 'k', 'kn')",
+        )
+        .bind(id).bind(owner).execute(&state.db).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn put_then_get_manifest_round_trips() {
+        let (state, _guard) = files_state().await;
+        seed_user(&state, "u1").await;
+        seed_ready_file(&state, "f1", "u1").await;
+        put_manifest(
+            State(state.clone()), auth("u1"), Path("f1".into()),
+            Json(PutManifestRequest {
+                encrypted_manifest: "EM".into(),
+                encrypted_manifest_nonce: "EN".into(),
+            }),
+        ).await.unwrap();
+        let res = get_manifest(State(state.clone()), auth("u1"), Path("f1".into())).await.unwrap();
+        assert_eq!(res.0["encrypted_manifest"], "EM");
+        assert_eq!(res.0["encrypted_manifest_nonce"], "EN");
+    }
+
+    #[tokio::test]
+    async fn get_manifest_returns_404_for_non_owner() {
+        let (state, _guard) = files_state().await;
+        seed_user(&state, "u1").await;
+        seed_user(&state, "u2").await;
+        seed_ready_file(&state, "f1", "u1").await;
+        let err = get_manifest(State(state.clone()), auth("u2"), Path("f1".into())).await.unwrap_err();
+        assert!(matches!(err, ApiError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn put_manifest_returns_404_when_missing() {
+        let (state, _guard) = files_state().await;
+        seed_user(&state, "u1").await;
+        let err = put_manifest(
+            State(state.clone()), auth("u1"), Path("nope".into()),
+            Json(PutManifestRequest { encrypted_manifest: "x".into(), encrypted_manifest_nonce: "y".into() }),
+        ).await.unwrap_err();
+        assert!(matches!(err, ApiError::NotFound));
     }
 }
