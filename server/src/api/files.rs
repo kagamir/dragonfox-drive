@@ -181,6 +181,32 @@ pub async fn get_chunk(
     }
 }
 
+pub async fn list_chunks(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let row: Option<(i32, String)> = sqlx::query_as(
+        "SELECT chunk_count, status FROM files WHERE id = ? AND owner_id = ?")
+        .bind(&id)
+        .bind(&user.user_id)
+        .fetch_optional(&state.db).await?;
+    let (chunk_count, status) = match row {
+        None => return Err(ApiError::NotFound),
+        Some((c, s)) => (c, s),
+    };
+    let rows: Vec<(i32,)> = sqlx::query_as(
+        "SELECT idx FROM file_chunks WHERE file_id = ? ORDER BY idx")
+        .bind(&id)
+        .fetch_all(&state.db).await?;
+    let indices: Vec<i32> = rows.into_iter().map(|(i,)| i).collect();
+    Ok(Json(json!({
+        "indices": indices,
+        "chunk_count": chunk_count,
+        "status": status,
+    })))
+}
+
 pub async fn put_chunk(
     State(state): State<AppState>,
     user: AuthUser,
@@ -525,5 +551,94 @@ mod tests {
         seed_ready_file(&state, "f1", "u1").await;
         let err = delete(State(state.clone()), auth("u2"), Path("f1".into())).await.unwrap_err();
         assert!(matches!(err, ApiError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn list_chunks_returns_indices_chunk_count_and_status() {
+        let (state, _guard) = files_state().await;
+        seed_user(&state, "u1").await;
+        seed_ready_file(&state, "f1", "u1").await;
+        // file declares chunk_count=1 in seed_ready_file; override to 3
+        sqlx::query("UPDATE files SET chunk_count = 3 WHERE id = 'f1'")
+            .execute(&state.db).await.unwrap();
+        storage::write_chunk(&state, "f1", 0, b"a").await.unwrap();
+        storage::write_chunk(&state, "f1", 2, b"c").await.unwrap();
+        sqlx::query("INSERT INTO file_chunks (file_id, idx, cipher_size, storage_path) \
+                     VALUES ('f1', 0, 1, 'p0'), ('f1', 2, 1, 'p2')")
+            .execute(&state.db).await.unwrap();
+
+        let res = list_chunks(State(state.clone()), auth("u1"), Path("f1".into()))
+            .await.unwrap();
+        let v = res.0;
+        assert_eq!(v["indices"], serde_json::json!([0, 2]));
+        assert_eq!(v["chunk_count"], 3);
+        assert_eq!(v["status"], "pending");
+    }
+
+    #[tokio::test]
+    async fn list_chunks_returns_404_for_non_owner() {
+        let (state, _guard) = files_state().await;
+        seed_user(&state, "u1").await;
+        seed_user(&state, "u2").await;
+        seed_ready_file(&state, "f1", "u1").await;
+        let err = list_chunks(State(state.clone()), auth("u2"), Path("f1".into()))
+            .await.unwrap_err();
+        assert!(matches!(err, ApiError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn list_chunks_empty_for_fresh_pending() {
+        let (state, _guard) = files_state().await;
+        seed_user(&state, "u1").await;
+        seed_ready_file(&state, "f1", "u1").await;
+        let res = list_chunks(State(state.clone()), auth("u1"), Path("f1".into()))
+            .await.unwrap();
+        assert_eq!(res.0["indices"], serde_json::json!([]));
+        assert_eq!(res.0["chunk_count"], 1);
+    }
+
+    #[tokio::test]
+    async fn put_chunk_is_idempotent_on_re_put() {
+        let (state, _guard) = files_state().await;
+        seed_user(&state, "u1").await;
+        seed_ready_file(&state, "f1", "u1").await;
+        put_chunk(
+            State(state.clone()), auth("u1"),
+            Path(("f1".to_string(), 0u32)), Bytes::from_static(b"first"),
+        ).await.unwrap();
+        put_chunk(
+            State(state.clone()), auth("u1"),
+            Path(("f1".to_string(), 0u32)), Bytes::from_static(b"second"),
+        ).await.unwrap();
+        let count: (i64,) = sqlx::query_as(
+            "SELECT count(*) FROM file_chunks WHERE file_id = 'f1' AND idx = 0")
+            .fetch_one(&state.db).await.unwrap();
+        assert_eq!(count.0, 1, "re-put must update, not duplicate");
+        assert_eq!(
+            storage::read_chunk(&state, "f1", 0).await.unwrap(),
+            Some(b"second".to_vec()),
+        );
+    }
+
+    #[tokio::test]
+    async fn finalize_marks_ready_for_multi_chunk() {
+        let (state, _guard) = files_state().await;
+        seed_user(&state, "u1").await;
+        // a 3-chunk file
+        sqlx::query(
+            "INSERT INTO files (id, owner_id, status, total_size, chunk_count, \
+             encrypted_file_key, encrypted_file_key_nonce) \
+             VALUES ('f1', 'u1', 'pending', 30, 3, 'k', 'kn')",
+        ).execute(&state.db).await.unwrap();
+        for i in 0..3u32 {
+            storage::write_chunk(&state, "f1", i, b"x").await.unwrap();
+            sqlx::query("INSERT INTO file_chunks (file_id, idx, cipher_size, storage_path) \
+                         VALUES ('f1', ?, 1, 'p')")
+                .bind(i as i32).execute(&state.db).await.unwrap();
+        }
+        finalize(State(state.clone()), auth("u1"), Path("f1".into())).await.unwrap();
+        let row: (String,) = sqlx::query_as("SELECT status FROM files WHERE id = 'f1'")
+            .fetch_one(&state.db).await.unwrap();
+        assert_eq!(row.0, "ready");
     }
 }

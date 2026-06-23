@@ -29,6 +29,7 @@ pub fn routes() -> Router<AppState> {
             "/api/files/:id/chunks/:idx",
             get(files::get_chunk).put(files::put_chunk),
         )
+        .route("/api/files/:id/chunks", get(files::list_chunks))
         .route("/api/files/:id/finalize", post(files::finalize))
         .route("/api/files/:id", delete(files::delete))
         .route("/api/shares", post(shares::create))
