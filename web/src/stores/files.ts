@@ -34,7 +34,16 @@ async function asyncPool<T>(
   for (const item of items) {
     const p = (async () => fn(item))().finally(() => executing.delete(p));
     executing.add(p);
-    if (executing.size >= limit) await Promise.race(executing);
+    if (executing.size >= limit) {
+      try {
+        await Promise.race(executing);
+      } catch (e) {
+        // A task failed. Settle the rest so their rejections are consumed
+        // (not reported as unhandled) before propagating the first failure.
+        await Promise.allSettled(executing);
+        throw e;
+      }
+    }
   }
   await Promise.all(executing);
 }
