@@ -343,11 +343,52 @@ describe("files store", () => {
     expect(ensureStreamSwMock).toHaveBeenCalled();
     expect(postToSwMock).toHaveBeenCalledWith(expect.objectContaining({
       type: "play",
-      meta: expect.objectContaining({ fileId: "vid1", chunkCount: 2 }),
+      meta: expect.objectContaining({ fileId: "vid1", chunkCount: 2, mime: "video/mp4" }),
     }));
     expect(files.preview).not.toBeNull();
     expect(files.preview!.url).toBe("/api/stream/vid1");
     expect(files.preview!.kind).toBe("video");
+  });
+
+  it("needToken SW message refreshes the token and posts it back", async () => {
+    const auth = useAuthStore();
+    auth.masterKey = new Uint8Array(32) as any;
+    ensureStreamSwMock.mockResolvedValue(undefined);
+    (cryptoApi.decryptManifest as any).mockResolvedValue({
+      name: "clip.mp4", mime: "video/mp4", size: 5 * 1024 * 1024 * 1024,
+      iv_base: "iv==", chunk_size: 4 * 1024 * 1024,
+    });
+    let captured: ((e: { data: unknown }) => void) | undefined;
+    vi.stubGlobal("navigator", {
+      ...(navigator as any),
+      serviceWorker: {
+        addEventListener: vi.fn((_: string, cb: (e: { data: unknown }) => void) => {
+          captured = cb;
+        }),
+        controller: null,
+      },
+    });
+    getTokenMock.mockReturnValue("fresh");
+    const files = useFilesStore();
+    const meta = {
+      id: "vid1", owner_id: "u", status: "ready" as const,
+      total_size: 0, chunk_count: 2,
+      encrypted_manifest: "em", encrypted_manifest_nonce: "emn",
+      encrypted_file_key: "fk", encrypted_file_key_nonce: "fkn",
+      created_at: "", updated_at: "",
+    };
+    await files.openPreview(meta);
+    expect(captured).toBeDefined();
+    postToSwMock.mockClear();
+    refreshAuthTokenMock.mockClear();
+    captured!({ data: { type: "needToken", fileId: "vid1" } });
+    // the handler awaits refreshAuthToken (a resolved promise) before posting
+    await new Promise((r) => setTimeout(r, 0));
+    expect(refreshAuthTokenMock).toHaveBeenCalled();
+    expect(postToSwMock).toHaveBeenCalledWith({ type: "token", fileId: "vid1", token: "fresh" });
+    // restore so other tests are unaffected
+    vi.unstubAllGlobals();
+    getTokenMock.mockReturnValue("tok");
   });
 
   it("closePreview posts stop for a stream URL", async () => {

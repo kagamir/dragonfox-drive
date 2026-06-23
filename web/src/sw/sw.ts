@@ -22,7 +22,7 @@ sw.addEventListener("install", () => { void sw.skipWaiting(); });
 sw.addEventListener("activate", (event: any) => { event.waitUntil(sw.clients.claim()); });
 
 sw.addEventListener("message", (event: MessageEvent) => {
-  applySwMessage(metaStore, cache, event.data as SwMessage);
+  try { applySwMessage(metaStore, cache, event.data as SwMessage); } catch { /* ignore malformed messages */ }
 });
 
 sw.addEventListener("fetch", (event: any) => {

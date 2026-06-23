@@ -95,7 +95,8 @@ async function enc(key: Uint8Array, ivBase: Uint8Array, idx: number, pt: Uint8Ar
 function mkMeta(over: Partial<StreamMeta> = {}): StreamMeta {
   return {
     fileId: "f1", fileKey: new Uint8Array(32), ivBase: new Uint8Array(12),
-    size: 0, chunkCount: 0, chunkSize: 4 * 1024 * 1024, token: "tok", ...over,
+    size: 0, chunkCount: 0, chunkSize: 4 * 1024 * 1024, token: "tok",
+    mime: "video/mp4", ...over,
   };
 }
 
@@ -125,6 +126,7 @@ describe("sw logic: request handling", () => {
     expect(res.status).toBe(206);
     expect(res.headers.get("content-range")).toBe("bytes 2-5/8");
     expect(res.headers.get("content-length")).toBe("4");
+    expect(res.headers.get("content-type")).toBe("video/mp4");
     expect(Array.from(new Uint8Array(await res.arrayBuffer()))).toEqual([3, 4, 5, 6]);
     expect(calls).toBe(2);
     // second call hits cache

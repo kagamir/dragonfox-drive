@@ -328,6 +328,7 @@ export const useFilesStore = defineStore("files", () => {
           chunkCount: meta.chunk_count,
           chunkSize: FILE_CHUNK_SIZE,
           token: getAuthToken() ?? "",
+          mime: manifest.mime,
         },
       });
       preview.value = {

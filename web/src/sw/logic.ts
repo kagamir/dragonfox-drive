@@ -98,6 +98,7 @@ export interface StreamMeta {
   chunkCount: number;
   chunkSize: number;
   token: string;
+  mime: string;
 }
 
 export type ChunkFetcher = (idx: number) => Promise<Uint8Array>; // returns ciphertext
@@ -155,7 +156,7 @@ export async function handleStreamRequest(
   }
   const body = sliceRange(plaintexts, firstIdx, meta.chunkSize, start, end);
   const headers = new Headers({
-    "Content-Type": "application/octet-stream",
+    "Content-Type": meta.mime,
     "Accept-Ranges": "bytes",
     "Content-Length": String(body.length),
   });
