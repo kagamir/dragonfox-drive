@@ -187,6 +187,12 @@ These are achieved by:
 - **Abort on seek.** When the browser aborts a response (seek / navigate),
   the SW's per-response `AbortController` cancels the in-flight chunk
   `fetch()`, so rapid seeking doesn't leave orphan downloads.
+- **Mid-stream error semantics.** Because the body is a lazy `ReadableStream`
+  with the `206`/`Content-Length` headers already sent, a chunk-fetch or
+  decrypt failure *during* streaming no longer surfaces as an HTTP 500 —
+  it errors the body mid-response. `/api/stream/:id` is video-only, and the
+  native `<video>` element treats a truncated range as recoverable (it
+  re-issues the Range), so playback degrades rather than aborting hard.
 - **iOS Safari** may restrict module SWs / certain Range behavior → the
   fallback path applies.
 - Abandoned playback without `closePreview` leaves SW meta + LRU entries

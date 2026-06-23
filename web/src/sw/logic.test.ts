@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import {
   SW_CHUNK_SIZE,
   chunksCovering,
-  sliceRange,
   chunkSlice,
   chunkIv,
   LruCache,
@@ -19,24 +18,6 @@ describe("sw logic: pure math", () => {
     expect(chunksCovering(0, Number.MAX_SAFE_INTEGER, size)).toEqual({ firstIdx: 0, lastIdx: 3 });
     // start clamps
     expect(chunksCovering(size + 50, size + 60, size)).toEqual({ firstIdx: 3, lastIdx: 3 });
-  });
-
-  it("sliceRange returns the exact requested bytes across chunks", () => {
-    // 3 chunks of sizes 4,4,2; firstIdx=0
-    const a = new Uint8Array(Array.from({ length: 4 }, (_, i) => i));        // 0,1,2,3
-    const b = new Uint8Array(Array.from({ length: 4 }, (_, i) => 10 + i));   // 10,11,12,13
-    const c = new Uint8Array([20, 21]);                                       // 20,21
-    // bytes [3..11] absolute => 3,10,11,12,13,20,21,22? no: 3 | 10,11,12,13 | 20,21  => indices 3..5 of chunk ranges
-    const out = sliceRange([a, b, c], 0, 4, 3, 5);
-    expect(Array.from(out)).toEqual([3, 10, 11]);
-    const out2 = sliceRange([a, b, c], 0, 4, 2, 7);
-    expect(Array.from(out2)).toEqual([2, 3, 10, 11, 12, 13]);
-    // tail chunk partial
-    const out3 = sliceRange([a, b, c], 0, 4, 7, 9);
-    expect(Array.from(out3)).toEqual([13, 20, 21]);
-    // firstIdx offset: plaintexts start at chunk 1
-    const out4 = sliceRange([b, c], 1, 4, 5, 6);
-    expect(Array.from(out4)).toEqual([11, 12]);
   });
 
   it("chunkSlice returns the overlap of one chunk with the absolute byte range", () => {

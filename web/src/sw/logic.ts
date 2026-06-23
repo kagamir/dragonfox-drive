@@ -19,32 +19,6 @@ export function chunksCovering(
   return { firstIdx: Math.floor(s / chunkSize), lastIdx: Math.floor(e / chunkSize) };
 }
 
-/** Slice the inclusive absolute byte range [start..end] out of concatenated plaintext chunks.
- *  `plaintexts[k]` is the plaintext of chunk `(firstIdx + k)`. */
-export function sliceRange(
-  plaintexts: Uint8Array[],
-  firstIdx: number,
-  chunkSize: number,
-  start: number,
-  end: number,
-): Uint8Array {
-  const take = end - start + 1;
-  const out = new Uint8Array(take);
-  const skipWithin = start - firstIdx * chunkSize; // bytes to skip before the first kept byte
-  let copied = 0;
-  let consumed = 0;
-  for (const p of plaintexts) {
-    if (copied >= take) break;
-    const relStart = Math.max(0, skipWithin - consumed);
-    if (relStart >= p.length) { consumed += p.length; continue; }
-    const takeHere = Math.min(p.length - relStart, take - copied);
-    out.set(p.subarray(relStart, relStart + takeHere), copied);
-    copied += takeHere;
-    consumed += p.length;
-  }
-  return out.slice(0, copied);
-}
-
 /** Slice the bytes of a single decrypted chunk `idx` that fall inside the
  *  absolute byte range [start..end]. `plaintext` is chunk `idx`'s decrypted
  *  bytes (may be shorter than `chunkSize` for the file's tail chunk). */
@@ -207,6 +181,12 @@ export async function handleStreamRequest(
     cancel() { ac.abort(); },
   });
 
+  // Content-Length is fixed up front from the (capped) byte window, before the
+  // body streams. This relies on every non-tail chunk decrypting to exactly
+  // `meta.chunkSize` bytes — an invariant the whole E2EE pipeline already
+  // guarantees (the tail chunk is the only one that may be shorter, and it is
+  // always the last chunk in the window). chunkSlice bounds itself by
+  // `plaintext.length`, so a short tail still slices correctly.
   const headers = new Headers({
     "Content-Type": meta.mime,
     "Accept-Ranges": "bytes",
