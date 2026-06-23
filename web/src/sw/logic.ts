@@ -45,6 +45,24 @@ export function sliceRange(
   return out.slice(0, copied);
 }
 
+/** Slice the bytes of a single decrypted chunk `idx` that fall inside the
+ *  absolute byte range [start..end]. `plaintext` is chunk `idx`'s decrypted
+ *  bytes (may be shorter than `chunkSize` for the file's tail chunk). */
+export function chunkSlice(
+  plaintext: Uint8Array,
+  idx: number,
+  chunkSize: number,
+  start: number,
+  end: number,
+): Uint8Array {
+  const chunkStart = idx * chunkSize;
+  const chunkEnd = chunkStart + plaintext.length - 1;
+  const lo = Math.max(start, chunkStart);
+  const hi = Math.min(end, chunkEnd);
+  if (hi < lo) return new Uint8Array(0);
+  return plaintext.subarray(lo - chunkStart, hi - chunkStart + 1);
+}
+
 /** Derive a chunk IV (XOR-counter scheme identical to crypto/symmetric.ts). */
 export function chunkIv(ivBase: Uint8Array, idx: number): Uint8Array {
   if (ivBase.length !== 12) throw new Error(`ivBase must be 12 bytes, got ${ivBase.length}`);
@@ -137,9 +155,9 @@ export function parseRange(header: string, size: number): { start: number; end: 
   return { start, end: Math.min(end, size - 1) };
 }
 
-/** Serve a Range request: fetch+decrypt the covering chunks (cached), slice the
- *  requested window, and respond 206/200. The response is capped to
- *  `segmentBytes` so the browser re-requests the next segment as playback
+/** Serve a Range request: fetch+decrypt the covering chunks (cached), stream the
+ *  requested window chunk-by-chunk, and respond 206/200. The response is capped
+ *  to `segmentBytes` so the browser re-requests the next segment as playback
  *  advances, instead of pulling the whole file up front. */
 export async function handleStreamRequest(
   req: StreamRequestLike,
@@ -153,20 +171,34 @@ export async function handleStreamRequest(
   const { start, end } = parseRange(rangeHeader, meta.size);
   const effectiveEnd = Math.min(end, start + segmentBytes - 1, meta.size - 1);
   const { firstIdx, lastIdx } = chunksCovering(start, effectiveEnd, meta.size, meta.chunkSize);
-  const plaintexts: Uint8Array[] = [];
-  for (let idx = firstIdx; idx <= lastIdx; idx++) {
-    const key = `${meta.fileId}:${idx}`;
-    let pt = cache.get(key);
-    if (!pt) {
-      const cipher = await fetcher(idx);
-      pt = await decryptChunkSubtle(meta.fileKey, meta.ivBase, idx, cipher);
-      cache.set(key, pt);
-    }
-    plaintexts.push(pt);
-  }
-  const body = sliceRange(plaintexts, firstIdx, meta.chunkSize, start, effectiveEnd);
   const length = effectiveEnd - start + 1;
   const isPartial = hasRange || effectiveEnd < meta.size - 1;
+
+  async function getPlain(idx: number): Promise<Uint8Array> {
+    const key = `${meta.fileId}:${idx}`;
+    const cached = cache.get(key);
+    if (cached) return cached;
+    const cipher = await fetcher(idx);
+    const pt = await decryptChunkSubtle(meta.fileKey, meta.ivBase, idx, cipher);
+    cache.set(key, pt);
+    return pt;
+  }
+
+  const body = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      try {
+        for (let idx = firstIdx; idx <= lastIdx; idx++) {
+          const pt = await getPlain(idx);
+          const slice = chunkSlice(pt, idx, meta.chunkSize, start, effectiveEnd);
+          if (slice.length) controller.enqueue(slice);
+        }
+        controller.close();
+      } catch (e) {
+        controller.error(e);
+      }
+    },
+  });
+
   const headers = new Headers({
     "Content-Type": meta.mime,
     "Accept-Ranges": "bytes",
@@ -174,9 +206,8 @@ export async function handleStreamRequest(
   });
   if (isPartial) {
     headers.set("Content-Range", `bytes ${start}-${effectiveEnd}/${meta.size}`);
-    return new Response(body, { status: 206, headers });
   }
-  return new Response(body, { status: 200, headers });
+  return new Response(body, { status: isPartial ? 206 : 200, headers });
 }
 
 // --- routing + message reducer ----------------------------------------------

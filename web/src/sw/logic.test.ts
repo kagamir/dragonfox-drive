@@ -3,6 +3,7 @@ import {
   SW_CHUNK_SIZE,
   chunksCovering,
   sliceRange,
+  chunkSlice,
   chunkIv,
   LruCache,
 } from "./logic";
@@ -36,6 +37,24 @@ describe("sw logic: pure math", () => {
     // firstIdx offset: plaintexts start at chunk 1
     const out4 = sliceRange([b, c], 1, 4, 5, 6);
     expect(Array.from(out4)).toEqual([11, 12]);
+  });
+
+  it("chunkSlice returns the overlap of one chunk with the absolute byte range", () => {
+    const a = new Uint8Array([1, 2, 3, 4]); // chunk 0 → absolute bytes 0..3
+    // fully covered
+    expect(Array.from(chunkSlice(a, 0, 4, 0, 3))).toEqual([1, 2, 3, 4]);
+    // range starts inside this chunk (keep tail)
+    expect(Array.from(chunkSlice(a, 0, 4, 2, 9))).toEqual([3, 4]);
+    // range ends inside this chunk (keep head)
+    expect(Array.from(chunkSlice(a, 0, 4, 0, 1))).toEqual([1, 2]);
+    // no overlap (range begins after the chunk)
+    expect(Array.from(chunkSlice(a, 0, 4, 5, 9))).toEqual([]);
+    // middle chunk idx=1 → absolute bytes 4..7
+    const b = new Uint8Array([5, 6, 7, 8]);
+    expect(Array.from(chunkSlice(b, 1, 4, 2, 5))).toEqual([5, 6]); // abs bytes 4,5
+    // tail chunk shorter than chunkSize (idx=2 → abs bytes 8..9)
+    const c = new Uint8Array([9, 9]);
+    expect(Array.from(chunkSlice(c, 2, 4, 8, 11))).toEqual([9, 9]);
   });
 
   it("chunkIv matches symmetric.chunkIv and differs per index", () => {
@@ -227,6 +246,35 @@ describe("sw logic: request handling", () => {
     const ct = await enc(key, ivBase, 7, pt);
     const out = await decryptChunkSubtle(key, ivBase, 7, ct);
     expect(Array.from(out)).toEqual([42, 43, 44]);
+  });
+
+  it("handleStreamRequest streams chunk slices in ascending byte order", async () => {
+    const key = crypto.getRandomValues(new Uint8Array(32));
+    const ivBase = crypto.getRandomValues(new Uint8Array(12));
+    const chunkSize = 4;
+    const pts = [
+      new Uint8Array([1, 2, 3, 4]),
+      new Uint8Array([5, 6, 7, 8]),
+      new Uint8Array([9, 10, 11, 12]),
+    ];
+    const cts = await Promise.all(pts.map((pt, i) => enc(key, ivBase, i, pt)));
+    const store = new Map<number, Uint8Array>(cts.map((c, i) => [i, c]));
+    const fetcher: ChunkFetcher = async (idx) => store.get(idx)!;
+    const cache = new L2(1024);
+    const meta = mkMeta({ fileKey: key, ivBase, size: 12, chunkCount: 3, chunkSize });
+    const req = { url: "/api/stream/f1", headers: new Headers({ range: "bytes=2-9" }) };
+    const res = await handleStreamRequest(req, meta, cache, fetcher, 1024);
+    // drain the stream chunk-by-chunk
+    const reader = res.body!.getReader();
+    const chunks: Uint8Array[] = [];
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+    }
+    // range [2..9]: chunk0→[3,4], chunk1→[5,6,7,8], chunk2→[9,10]
+    expect(chunks.length).toBe(3);
+    expect(chunks.flatMap((c) => Array.from(c))).toEqual([3, 4, 5, 6, 7, 8, 9, 10]);
   });
 });
 
