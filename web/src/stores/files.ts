@@ -5,7 +5,8 @@ import { filesApi } from "@/api/files";
 import type { FileMeta } from "@/api/types";
 import { cryptoApi, ensureCryptoReady } from "@/workers/crypto";
 import { useAuthStore } from "./auth";
-import { FILE_CHUNK_SIZE, chunkCount, toBase64 } from "@/crypto/file";
+import { FILE_CHUNK_SIZE, chunkCount, toBase64, fromBase64 } from "@/crypto/file";
+import { kindOf, canPreview, type FileKind } from "@/crypto/preview";
 import type { WrappedKey } from "@/crypto/keys";
 
 export interface UploadSession {
@@ -57,6 +58,12 @@ export const useFilesStore = defineStore("files", () => {
   const downloading = ref(false);
   const displayNames = ref<Record<string, string>>({});
   const activeUploads = ref<UploadSession[]>([]);
+  const preview = ref<{
+    meta: FileMeta;
+    url: string;
+    kind: FileKind;
+    name: string;
+  } | null>(null);
 
   function masterKey(): Uint8Array {
     const key = useAuthStore().masterKey;
@@ -218,35 +225,110 @@ export const useFilesStore = defineStore("files", () => {
     if (idx >= 0) activeUploads.value.splice(idx, 1);
   }
 
+  function saveBlob(blob: Blob, name: string): void {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
   async function download(meta: FileMeta): Promise<void> {
     downloading.value = true;
+    error.value = null;
     try {
       await ensureCryptoReady();
-      const key = masterKey();
-      const resp = await filesApi.getChunk(meta.id, 0);
-      const ciphertext = new Uint8Array(await resp.arrayBuffer());
-      const { plaintext, manifest } = await cryptoApi.decryptFile(
-        key,
+      const mk = masterKey();
+      const manifest = await cryptoApi.decryptManifest(
+        mk,
         meta.encrypted_file_key!,
         meta.encrypted_file_key_nonce!,
         meta.encrypted_manifest!,
         meta.encrypted_manifest_nonce!,
-        ciphertext,
       );
-      const blob = new Blob([plaintext as BlobPart], { type: manifest.mime });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = manifest.name;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      const fileKey = await cryptoApi.unwrap(
+        {
+          ciphertext: fromBase64(meta.encrypted_file_key!),
+          iv: fromBase64(meta.encrypted_file_key_nonce!),
+        },
+        mk,
+      );
+      const ivBase = fromBase64(manifest.iv_base);
+      const n = meta.chunk_count;
+      const parts = new Array<Uint8Array>(n);
+      await asyncPool(
+        3,
+        Array.from({ length: n }, (_, i) => i),
+        async (i) => {
+          const resp = await filesApi.getChunk(meta.id, i);
+          const cipher = new Uint8Array(await resp.arrayBuffer());
+          parts[i] = await cryptoApi.decryptChunk(fileKey, ivBase, i, cipher);
+        },
+      );
+      saveBlob(new Blob(parts as BlobPart[], { type: manifest.mime }), manifest.name);
     } catch (e) {
       error.value = (e as Error).message;
       throw e;
     } finally {
       downloading.value = false;
+    }
+  }
+
+  async function openPreview(meta: FileMeta): Promise<void> {
+    error.value = null;
+    try {
+      await ensureCryptoReady();
+      const mk = masterKey();
+      const manifest = await cryptoApi.decryptManifest(
+        mk,
+        meta.encrypted_file_key!,
+        meta.encrypted_file_key_nonce!,
+        meta.encrypted_manifest!,
+        meta.encrypted_manifest_nonce!,
+      );
+      const kind = kindOf(manifest.mime);
+      if (!canPreview(kind, manifest.size)) {
+        error.value = "File too large to preview — use Download.";
+        return;
+      }
+      const fileKey = await cryptoApi.unwrap(
+        {
+          ciphertext: fromBase64(meta.encrypted_file_key!),
+          iv: fromBase64(meta.encrypted_file_key_nonce!),
+        },
+        mk,
+      );
+      const ivBase = fromBase64(manifest.iv_base);
+      const n = meta.chunk_count;
+      const parts = new Array<Uint8Array>(n);
+      await asyncPool(
+        3,
+        Array.from({ length: n }, (_, i) => i),
+        async (i) => {
+          const resp = await filesApi.getChunk(meta.id, i);
+          const cipher = new Uint8Array(await resp.arrayBuffer());
+          parts[i] = await cryptoApi.decryptChunk(fileKey, ivBase, i, cipher);
+        },
+      );
+      const blob = new Blob(parts as BlobPart[], { type: manifest.mime });
+      preview.value = {
+        meta,
+        url: URL.createObjectURL(blob),
+        kind,
+        name: manifest.name,
+      };
+    } catch (e) {
+      error.value = (e as Error).message;
+    }
+  }
+
+  function closePreview(): void {
+    if (preview.value) {
+      URL.revokeObjectURL(preview.value.url);
+      preview.value = null;
     }
   }
 
@@ -269,5 +351,8 @@ export const useFilesStore = defineStore("files", () => {
     cancelUpload,
     download,
     remove,
+    preview,
+    openPreview,
+    closePreview,
   };
 });

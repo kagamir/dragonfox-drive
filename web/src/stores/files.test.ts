@@ -15,7 +15,7 @@ const {
   putChunkMock: vi.fn().mockResolvedValue({ ok: true }),
   finalizeMock: vi.fn().mockResolvedValue({ ok: true }),
   removeMock: vi.fn().mockResolvedValue({ ok: true }),
-  getChunkMock: vi.fn().mockResolvedValue(new Response(new Uint8Array([1, 2, 3]))),
+  getChunkMock: vi.fn().mockImplementation(() => Promise.resolve(new Response(new Uint8Array([1, 2, 3])))),
   getChunksMock: vi.fn().mockResolvedValue({ indices: [], chunk_count: 1, status: "pending" }),
 }));
 
@@ -62,6 +62,7 @@ vi.mock("@/api/files", () => ({
 
 import { useFilesStore } from "./files";
 import { useAuthStore } from "./auth";
+import { cryptoApi } from "@/workers/crypto";
 
 describe("files store", () => {
   beforeEach(() => {
@@ -152,5 +153,86 @@ describe("files store", () => {
     const files = useFilesStore();
     await files.remove("x");
     expect(removeMock).toHaveBeenCalledWith("x");
+  });
+
+  it("download fetches every chunk and decrypts it", async () => {
+    const auth = useAuthStore();
+    auth.masterKey = new Uint8Array(32) as any;
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn(() => "blob:x"),
+      revokeObjectURL: vi.fn(),
+    });
+    const files = useFilesStore();
+    const meta = {
+      id: "f1", owner_id: "u", status: "ready" as const,
+      total_size: 2, chunk_count: 2,
+      encrypted_manifest: "em", encrypted_manifest_nonce: "emn",
+      encrypted_file_key: "fk", encrypted_file_key_nonce: "fkn",
+      created_at: "", updated_at: "",
+    };
+    await files.download(meta);
+    expect(getChunkMock).toHaveBeenCalledWith("f1", 0);
+    expect(getChunkMock).toHaveBeenCalledWith("f1", 1);
+    expect((cryptoApi.decryptChunk as any)).toHaveBeenCalledTimes(2);
+  });
+
+  it("openPreview decrypts and opens a modal payload for a small text file", async () => {
+    const auth = useAuthStore();
+    auth.masterKey = new Uint8Array(32) as any;
+    const createObjectURL = vi.fn(() => "blob:p");
+    vi.stubGlobal("URL", { createObjectURL, revokeObjectURL: vi.fn() });
+    const files = useFilesStore();
+    const meta = {
+      id: "f1", owner_id: "u", status: "ready" as const,
+      total_size: 2, chunk_count: 1,
+      encrypted_manifest: "em", encrypted_manifest_nonce: "emn",
+      encrypted_file_key: "fk", encrypted_file_key_nonce: "fkn",
+      created_at: "", updated_at: "",
+    };
+    await files.openPreview(meta);
+    expect(files.preview).not.toBeNull();
+    expect(files.preview!.kind).toBe("text");
+    expect(files.preview!.url).toBe("blob:p");
+  });
+
+  it("openPreview rejects files that are too large to preview", async () => {
+    const auth = useAuthStore();
+    auth.masterKey = new Uint8Array(32) as any;
+    vi.stubGlobal("URL", { createObjectURL: vi.fn(), revokeObjectURL: vi.fn() });
+    const files = useFilesStore();
+    // decryptManifest mock returns size: 2; force it over the text cap
+    (cryptoApi.decryptManifest as any).mockResolvedValueOnce({
+      name: "big.txt", mime: "text/plain", size: 3 * 1024 * 1024,
+      iv_base: "iv==", chunk_size: 4 * 1024 * 1024,
+    });
+    const meta = {
+      id: "f1", owner_id: "u", status: "ready" as const,
+      total_size: 0, chunk_count: 1,
+      encrypted_manifest: "em", encrypted_manifest_nonce: "emn",
+      encrypted_file_key: "fk", encrypted_file_key_nonce: "fkn",
+      created_at: "", updated_at: "",
+    };
+    await files.openPreview(meta);
+    expect(files.preview).toBeNull();
+    expect(files.error).toMatch(/too large/i);
+  });
+
+  it("closePreview revokes the url and clears state", async () => {
+    const auth = useAuthStore();
+    auth.masterKey = new Uint8Array(32) as any;
+    const revoke = vi.fn();
+    vi.stubGlobal("URL", { createObjectURL: vi.fn(() => "blob:p"), revokeObjectURL: revoke });
+    const files = useFilesStore();
+    const meta = {
+      id: "f1", owner_id: "u", status: "ready" as const,
+      total_size: 2, chunk_count: 1,
+      encrypted_manifest: "em", encrypted_manifest_nonce: "emn",
+      encrypted_file_key: "fk", encrypted_file_key_nonce: "fkn",
+      created_at: "", updated_at: "",
+    };
+    await files.openPreview(meta);
+    files.closePreview();
+    expect(revoke).toHaveBeenCalledWith("blob:p");
+    expect(files.preview).toBeNull();
   });
 });
