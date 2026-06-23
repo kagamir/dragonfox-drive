@@ -73,6 +73,42 @@ pub fn verify_access_token(state: &AppState, token: &str) -> AuthResult<AccessCl
     Ok(data.claims)
 }
 
+/// Persist a freshly-issued refresh token's SHA-256 hash into the allowlist.
+pub async fn persist_refresh_token(
+    state: &AppState,
+    user_id: &str,
+    device_id: Option<&str>,
+    refresh_token: &str,
+) -> AuthResult<()> {
+    let hash = crate::crypto::hash_refresh_token(refresh_token);
+    let id = uuid::Uuid::new_v4().to_string();
+    let expires_at =
+        (Utc::now() + Duration::seconds(state.settings.jwt.refresh_ttl_seconds)).to_rfc3339();
+    sqlx::query(
+        "INSERT INTO refresh_tokens (id, user_id, device_id, token_hash, expires_at) \
+         VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(id)
+    .bind(user_id)
+    .bind(device_id)
+    .bind(hash)
+    .bind(expires_at)
+    .execute(&state.db)
+    .await?;
+    Ok(())
+}
+
+/// Mark a refresh token (looked up by its hash) as revoked.
+pub async fn revoke_refresh_token(state: &AppState, token_hash: &str) -> AuthResult<()> {
+    let now = Utc::now().to_rfc3339();
+    sqlx::query("UPDATE refresh_tokens SET revoked_at = ? WHERE token_hash = ?")
+        .bind(now)
+        .bind(token_hash)
+        .execute(&state.db)
+        .await?;
+    Ok(())
+}
+
 /// Extractor that authenticates a request via `Authorization: Bearer <jwt>`.
 #[derive(Debug, Clone)]
 pub struct AuthUser {
@@ -225,5 +261,74 @@ mod tests {
             AuthUser::from_request_parts(&mut parts, &state).await,
             Err(ApiError::Unauthorized)
         ));
+    }
+
+    /// A migrated file-backed AppState (refresh_tokens requires real tables).
+    async fn test_state_with_db() -> (AppState, tempfile::TempDir) {
+        let mut settings = Settings::default();
+        settings.jwt.secret = "test-secret".into();
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir
+            .path()
+            .join("test.db")
+            .to_string_lossy()
+            .replace('\\', "/");
+        let url = format!("sqlite://{}?mode=rwc", db_path);
+        let pool = db::connect(&url).await.unwrap();
+        db::migrate(&pool).await.unwrap();
+        (AppState::new(Arc::new(settings), pool), dir)
+    }
+
+    /// Insert a minimal parent user row so refresh_tokens.user_id satisfies its FK.
+    async fn seed_user(state: &AppState, user_id: &str) {
+        sqlx::query(
+            "INSERT INTO users \
+             (id, username, kdf_salt, server_salt, verifier_hash, \
+              encrypted_master_key, encrypted_master_key_nonce) \
+             VALUES (?, ?, 'salt', 'salt', 'hash', 'key', 'nonce')",
+        )
+        .bind(user_id)
+        .bind(user_id)
+        .execute(&state.db)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn persist_refresh_token_inserts_an_unrevoked_row() {
+        let (state, _dir) = test_state_with_db().await;
+        seed_user(&state, "u1").await;
+        persist_refresh_token(&state, "u1", None, "tok-1")
+            .await
+            .unwrap();
+        let hash = crate::crypto::hash_refresh_token("tok-1");
+        let row: Option<(Option<String>,)> = sqlx::query_as(
+            "SELECT revoked_at FROM refresh_tokens WHERE token_hash = ?",
+        )
+        .bind(&hash)
+        .fetch_optional(&state.db)
+        .await
+        .unwrap();
+        let row = row.expect("row must exist");
+        assert!(row.0.is_none(), "revoked_at must be NULL for a fresh token");
+    }
+
+    #[tokio::test]
+    async fn revoke_refresh_token_sets_revoked_at() {
+        let (state, _dir) = test_state_with_db().await;
+        seed_user(&state, "u1").await;
+        persist_refresh_token(&state, "u1", None, "tok-1")
+            .await
+            .unwrap();
+        let hash = crate::crypto::hash_refresh_token("tok-1");
+        revoke_refresh_token(&state, &hash).await.unwrap();
+        let row: (Option<String>,) = sqlx::query_as(
+            "SELECT revoked_at FROM refresh_tokens WHERE token_hash = ?",
+        )
+        .bind(&hash)
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+        assert!(row.0.is_some(), "revoked_at must be set after revoke");
     }
 }
