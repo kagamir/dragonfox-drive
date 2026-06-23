@@ -85,7 +85,7 @@ pub async fn create(
     if req.total_size == 0 {
         return Err(ApiError::BadRequest("total_size must be > 0".into()));
     }
-    let max = state.settings.limits.max_upload_bytes;
+    let max = state.settings.limits.max_file_bytes;
     if max > 0 && req.total_size > max {
         return Err(ApiError::PayloadTooLarge);
     }
@@ -187,7 +187,7 @@ pub async fn put_chunk(
     Path((id, idx)): Path<(String, u32)>,
     bytes: Bytes,
 ) -> ApiResult<Json<Value>> {
-    let max = state.settings.limits.max_upload_bytes;
+    let max = state.settings.limits.max_chunk_bytes;
     if max > 0 && (bytes.len() as u64) > max {
         return Err(ApiError::PayloadTooLarge);
     }
@@ -362,7 +362,7 @@ mod tests {
         let (state, _guard) = files_state().await;
         seed_user(&state, "u1").await;
         let req = CreateFileRequest {
-            total_size: state.settings.limits.max_upload_bytes + 1,
+            total_size: state.settings.limits.max_file_bytes + 1,
             chunk_count: 1,
             encrypted_file_key: "k".into(), encrypted_file_key_nonce: "kn".into(),
         };
@@ -438,7 +438,7 @@ mod tests {
     async fn put_chunk_returns_413_when_oversized() {
         let (mut state, _guard) = files_state().await;
         // Shrink the limit so the test allocates a few bytes, not ~100 MiB.
-        Arc::get_mut(&mut state.settings).unwrap().limits.max_upload_bytes = 5;
+        Arc::get_mut(&mut state.settings).unwrap().limits.max_chunk_bytes = 5;
         seed_user(&state, "u1").await;
         seed_ready_file(&state, "f1", "u1").await;
         let big = Bytes::from_static(b"123456"); // 6 bytes > 5

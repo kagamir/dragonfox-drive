@@ -46,7 +46,7 @@ pub struct JwtSettings {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct LimitSettings {
-    pub max_upload_bytes: u64,
+    pub max_file_bytes: u64,
     pub max_chunk_bytes: u64,
     pub rate_limit_per_minute: u32,
 }
@@ -101,7 +101,7 @@ impl Default for JwtSettings {
 impl Default for LimitSettings {
     fn default() -> Self {
         Self {
-            max_upload_bytes: 100 * 1024 * 1024,
+            max_file_bytes: 10 * 1024 * 1024 * 1024,
             max_chunk_bytes: 8 * 1024 * 1024,
             rate_limit_per_minute: 600,
         }
@@ -150,7 +150,7 @@ mod tests {
         assert_eq!(s.database.url, "sqlite://./data/dragonfox.db?mode=rwc");
         assert_eq!(s.jwt.access_ttl_seconds, 900);
         assert_eq!(s.jwt.refresh_ttl_seconds, 2_592_000);
-        assert_eq!(s.limits.max_upload_bytes, 100 * 1024 * 1024);
+        assert_eq!(s.limits.max_file_bytes, 10 * 1024 * 1024 * 1024);
         assert_eq!(s.limits.max_chunk_bytes, 8 * 1024 * 1024);
         assert_eq!(s.limits.rate_limit_per_minute, 600);
     }
@@ -197,12 +197,11 @@ mod tests {
     }
 
     /// Regression guard: a `[limits]` section in config.toml MUST override the
-    /// code default. A stale `max_upload_bytes = 0` in the file previously
-    /// collapsed the router-wide `DefaultBodyLimit` to zero, returning 413 for
-    /// every request body (including tiny auth JSON). WARNING: mutates CWD —
-    /// run the suite with --test-threads=1.
+    /// code defaults. A stale `0` body limit previously collapsed the
+    /// router-wide `DefaultBodyLimit` to zero, returning 413 for every request
+    /// body. WARNING: mutates CWD — run the suite with --test-threads=1.
     #[test]
-    fn load_lets_toml_override_max_upload_bytes() {
+    fn load_lets_toml_override_limits() {
         let dir = tempfile::tempdir().unwrap();
         let original_cwd = std::env::current_dir().unwrap();
         struct Restore(PathBuf);
@@ -215,12 +214,13 @@ mod tests {
 
         std::fs::write(
             dir.path().join("config.toml"),
-            "[limits]\nmax_upload_bytes = 42\n",
+            "[limits]\nmax_file_bytes = 42\nmax_chunk_bytes = 7\n",
         )
         .unwrap();
         std::env::set_current_dir(dir.path()).unwrap();
 
         let settings = Settings::load().unwrap();
-        assert_eq!(settings.limits.max_upload_bytes, 42);
+        assert_eq!(settings.limits.max_file_bytes, 42);
+        assert_eq!(settings.limits.max_chunk_bytes, 7);
     }
 }

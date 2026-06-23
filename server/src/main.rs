@@ -82,7 +82,7 @@ fn init_tracing() {
 fn build_router(state: AppState) -> Router {
     let cors = CorsLayer::very_permissive();
     let compression = CompressionLayer::new().br(true);
-    let max_body = state.settings.limits.max_upload_bytes as usize;
+    let max_body = state.settings.limits.max_chunk_bytes as usize;
 
     Router::new()
         .merge(api::routes())
@@ -115,10 +115,10 @@ mod tests {
 
     /// Build a router backed by an in-memory DB. Returns the router and the
     /// cloned `AppState` so tests can mint JWTs signed with the same secret.
-    async fn test_router(max_upload: u64) -> (Router, AppState) {
+    async fn test_router(max_chunk: u64) -> (Router, AppState) {
         let mut settings = Settings::default();
         settings.jwt.secret = "test".into();
-        settings.limits.max_upload_bytes = max_upload;
+        settings.limits.max_chunk_bytes = max_chunk;
         let pool = db::connect("sqlite::memory:").await.unwrap();
         db::migrate(&pool).await.unwrap();
         let state = AppState::new(Arc::new(settings), pool);
