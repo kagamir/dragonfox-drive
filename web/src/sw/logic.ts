@@ -123,7 +123,8 @@ export interface StreamMeta {
   mime: string;
 }
 
-export type ChunkFetcher = (idx: number) => Promise<Uint8Array>; // returns ciphertext
+export type ChunkFetcher =
+  (idx: number, signal?: AbortSignal) => Promise<Uint8Array>; // returns ciphertext
 
 export interface StreamRequestLike {
   url: string;
@@ -158,7 +159,8 @@ export function parseRange(header: string, size: number): { start: number; end: 
 /** Serve a Range request: fetch+decrypt the covering chunks (cached), stream the
  *  requested window chunk-by-chunk, and respond 206/200. The response is capped
  *  to `segmentBytes` so the browser re-requests the next segment as playback
- *  advances, instead of pulling the whole file up front. */
+ *  advances, instead of pulling the whole file up front. If the consumer aborts
+ *  the response (seek / navigate away), the in-flight chunk fetch is cancelled. */
 export async function handleStreamRequest(
   req: StreamRequestLike,
   meta: StreamMeta,
@@ -174,29 +176,35 @@ export async function handleStreamRequest(
   const length = effectiveEnd - start + 1;
   const isPartial = hasRange || effectiveEnd < meta.size - 1;
 
-  async function getPlain(idx: number): Promise<Uint8Array> {
+  async function getPlain(idx: number, signal: AbortSignal): Promise<Uint8Array> {
     const key = `${meta.fileId}:${idx}`;
     const cached = cache.get(key);
     if (cached) return cached;
-    const cipher = await fetcher(idx);
+    const cipher = await fetcher(idx, signal);
     const pt = await decryptChunkSubtle(meta.fileKey, meta.ivBase, idx, cipher);
     cache.set(key, pt);
     return pt;
   }
 
+  const ac = new AbortController();
   const body = new ReadableStream<Uint8Array>({
     async start(controller) {
       try {
         for (let idx = firstIdx; idx <= lastIdx; idx++) {
-          const pt = await getPlain(idx);
+          if (ac.signal.aborted) return;
+          const pt = await getPlain(idx, ac.signal);
+          if (ac.signal.aborted) return;
           const slice = chunkSlice(pt, idx, meta.chunkSize, start, effectiveEnd);
           if (slice.length) controller.enqueue(slice);
         }
         controller.close();
       } catch (e) {
-        controller.error(e);
+        // Swallow the rejection if WE caused it via cancel(); only surface
+        // unexpected errors to the stream consumer.
+        if (!ac.signal.aborted) controller.error(e);
       }
     },
+    cancel() { ac.abort(); },
   });
 
   const headers = new Headers({

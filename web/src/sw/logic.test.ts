@@ -276,6 +276,30 @@ describe("sw logic: request handling", () => {
     expect(chunks.length).toBe(3);
     expect(chunks.flatMap((c) => Array.from(c))).toEqual([3, 4, 5, 6, 7, 8, 9, 10]);
   });
+
+  it("handleStreamRequest aborts the in-flight fetch and halts the loop when the body is cancelled", async () => {
+    const chunkSize = 4;
+    const size = 20; // 5 chunks
+    const signals: (AbortSignal | undefined)[] = [];
+    const fetcher: ChunkFetcher = (idx, signal) => {
+      signals[idx] = signal;
+      // Never resolves on its own — only rejects when the signal aborts.
+      return new Promise<Uint8Array>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(new Error("aborted")));
+      });
+    };
+    const cache = new L2(1024);
+    const meta = mkMeta({ size, chunkCount: 5, chunkSize });
+    const req = { url: "/api/stream/f1", headers: new Headers({ range: "bytes=0-" }) };
+    const res = await handleStreamRequest(req, meta, cache, fetcher, 8);
+    // start() reached chunk 0 synchronously during stream construction:
+    expect(signals[0]).toBeDefined();
+    expect(signals[1]).toBeUndefined(); // loop is blocked on chunk 0, hasn't advanced
+    await res.body!.cancel();
+    await new Promise((r) => setTimeout(r, 0)); // let the abort reject propagate
+    expect(signals[0]!.aborted).toBe(true);
+    expect(signals[1]).toBeUndefined(); // loop halted — chunk 1 never requested
+  });
 });
 
 describe("sw logic: routing + messages", () => {

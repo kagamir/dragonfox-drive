@@ -8,6 +8,7 @@ import {
   LruCache,
   type StreamMeta,
   type SwMessage,
+  type ChunkFetcher,
 } from "./logic";
 
 // `self` is a ServiceWorkerGlobalScope inside the SW, but the app's tsconfig
@@ -44,10 +45,10 @@ sw.addEventListener("fetch", (event: any) => {
   })());
 });
 
-function makeFetcher(meta: StreamMeta): (idx: number) => Promise<Uint8Array> {
-  return async (idx) => {
+function makeFetcher(meta: StreamMeta): ChunkFetcher {
+  return async (idx, signal) => {
     const url = `/api/files/${meta.fileId}/chunks/${idx}`;
-    const doFetch = (tok: string) => fetch(url, { headers: { Authorization: `Bearer ${tok}` } });
+    const doFetch = (tok: string) => fetch(url, { headers: { Authorization: `Bearer ${tok}` }, signal });
     let resp = await doFetch(meta.token);
     if (resp.status === 401) {
       const fresh = await requestFreshToken(meta.fileId);
