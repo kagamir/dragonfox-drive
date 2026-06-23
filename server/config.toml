@@ -22,6 +22,9 @@ refresh_ttl_seconds = 2592000    # 30 days
 
 # Registration & rate-limiting knobs.
 [limits]
-max_upload_bytes = 0             # 0 = unlimited (per chunk enforced elsewhere)
+# Upload body cap. Applied as the router-wide DefaultBodyLimit, so it bounds
+# every request body (auth JSON is tiny; the whole-file upload chunk is the
+# real consumer). Must be > 0 — a value of 0 rejects ALL bodies (HTTP 413).
+max_upload_bytes = 104857600       # 100 MiB
 max_chunk_bytes = 8388608        # 8 MiB encrypted chunk hard cap
 rate_limit_per_minute = 600
