@@ -2,13 +2,14 @@ import { defineStore } from "pinia";
 import { ref } from "vue";
 
 import { filesApi } from "@/api/files";
-import { refreshAuthToken, ApiError } from "@/api/client";
+import { refreshAuthToken, ApiError, getAuthToken } from "@/api/client";
 import type { FileMeta } from "@/api/types";
 import { cryptoApi, ensureCryptoReady } from "@/workers/crypto";
 import { useAuthStore } from "./auth";
-import { FILE_CHUNK_SIZE, chunkCount, toBase64, fromBase64 } from "@/crypto/file";
-import { kindOf, canPreview, type FileKind } from "@/crypto/preview";
+import { FILE_CHUNK_SIZE, chunkCount, toBase64, fromBase64, type Manifest } from "@/crypto/file";
+import { kindOf, canPreview, PREVIEW_CAPS, type FileKind } from "@/crypto/preview";
 import type { WrappedKey } from "@/crypto/keys";
+import { ensureStreamSw, postToSw } from "@/sw/register";
 
 export interface UploadSession {
   fileId: string;
@@ -70,6 +71,21 @@ export const useFilesStore = defineStore("files", () => {
     const key = useAuthStore().masterKey;
     if (!key) throw new Error("not unlocked — master key missing");
     return key;
+  }
+
+  let swListenerBound = false;
+  function bindSwListener(): void {
+    if (swListenerBound || typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
+    swListenerBound = true;
+    navigator.serviceWorker.addEventListener("message", (e: MessageEvent) => {
+      const d = e.data;
+      if (d && d.type === "needToken" && d.fileId) {
+        void refreshAuthToken().then((ok) => {
+          const token = ok ? getAuthToken() : null;
+          if (token) postToSw({ type: "token", fileId: d.fileId, token });
+        });
+      }
+    });
   }
 
   async function refresh(): Promise<void> {
@@ -283,6 +299,71 @@ export const useFilesStore = defineStore("files", () => {
     }
   }
 
+  async function openVideo(meta: FileMeta, manifest: Manifest): Promise<void> {
+    const mk = masterKey();
+    const fileKey = await cryptoApi.unwrap(
+      {
+        ciphertext: fromBase64(meta.encrypted_file_key!),
+        iv: fromBase64(meta.encrypted_file_key_nonce!),
+      },
+      mk,
+    );
+    const ivBase = fromBase64(manifest.iv_base);
+    bindSwListener();
+    let swOk = true;
+    try {
+      await ensureStreamSw();
+    } catch {
+      swOk = false;
+    }
+    if (swOk) {
+      if (preview.value) closePreview();
+      postToSw({
+        type: "play",
+        meta: {
+          fileId: meta.id,
+          fileKey,
+          ivBase,
+          size: manifest.size,
+          chunkCount: meta.chunk_count,
+          chunkSize: FILE_CHUNK_SIZE,
+          token: getAuthToken() ?? "",
+        },
+      });
+      preview.value = {
+        meta,
+        url: `/api/stream/${meta.id}`,
+        kind: "video",
+        name: manifest.name,
+      };
+      return;
+    }
+    // Fallback: whole-file blob for small videos; otherwise degrade.
+    if (manifest.size <= PREVIEW_CAPS.video) {
+      const n = meta.chunk_count;
+      const parts = new Array<Uint8Array>(n);
+      await asyncPool(
+        3,
+        Array.from({ length: n }, (_, i) => i),
+        async (i) => {
+          const resp = await filesApi.getChunk(meta.id, i);
+          const cipher = new Uint8Array(await resp.arrayBuffer());
+          parts[i] = await cryptoApi.decryptChunk(fileKey, ivBase, i, cipher);
+        },
+      );
+      const blob = new Blob(parts as BlobPart[], { type: manifest.mime });
+      if (preview.value) URL.revokeObjectURL(preview.value.url);
+      preview.value = {
+        meta,
+        url: URL.createObjectURL(blob),
+        kind: "video",
+        name: manifest.name,
+      };
+      return;
+    }
+    error.value = "Streaming is unavailable in this browser — use Download.";
+  }
+
   async function openPreview(meta: FileMeta): Promise<void> {
     error.value = null;
     try {
@@ -296,6 +377,9 @@ export const useFilesStore = defineStore("files", () => {
         meta.encrypted_manifest_nonce!,
       );
       const kind = kindOf(manifest.mime);
+      if (kind === "video") {
+        return await openVideo(meta, manifest);
+      }
       if (kind === "other") {
         error.value = "Preview is not supported for this file type — use Download.";
         return;
@@ -337,10 +421,13 @@ export const useFilesStore = defineStore("files", () => {
   }
 
   function closePreview(): void {
-    if (preview.value) {
-      URL.revokeObjectURL(preview.value.url);
-      preview.value = null;
+    if (!preview.value) return;
+    const p = preview.value;
+    if (p.url.startsWith("blob:")) URL.revokeObjectURL(p.url);
+    if (p.kind === "video" && p.url.startsWith("/api/stream/")) {
+      postToSw({ type: "stop", fileId: p.meta.id });
     }
+    preview.value = null;
   }
 
   async function remove(id: string): Promise<void> {
