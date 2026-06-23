@@ -3,7 +3,7 @@
  *
  * `derivePasswordKey`: master KDF from the user's password. Uses Argon2id with
  *   high memory cost (64 MiB) so brute-force is expensive. The salt is derived
- *   from the email so the same password+email always produces the same key
+ *   from the username so the same password+username always produces the same key
  *   (allowing re-derivation on new devices).
  *
  * `deriveAuthVerifier`: a second Argon2id pass over `password_key` with a
@@ -22,27 +22,27 @@ export const KEY_BYTES = 32;
 
 export type RawKey = Uint8Array;
 
-/** Normalise email for use as KDF salt source (lowercased, trimmed). */
-export function normaliseEmail(email: string): string {
-  return email.trim().toLowerCase();
+/** Normalise a username for use as KDF salt source (lowercased, trimmed). */
+export function normaliseUsername(username: string): string {
+  return username.trim().toLowerCase();
 }
 
-/** Derive a deterministic Argon2id salt (16 bytes) from the email. */
-export async function emailToSalt(email: string): Promise<Uint8Array> {
+/** Derive a deterministic Argon2id salt (16 bytes) from the username. */
+export async function usernameToSalt(username: string): Promise<Uint8Array> {
   const hash = await crypto.subtle.digest(
     "SHA-256",
-    new TextEncoder().encode(normaliseEmail(email)) as BufferSource,
+    new TextEncoder().encode(normaliseUsername(username)) as BufferSource,
   );
   return new Uint8Array(hash).slice(0, 16);
 }
 
-/** Derive the user's `password_key` (32 bytes) from password + email. */
+/** Derive the user's `password_key` (32 bytes) from password + username. */
 export async function derivePasswordKey(
   password: string,
-  email: string,
+  username: string,
 ): Promise<RawKey> {
   assertCryptoReady();
-  const salt = await emailToSalt(email);
+  const salt = await usernameToSalt(username);
   // Extend salt to pwhash_SALTBYTES (16 bytes) by padding with zeros.
   const fullSalt = new Uint8Array(sodium.crypto_pwhash_SALTBYTES);
   fullSalt.set(salt);
