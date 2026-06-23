@@ -29,13 +29,31 @@ describe("ensureStreamSw", () => {
     await expect(ensureStreamSw()).resolves.toBeUndefined();
   });
 
-  it("registers and resolves on controllerchange", async () => {
+  it("registers the dev SW URL in dev and resolves on controllerchange", async () => {
     let changeCb: (() => void) | null = null;
     const sw = stubServiceWorker({
       controller: null,
       addEventListener: vi.fn((_: string, cb: any) => { changeCb = cb; }),
       register: vi.fn().mockImplementation(() => {
         // simulate the registered SW taking control
+        (sw as any).controller = {} as ServiceWorker;
+        setTimeout(() => changeCb && changeCb(), 0);
+        return Promise.resolve({});
+      }),
+    });
+    const { ensureStreamSw } = await import("./register");
+    await expect(ensureStreamSw()).resolves.toBeUndefined();
+    // vitest runs with import.meta.env.DEV === true, so the dev SW path is used.
+    expect(sw.register).toHaveBeenCalledWith("/dev-sw.js?dev-sw", { type: "module" });
+  });
+
+  it("registers /sw.js in production builds", async () => {
+    vi.stubEnv("DEV", false);
+    let changeCb: (() => void) | null = null;
+    const sw = stubServiceWorker({
+      controller: null,
+      addEventListener: vi.fn((_: string, cb: any) => { changeCb = cb; }),
+      register: vi.fn().mockImplementation(() => {
         (sw as any).controller = {} as ServiceWorker;
         setTimeout(() => changeCb && changeCb(), 0);
         return Promise.resolve({});

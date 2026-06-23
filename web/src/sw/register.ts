@@ -2,6 +2,13 @@
 
 let ensurePromise: Promise<void> | null = null;
 
+// In dev, vite-plugin-pwa serves the compiled SW at `/dev-sw.js?dev-sw`
+// (DEV_SW_NAME constant inside the plugin); `/sw.js` only exists in the
+// production build. Registering the wrong path makes Vite's SPA fallback
+// return index.html, which the browser rejects with
+// "The script has an unsupported MIME type ('text/html')".
+const SW_URL = import.meta.env.DEV ? "/dev-sw.js?dev-sw" : "/sw.js";
+
 export function ensureStreamSw(): Promise<void> {
   if (typeof navigator === "undefined" || !navigator.serviceWorker) {
     return Promise.reject(new Error("service worker unsupported"));
@@ -20,7 +27,7 @@ export function ensureStreamSw(): Promise<void> {
       }
     };
     sw.addEventListener("controllerchange", onReady);
-    sw.register("/sw.js", { type: "module" }).then(onReady).catch((e: unknown) => {
+    sw.register(SW_URL, { type: "module" }).then(onReady).catch((e: unknown) => {
       if (!settled) {
         settled = true;
         sw.removeEventListener("controllerchange", onReady);
