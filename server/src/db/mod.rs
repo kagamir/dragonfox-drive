@@ -81,5 +81,22 @@ mod tests {
                 "missing table {expected}; got {names:?}"
             );
         }
+
+        // P1: the email column was renamed to username.
+        let col_names: Vec<(String,)> = sqlx::query_as(
+            "SELECT name FROM pragma_table_info('users') ORDER BY cid",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        let names: Vec<String> = col_names.into_iter().map(|r| r.0).collect();
+        assert!(
+            names.contains(&"username".to_string()),
+            "users must have a `username` column; got {names:?}"
+        );
+        assert!(
+            !names.contains(&"email".to_string()),
+            "users must NOT have an `email` column; got {names:?}"
+        );
     }
 }
