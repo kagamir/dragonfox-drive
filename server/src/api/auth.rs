@@ -187,10 +187,26 @@ pub async fn refresh(
     State(state): State<AppState>,
     Json(req): Json<RefreshRequest>,
 ) -> ApiResult<Json<TokenPair>> {
-    let _ = (state, req);
-    Err(ApiError::Internal(anyhow::anyhow!(
-        "refresh not yet implemented (p1 milestone)"
-    )))
+    let claims = verify_access_token(&state, &req.refresh_token)?;
+    let hash = crate::crypto::hash_refresh_token(&req.refresh_token);
+
+    let active: Option<(String,)> = sqlx::query_as(
+        "SELECT id FROM refresh_tokens \
+         WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?",
+    )
+    .bind(&hash)
+    .bind(Utc::now().to_rfc3339())
+    .fetch_optional(&state.db)
+    .await?;
+    if active.is_none() {
+        return Err(ApiError::Unauthorized);
+    }
+
+    revoke_refresh_token(&state, &hash).await?;
+    let pair = issue_token_pair(&state, &claims.sub, claims.dev.as_deref())?;
+    persist_refresh_token(&state, &claims.sub, claims.dev.as_deref(), &pair.refresh_token)
+        .await?;
+    Ok(Json(pair))
 }
 
 #[cfg(test)]
@@ -329,6 +345,61 @@ mod tests {
             login(
                 State(state.clone()),
                 Json(login_req("ghost", &"ab".repeat(32))),
+            )
+            .await,
+            Err(ApiError::Unauthorized)
+        ));
+    }
+
+    async fn register_tokens(state: &AppState, username: &str) -> TokenPair {
+        let res = register(State(state.clone()), Json(req(username))).await.unwrap();
+        res.0.tokens
+    }
+
+    #[tokio::test]
+    async fn refresh_issues_a_new_pair_and_revokes_the_old_token() {
+        let (state, _dir) = test_state_with_db().await;
+        let pair = register_tokens(&state, "alice").await;
+
+        let new_pair = refresh(
+            State(state.clone()),
+            Json(RefreshRequest { refresh_token: pair.refresh_token.clone() }),
+        )
+        .await
+        .unwrap();
+        assert_ne!(new_pair.0.refresh_token, pair.refresh_token);
+        assert_ne!(new_pair.0.access_token, pair.access_token);
+    }
+
+    #[tokio::test]
+    async fn refresh_rejects_a_replayed_old_token() {
+        let (state, _dir) = test_state_with_db().await;
+        let pair = register_tokens(&state, "alice").await;
+        let old = pair.refresh_token.clone();
+        refresh(
+            State(state.clone()),
+            Json(RefreshRequest { refresh_token: old.clone() }),
+        )
+        .await
+        .unwrap();
+        match refresh(
+            State(state.clone()),
+            Json(RefreshRequest { refresh_token: old }),
+        )
+        .await
+        {
+            Err(ApiError::Unauthorized) => {}
+            other => panic!("expected Unauthorized on replay, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn refresh_rejects_a_garbage_token() {
+        let (state, _dir) = test_state_with_db().await;
+        assert!(matches!(
+            refresh(
+                State(state.clone()),
+                Json(RefreshRequest { refresh_token: "not.a.jwt".into() }),
             )
             .await,
             Err(ApiError::Unauthorized)
