@@ -22,6 +22,10 @@ pub struct AccessClaims {
     pub sub: String,        // user id
     pub dev: Option<String>, // device id
     pub exp: i64,
+    /// JWT ID (RFC 7519 §4.1.7). Unique per issued token so that two refresh
+    /// tokens minted for the same user/device in the same second still hash to
+    /// distinct `refresh_tokens.token_hash` values.
+    pub jti: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,11 +50,13 @@ pub fn issue_token_pair(
         sub: user_id.to_string(),
         dev: device_id.map(str::to_string),
         exp: access_exp.timestamp(),
+        jti: uuid::Uuid::new_v4().to_string(),
     };
     let refresh_claims = AccessClaims {
         sub: user_id.to_string(),
         dev: device_id.map(str::to_string),
         exp: refresh_exp.timestamp(),
+        jti: uuid::Uuid::new_v4().to_string(),
     };
 
     let encoding = EncodingKey::from_secret(state.settings.jwt.secret.as_bytes());
@@ -213,6 +219,7 @@ mod tests {
             sub: "u".into(),
             dev: None,
             exp: (Utc::now() - Duration::seconds(300)).timestamp(),
+            jti: "expired-jti".into(),
         };
         let encoding = EncodingKey::from_secret(b"test-secret");
         let token = encode(&Header::default(), &expired, &encoding).unwrap();
