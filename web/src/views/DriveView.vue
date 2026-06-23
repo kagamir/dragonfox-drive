@@ -4,6 +4,7 @@ import { useRouter } from "vue-router";
 import { useAuthStore } from "@/stores/auth";
 import { useFilesStore } from "@/stores/files";
 import type { FileMeta } from "@/api/types";
+import FilePreviewModal from "@/components/FilePreviewModal.vue";
 
 const auth = useAuthStore();
 const files = useFilesStore();
@@ -52,19 +53,35 @@ function onDragLeave() {
 function fmtSize(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KiB`;
-  return `${(n / 1024 / 1024).toFixed(1)} MiB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MiB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GiB`;
 }
 
 function nameOf(f: FileMeta): string {
   return files.displayNames[f.id] ?? f.id;
 }
 
+/**
+ * The mime lives in the (encrypted) manifest, so the list view can't know the
+ * kind up front. Show Open for every ready file; openPreview surfaces the
+ * "too large / unsupported" case via the store's `error`.
+ */
+function previewable(f: FileMeta): boolean {
+  return f.status === "ready";
+}
+
+function open(f: FileMeta) {
+  void files.openPreview(f).catch(() => {});
+}
 function download(f: FileMeta) {
   void files.download(f).catch(() => {});
 }
 
 function remove(f: FileMeta) {
   if (confirm(`Delete "${nameOf(f)}"?`)) void files.remove(f.id);
+}
+function cancel(fileId: string) {
+  void files.cancelUpload(fileId);
 }
 </script>
 
@@ -112,11 +129,32 @@ function remove(f: FileMeta) {
           <span class="name">{{ nameOf(f) }}</span>
           <span class="meta">{{ fmtSize(f.total_size) }} · {{ f.status }}</span>
           <span class="actions">
+            <button class="link" :disabled="!previewable(f)" @click="open(f)">Open</button>
             <button class="link" :disabled="f.status !== 'ready'" @click="download(f)">Download</button>
             <button class="link" @click="remove(f)">Delete</button>
           </span>
         </li>
       </ul>
+
+      <section v-if="files.activeUploads.length" class="uploads">
+        <h2>Incomplete uploads</h2>
+        <ul class="list">
+          <li v-for="u in files.activeUploads" :key="u.fileId">
+            <span class="name">{{ u.file.name }}</span>
+            <span class="meta">{{ Math.round(u.progress * 100) }}% · {{ u.phase }}</span>
+            <progress :value="u.progress" max="1" />
+            <button class="link" @click="cancel(u.fileId)">Cancel</button>
+          </li>
+        </ul>
+      </section>
+
+      <FilePreviewModal
+        v-if="files.preview"
+        :kind="files.preview.kind"
+        :url="files.preview.url"
+        :name="files.preview.name"
+        @close="files.closePreview()"
+      />
     </section>
   </main>
 </template>
@@ -155,4 +193,5 @@ progress { width: 60%; }
 .name { font-weight: 600; }
 .meta { color: var(--df-color-fg-muted); font-size: 0.8rem; }
 .actions { display: flex; gap: 1rem; margin-top: 0.3rem; }
+.uploads { margin-top: 2rem; }
 </style>
