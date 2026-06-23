@@ -41,15 +41,19 @@ without holding the whole file in page memory.
 │  Service Worker  (fetch event, matches GET /api/stream/:id)     │
 │                                                                 │
 │  1. parse Range: bytes=start-end   (end ∅ ⇒ EOF, clamp size-1)  │
-│  2. firstIdx = ⌊start / 4 MiB⌋ ; lastIdx = ⌊end / 4 MiB⌋        │
-│  3. for idx in [firstIdx .. lastIdx]:                           │
+│  2. CAP the window to STREAM_SEGMENT_BYTES (16 MiB):            │
+│       effectiveEnd = min(end, start + 16 MiB - 1, size - 1)     │
+│  3. firstIdx = ⌊start / 4 MiB⌋; lastIdx = ⌊effectiveEnd / 4 MiB⌋│
+│  4. ReadableStream (one slice per chunk, in order):             │
 │       LRU(256 MiB) hit  ⇒ reuse plaintext                       │
-│       miss ⇒ fetch /api/files/:id/chunks/:idx (Bearer token)    │
+│       miss ⇒ fetch /api/files/:id/chunks/:idx (Bearer, signal)  │
 │             ⇒ crypto.subtle AES-GCM decrypt(iv = chunkIv(       │
 │               ivBase, idx))  ⇒ store in LRU                     │
-│  4. slice the requested byte window from the covering plaintexts│
+│       enqueue chunkSlice(chunk, …, start, effectiveEnd)         │
+│     (on consumer abort ⇒ AbortController cancels the fetch)     │
 │  5. respond: 206 + Content-Range + Content-Length               │
-│              (200 when no Range header present)                 │
+│              (200 only when the file fits in one segment AND no │
+│               Range header was sent)                            │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -174,9 +178,15 @@ These are achieved by:
 
 - **SW cold start**: first play after install may need one reload until
   the controller is active; `ensureStreamSw()` polls `controllerchange`.
-- **v1 range assembly** buffers the covering chunks before slicing
-  (browser Range requests are typically a few MB, bounded). Streaming
-  pipe-assembly for pathological huge Ranges is deferred.
+- **Segmented read-ahead.** Each `/api/stream/:id` response is capped to
+  `STREAM_SEGMENT_BYTES` (16 MiB). The browser's native media engine issues
+  follow-up `Range` requests as the buffer drains, so only the bytes needed
+  for current playback are fetched+decrypted — the whole file is never
+  pulled at once. The body is a `ReadableStream` emitting one chunk slice at
+  a time, so SW memory stays flat regardless of file size.
+- **Abort on seek.** When the browser aborts a response (seek / navigate),
+  the SW's per-response `AbortController` cancels the in-flight chunk
+  `fetch()`, so rapid seeking doesn't leave orphan downloads.
 - **iOS Safari** may restrict module SWs / certain Range behavior → the
   fallback path applies.
 - Abandoned playback without `closePreview` leaves SW meta + LRU entries
