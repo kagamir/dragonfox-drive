@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import { ref } from "vue";
 
 import { filesApi } from "@/api/files";
+import { refreshAuthToken, ApiError } from "@/api/client";
 import type { FileMeta } from "@/api/types";
 import { cryptoApi, ensureCryptoReady } from "@/workers/crypto";
 import { useAuthStore } from "./auth";
@@ -178,17 +179,22 @@ export const useFilesStore = defineStore("files", () => {
         const slice = file.slice(start, Math.min(start + FILE_CHUNK_SIZE, total));
         const plaintext = new Uint8Array(await slice.arrayBuffer());
         let attempt = 0;
+        let refreshed = false;
         while (true) {
           const ciphertext = await cryptoApi.encryptChunk(fileKey, ivBase, i, plaintext);
           try {
             await filesApi.putChunk(
               id, i, ciphertext,
-              (r) => { if (session) uploadProgress.value = r; },
+              undefined,
               session!.abort.signal,
             );
             break;
           } catch (e) {
             if (session!.abort.signal.aborted) return;
+            if (!refreshed && e instanceof ApiError && e.status === 401) {
+              refreshed = true;
+              if (await refreshAuthToken()) continue;
+            }
             if (++attempt > 3) throw e;
             await delay(500 * 2 ** attempt);
           }
@@ -290,6 +296,10 @@ export const useFilesStore = defineStore("files", () => {
         meta.encrypted_manifest_nonce!,
       );
       const kind = kindOf(manifest.mime);
+      if (kind === "other") {
+        error.value = "Preview is not supported for this file type — use Download.";
+        return;
+      }
       if (!canPreview(kind, manifest.size)) {
         error.value = "File too large to preview — use Download.";
         return;
@@ -314,6 +324,7 @@ export const useFilesStore = defineStore("files", () => {
         },
       );
       const blob = new Blob(parts as BlobPart[], { type: manifest.mime });
+      if (preview.value) URL.revokeObjectURL(preview.value.url);
       preview.value = {
         meta,
         url: URL.createObjectURL(blob),

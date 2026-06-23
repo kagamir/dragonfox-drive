@@ -19,6 +19,15 @@ const {
   getChunksMock: vi.fn().mockResolvedValue({ indices: [], chunk_count: 1, status: "pending" }),
 }));
 
+const { refreshAuthTokenMock } = vi.hoisted(() => ({
+  refreshAuthTokenMock: vi.fn().mockResolvedValue(true),
+}));
+
+vi.mock("@/api/client", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("@/api/client")>();
+  return { ...mod, refreshAuthToken: refreshAuthTokenMock };
+});
+
 vi.mock("@/workers/crypto", () => ({
   cryptoApi: {
     newFileKeyMaterial: vi.fn(() => ({
@@ -63,6 +72,7 @@ vi.mock("@/api/files", () => ({
 import { useFilesStore } from "./files";
 import { useAuthStore } from "./auth";
 import { cryptoApi } from "@/workers/crypto";
+import { ApiError } from "@/api/client";
 
 describe("files store", () => {
   beforeEach(() => {
@@ -74,6 +84,8 @@ describe("files store", () => {
     removeMock.mockClear();
     getChunksMock.mockClear();
     getChunksMock.mockResolvedValue({ indices: [], chunk_count: 1, status: "pending" });
+    refreshAuthTokenMock.mockClear();
+    refreshAuthTokenMock.mockResolvedValue(true);
   });
 
   it("upload runs create → putManifest → putChunk → finalize", async () => {
@@ -87,7 +99,7 @@ describe("files store", () => {
     );
     expect(putManifestMock).toHaveBeenCalledWith("fid", expect.any(Object));
     expect(putChunkMock).toHaveBeenCalledWith(
-      "fid", 0, expect.any(Uint8Array), expect.any(Function), expect.any(AbortSignal),
+      "fid", 0, expect.any(Uint8Array), undefined, expect.any(AbortSignal),
     );
     expect(finalizeMock).toHaveBeenCalledWith("fid");
   });
@@ -124,6 +136,26 @@ describe("files store", () => {
     // initial attempt + 3 retries = 4 calls
     expect(putChunkMock).toHaveBeenCalledTimes(4);
     vi.useRealTimers();
+  });
+
+  it("upload refreshes the access token once on a 401 and retries the chunk", async () => {
+    const auth = useAuthStore();
+    auth.masterKey = new Uint8Array(32) as any;
+    putChunkMock.mockReset();
+    putChunkMock
+      .mockRejectedValueOnce(new ApiError("unauthorized", 401))
+      .mockResolvedValue({ ok: true });
+    refreshAuthTokenMock.mockClear();
+    refreshAuthTokenMock.mockResolvedValue(true);
+    const files = useFilesStore();
+    const file = new File([new Uint8Array([7, 7])], "u.txt", { type: "text/plain" });
+    await files.upload(file);
+    expect(refreshAuthTokenMock).toHaveBeenCalledTimes(1);
+    expect(finalizeMock).toHaveBeenCalledWith("fid");
+    expect(putChunkMock).toHaveBeenCalledTimes(2);
+    // restore default so other tests are unaffected
+    putChunkMock.mockReset();
+    putChunkMock.mockResolvedValue({ ok: true });
   });
 
   it("cancelUpload aborts and deletes the pending file", async () => {
@@ -215,6 +247,50 @@ describe("files store", () => {
     await files.openPreview(meta);
     expect(files.preview).toBeNull();
     expect(files.error).toMatch(/too large/i);
+  });
+
+  it("openPreview rejects unsupported file kinds with a distinct message", async () => {
+    const auth = useAuthStore();
+    auth.masterKey = new Uint8Array(32) as any;
+    vi.stubGlobal("URL", { createObjectURL: vi.fn(), revokeObjectURL: vi.fn() });
+    (cryptoApi.decryptManifest as any).mockResolvedValueOnce({
+      name: "doc.pdf", mime: "application/pdf", size: 100,
+      iv_base: "iv==", chunk_size: 4 * 1024 * 1024,
+    });
+    const files = useFilesStore();
+    const meta = {
+      id: "f1", owner_id: "u", status: "ready" as const,
+      total_size: 0, chunk_count: 1,
+      encrypted_manifest: "em", encrypted_manifest_nonce: "emn",
+      encrypted_file_key: "fk", encrypted_file_key_nonce: "fkn",
+      created_at: "", updated_at: "",
+    };
+    await files.openPreview(meta);
+    expect(files.preview).toBeNull();
+    expect(files.error).toMatch(/not supported/i);
+    expect(files.error).not.toMatch(/too large/i);
+  });
+
+  it("openPreview revokes the prior blob URL on consecutive opens", async () => {
+    const auth = useAuthStore();
+    auth.masterKey = new Uint8Array(32) as any;
+    const createObjectURL = vi.fn()
+      .mockReturnValueOnce("blob:A")
+      .mockReturnValueOnce("blob:B");
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal("URL", { createObjectURL, revokeObjectURL });
+    const files = useFilesStore();
+    const meta = {
+      id: "f1", owner_id: "u", status: "ready" as const,
+      total_size: 2, chunk_count: 1,
+      encrypted_manifest: "em", encrypted_manifest_nonce: "emn",
+      encrypted_file_key: "fk", encrypted_file_key_nonce: "fkn",
+      created_at: "", updated_at: "",
+    };
+    await files.openPreview(meta);
+    await files.openPreview(meta);
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:A");
+    expect(files.preview!.url).toBe("blob:B");
   });
 
   it("closePreview revokes the url and clears state", async () => {

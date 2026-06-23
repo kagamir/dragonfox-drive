@@ -96,6 +96,11 @@ async function refreshAndRetry(): Promise<boolean> {
   return inflightRefresh;
 }
 
+/** Refresh the access token once; returns false if there is no refresh token or refresh failed. */
+export async function refreshAuthToken(): Promise<boolean> {
+  return refreshAndRetry();
+}
+
 export async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
   const {
     method = "GET",
