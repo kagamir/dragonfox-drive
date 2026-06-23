@@ -30,7 +30,11 @@ export interface RequestOptions {
 
 const BASE = ""; // Same-origin in production; Vite proxy in development.
 
+const REFRESH_KEY = "df_refresh_token";
+
 let authToken: string | null = null;
+let refreshToken: string | null = null;
+let inflightRefresh: Promise<boolean> | null = null;
 
 export function setAuthToken(token: string | null): void {
   authToken = token;
@@ -40,34 +44,103 @@ export function getAuthToken(): string | null {
   return authToken;
 }
 
+export function setRefreshToken(token: string | null): void {
+  refreshToken = token;
+  if (token) localStorage.setItem(REFRESH_KEY, token);
+  else localStorage.removeItem(REFRESH_KEY);
+}
+
+export function getRefreshToken(): string | null {
+  return refreshToken;
+}
+
+export function clearRefreshToken(): void {
+  setRefreshToken(null);
+}
+
+/** Load a persisted refresh token from localStorage into module state. */
+export function loadStoredRefreshToken(): string | null {
+  refreshToken = localStorage.getItem(REFRESH_KEY);
+  return refreshToken;
+}
+
+/**
+ * Exchange the current refresh token for a new pair. Uses a raw fetch (not
+ * `request`) so it bypasses the 401 interceptor. Concurrent callers share one
+ * in-flight promise. Returns false if there is no token or the refresh failed.
+ */
+async function refreshAndRetry(): Promise<boolean> {
+  if (inflightRefresh) return inflightRefresh;
+  const rt = refreshToken;
+  if (!rt) return false;
+  inflightRefresh = (async () => {
+    try {
+      const res = await fetch(`${BASE}/api/auth/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: rt }),
+      });
+      if (!res.ok) throw new Error(`refresh failed: ${res.status}`);
+      const pair = (await res.json()) as { access_token: string; refresh_token: string };
+      setAuthToken(pair.access_token);
+      setRefreshToken(pair.refresh_token);
+      return true;
+    } catch {
+      clearRefreshToken();
+      setAuthToken(null);
+      return false;
+    } finally {
+      inflightRefresh = null;
+    }
+  })();
+  return inflightRefresh;
+}
+
 export async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
   const {
     method = "GET",
     body,
     rawBody,
     rawResponse,
-    token = authToken,
+    token, // undefined => use current authToken (re-read on replay)
     headers = {},
     signal,
   } = opts;
 
-  const finalHeaders: Record<string, string> = { ...headers };
-  if (token) finalHeaders.Authorization = `Bearer ${token}`;
-  if (body !== undefined && !rawBody) finalHeaders["Content-Type"] = "application/json";
-
-  const init: RequestInit = {
-    method,
-    headers: finalHeaders,
-    signal,
+  const buildInit = (): RequestInit => {
+    const effectiveToken = token !== undefined ? token : authToken;
+    const finalHeaders: Record<string, string> = { ...headers };
+    if (effectiveToken) finalHeaders.Authorization = `Bearer ${effectiveToken}`;
+    if (body !== undefined && !rawBody) finalHeaders["Content-Type"] = "application/json";
+    const init: RequestInit = { method, headers: finalHeaders, signal };
+    if (rawBody !== undefined) init.body = rawBody;
+    else if (body !== undefined) init.body = JSON.stringify(body);
+    return init;
   };
-  if (rawBody !== undefined) init.body = rawBody;
-  else if (body !== undefined) init.body = JSON.stringify(body);
 
   let res: Response;
   try {
-    res = await fetch(`${BASE}${path}`, init);
+    res = await fetch(`${BASE}${path}`, buildInit());
   } catch (e) {
     throw new ApiError(`Network error: ${(e as Error).message}`, 0);
+  }
+
+  // Auto-refresh once on 401 (never on the refresh endpoint itself), then
+  // replay the original request so the caller sees a success or a real error.
+  if (
+    res.status === 401 &&
+    !path.startsWith("/api/auth/refresh") &&
+    token === undefined &&
+    getRefreshToken()
+  ) {
+    const ok = await refreshAndRetry();
+    if (ok) {
+      try {
+        res = await fetch(`${BASE}${path}`, buildInit());
+      } catch (e) {
+        throw new ApiError(`Network error: ${(e as Error).message}`, 0);
+      }
+    }
   }
 
   if (res.status === 204) return undefined as T;
