@@ -86,7 +86,7 @@ variables (e.g. `DRAGONFOX__JWT__SECRET=...`).
 | Phase | Scope | Status |
 |-------|-------|--------|
 | P1 | Scaffolding, E2EE auth, single-chunk upload/download | ✅ complete |
-| P2 | Chunked upload/download, video streaming via MSE | 🚧 in progress (P2a: chunked upload/download + preview) |
+| P2 | Chunked upload/download, video streaming via MSE | ✅ complete (P2b: streaming uses a Service-Worker proxy rather than MSE) |
 | P3 | Link sharing, encrypted folder tree | ⏳ planned |
 | P4 | Device management & revocation, polish | ⏳ planned |
 

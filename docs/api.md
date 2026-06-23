@@ -72,6 +72,11 @@ Returns a new `TokenPair`.
 
 All `/api/files*` endpoints require `Authorization: Bearer <access_token>`.
 
+> **Note:** `/api/stream/:id` is a **virtual** URL handled entirely by the
+> browser's Service Worker; it never reaches the backend. The SW serves the
+> browser's Range requests by fetching and decrypting
+> `GET /api/files/:id/chunks/:idx`. See [docs/streaming.md](streaming.md).
+
 ### `GET /api/files`
 
 Response:
