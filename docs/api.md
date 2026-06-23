@@ -84,13 +84,21 @@ Only opaque metadata; the manifest itself is encrypted.
 ### `POST /api/files`
 
 ```json
-{ "total_size": 12345678, "chunk_count": 3 }
+{
+  "total_size": 12345678,
+  "chunk_count": 1,
+  "encrypted_file_key": "<base64>",
+  "encrypted_file_key_nonce": "<base64>"
+}
 ```
 
 Response:
 ```json
 { "id": "uuid", "upload_url": "/api/files/uuid/chunks/{idx}" }
 ```
+
+`total_size` must be `<= limits.max_upload_bytes` (default 100 MiB) or the
+server responds `413`.
 
 ### `PUT /api/files/:id/manifest`
 
@@ -107,9 +115,10 @@ Returns the stored (still-encrypted) manifest blob + nonce.
 
 ### `PUT /api/files/:id/chunks/:idx`
 
-`Content-Type: multipart/form-data` with a `chunk` field containing the raw
-encrypted bytes. Server stores as opaque blob at
-`<data_dir>/blobs/<shard1>/<shard2>/<file_id>/chunk_<idx>`.
+`Content-Type: application/octet-stream`. The request body is the raw
+encrypted chunk bytes (single whole-file chunk in P1). Server stores it as an
+opaque blob at `<data_dir>/blobs/<shard1>/<shard2>/<file_id>/chunk_<idx>`.
+Responds `413` if the body exceeds `limits.max_upload_bytes`.
 
 ### `GET /api/files/:id/chunks/:idx`
 
