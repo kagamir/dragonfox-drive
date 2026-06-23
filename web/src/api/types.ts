@@ -47,6 +47,8 @@ export interface FileMeta {
   chunk_count: number;
   encrypted_manifest: string | null; // base64
   encrypted_manifest_nonce: string | null; // base64
+  encrypted_file_key: string | null; // base64
+  encrypted_file_key_nonce: string | null; // base64
   created_at: string;
   updated_at: string;
 }
@@ -54,6 +56,8 @@ export interface FileMeta {
 export interface CreateFileRequest {
   total_size: number;
   chunk_count: number;
+  encrypted_file_key: string; // base64
+  encrypted_file_key_nonce: string; // base64
 }
 
 export interface CreateFileResponse {
