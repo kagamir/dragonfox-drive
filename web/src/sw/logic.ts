@@ -87,3 +87,114 @@ export class LruCache {
     }
   }
 }
+
+// --- request handling --------------------------------------------------------
+
+export interface StreamMeta {
+  fileId: string;
+  fileKey: Uint8Array;
+  ivBase: Uint8Array;
+  size: number;
+  chunkCount: number;
+  chunkSize: number;
+  token: string;
+}
+
+export type ChunkFetcher = (idx: number) => Promise<Uint8Array>; // returns ciphertext
+
+export interface StreamRequestLike {
+  url: string;
+  headers: { get(name: string): string | null };
+}
+
+/** AES-GCM decrypt of one chunk (crypto.subtle; same scheme as the worker). */
+export async function decryptChunkSubtle(
+  key: Uint8Array,
+  ivBase: Uint8Array,
+  idx: number,
+  ciphertext: Uint8Array,
+): Promise<Uint8Array> {
+  const cryptoKey = await crypto.subtle.importKey(
+    "raw", key as BufferSource, { name: "AES-GCM", length: 256 }, false, ["decrypt"],
+  );
+  const plain = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: chunkIv(ivBase, idx) as BufferSource }, cryptoKey, ciphertext as BufferSource,
+  );
+  return new Uint8Array(plain);
+}
+
+/** Parse `Range: bytes=start-end` / `bytes=start-` (inclusive end). Unsupported forms ⇒ full. */
+export function parseRange(header: string, size: number): { start: number; end: number } {
+  const m = /^bytes=(\d+)-(\d*)$/.exec((header || "").trim());
+  if (!m) return { start: 0, end: size - 1 };
+  const start = parseInt(m[1], 10);
+  const end = m[2] !== "" ? parseInt(m[2], 10) : size - 1;
+  return { start, end: Math.min(end, size - 1) };
+}
+
+/** Serve a Range request: fetch+decrypt covering chunks (cached), slice, respond 206/200. */
+export async function handleStreamRequest(
+  req: StreamRequestLike,
+  meta: StreamMeta,
+  cache: LruCache,
+  fetcher: ChunkFetcher,
+): Promise<Response> {
+  const rangeHeader = req.headers.get("range") ?? "";
+  const { start, end } = parseRange(rangeHeader, meta.size);
+  const { firstIdx, lastIdx } = chunksCovering(start, end, meta.size, meta.chunkSize);
+  const plaintexts: Uint8Array[] = [];
+  for (let idx = firstIdx; idx <= lastIdx; idx++) {
+    const key = `${meta.fileId}:${idx}`;
+    let pt = cache.get(key);
+    if (!pt) {
+      const cipher = await fetcher(idx);
+      pt = await decryptChunkSubtle(meta.fileKey, meta.ivBase, idx, cipher);
+      cache.set(key, pt);
+    }
+    plaintexts.push(pt);
+  }
+  const body = sliceRange(plaintexts, firstIdx, meta.chunkSize, start, end);
+  const headers = new Headers({
+    "Content-Type": "application/octet-stream",
+    "Accept-Ranges": "bytes",
+    "Content-Length": String(body.length),
+  });
+  if (rangeHeader) {
+    headers.set("Content-Range", `bytes ${start}-${end}/${meta.size}`);
+    return new Response(body, { status: 206, headers });
+  }
+  return new Response(body, { status: 200, headers });
+}
+
+// --- routing + message reducer ----------------------------------------------
+
+export function matchStreamId(url: string): string | null {
+  try {
+    const u = new URL(url, "http://localhost");
+    const m = /^\/api\/stream\/([^/]+)$/.exec(u.pathname);
+    return m ? decodeURIComponent(m[1]) : null;
+  } catch {
+    return null;
+  }
+}
+
+export type SwMessage =
+  | { type: "play"; meta: StreamMeta }
+  | { type: "stop"; fileId: string }
+  | { type: "token"; fileId: string; token: string };
+
+export function applySwMessage(
+  metaStore: Map<string, StreamMeta>,
+  cache: LruCache,
+  msg: SwMessage,
+): void {
+  if (msg.type === "play") {
+    metaStore.set(msg.meta.fileId, msg.meta);
+  } else if (msg.type === "stop") {
+    metaStore.delete(msg.fileId);
+    cache.dropPrefix(`${msg.fileId}:`);
+  } else if (msg.type === "token") {
+    const m = metaStore.get(msg.fileId);
+    if (m) m.token = msg.token; // mutate in place so live fetcher closures see it
+  }
+}
