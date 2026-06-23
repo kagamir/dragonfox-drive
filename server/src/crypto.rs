@@ -5,7 +5,7 @@
 //! user's `server_salt` before storage. This adds a third Argon2id layer so
 //! that a DB leak still requires per-candidate triple Argon2id to crack.
 
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::Argon2;
 use sha2::{Digest, Sha256};
@@ -16,6 +16,16 @@ use sha2::{Digest, Sha256};
 pub fn hash_verifier(auth_verifier_hex: &str, server_salt_hex: &str) -> Result<String> {
     let verifier = hex::decode(auth_verifier_hex).context("auth_verifier is not valid hex")?;
     let salt_bytes = hex::decode(server_salt_hex).context("server_salt is not valid hex")?;
+    // Argon2 requires a salt of 8..=64 bytes; SaltString::encode_b64 panics
+    // (TooShort) below this minimum, so guard explicitly to avoid a server
+    // panic on malformed/malicious input.
+    ensure!(
+        (argon2::MIN_SALT_LEN..=argon2::MAX_SALT_LEN).contains(&salt_bytes.len()),
+        "server_salt must be {}..={} bytes, got {}",
+        argon2::MIN_SALT_LEN,
+        argon2::MAX_SALT_LEN,
+        salt_bytes.len()
+    );
     let salt = SaltString::encode_b64(&salt_bytes).context("encoding server salt as b64")?;
     let phc = Argon2::default()
         .hash_password(&verifier, &salt)
@@ -74,5 +84,13 @@ mod tests {
         assert_eq!(h1, h2);
         assert_ne!(h1, hash_refresh_token("token-xyz"));
         assert!(h1.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn hash_verifier_rejects_an_overshort_salt_without_panicking() {
+        // A 1-byte salt would otherwise panic inside SaltString::encode_b64
+        // (TooShort invariant); it must return an Err instead.
+        let res = hash_verifier(VERIFIER_HEX, "ff");
+        assert!(res.is_err());
     }
 }
