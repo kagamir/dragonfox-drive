@@ -1,6 +1,6 @@
 import { http } from "./client";
 import { getAuthToken, ApiError, request } from "./client";
-import type { CreateFileRequest, CreateFileResponse, FileMeta } from "./types";
+import type { CreateFileRequest, CreateFileResponse, FileMeta, ChunkIndices } from "./types";
 
 export const filesApi = {
   list: () => http.get<{ files: FileMeta[] }>("/api/files"),
@@ -12,6 +12,10 @@ export const filesApi = {
     http.get<{ encrypted_manifest: string; encrypted_manifest_nonce: string }>(
       `/api/files/${id}/manifest`,
     ),
+
+  /** Query which chunk indices are already on the server (upload resume). */
+  getChunks: (id: string) =>
+    http.get<ChunkIndices>(`/api/files/${id}/chunks`),
 
   putManifest: (
     id: string,

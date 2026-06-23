@@ -84,3 +84,9 @@ export interface CreateShareRequest {
   expires_at?: string;
   download_limit?: number;
 }
+
+export interface ChunkIndices {
+  indices: number[];
+  chunk_count: number;
+  status: string;
+}
