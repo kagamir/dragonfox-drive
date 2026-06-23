@@ -3,8 +3,10 @@
 mod api;
 mod auth;
 mod config;
+mod crypto;
 mod db;
 mod error;
+mod models;
 mod state;
 mod storage;
 

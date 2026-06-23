@@ -7,12 +7,20 @@ import { defineStore } from "pinia";
 import { ref } from "vue";
 
 import { authApi } from "@/api/auth";
-import { setAuthToken } from "@/api/client";
+import {
+  setAuthToken,
+  setRefreshToken,
+  clearRefreshToken,
+  loadStoredRefreshToken,
+  getRefreshToken,
+} from "@/api/client";
+import type { TokenPair } from "@/api/types";
 import {
   deriveAuthVerifier,
   derivePasswordKey,
-  normaliseEmail,
+  normaliseUsername,
   randomBytes,
+  usernameToSalt,
   type RawKey,
 } from "@/crypto/kdf";
 import {
@@ -22,7 +30,6 @@ import {
   loadDeviceWrap,
   persistDeviceWrap,
   unwrapMasterKey,
-  unwrapWithPassword,
   wrapMasterKey,
 } from "@/crypto/keys";
 import { ensureCryptoReady } from "@/workers/crypto";
@@ -30,54 +37,56 @@ import { ensureCryptoReady } from "@/workers/crypto";
 export const useAuthStore = defineStore("auth", () => {
   const isAuthenticated = ref(false);
   const userId = ref<string | null>(null);
-  const email = ref<string | null>(null);
+  const username = ref<string | null>(null);
   const masterKey = ref<RawKey | null>(null);
   const isRestoring = ref(true);
 
   function setSession(
-    info: { user_id: string; email: string },
+    info: { user_id: string; username: string },
     key: RawKey,
-    accessToken: string,
+    tokens: TokenPair,
   ) {
     userId.value = info.user_id;
-    email.value = info.email;
+    username.value = info.username;
     masterKey.value = key;
-    setAuthToken(accessToken);
+    setAuthToken(tokens.access_token);
+    setRefreshToken(tokens.refresh_token);
     isAuthenticated.value = true;
   }
 
-  /**
-   * Try to restore the session by reading the device_wrap from IndexedDB and
-   * unwrapping the master_key with the device_key. Enables passwordless
-   * re-entry on a previously authenticated browser.
-   */
   async function tryRestoreSession(): Promise<void> {
     try {
       await ensureCryptoReady();
-      const stored = await loadDeviceWrap();
-      if (!stored) return;
+      loadStoredRefreshToken();
 
-      const deviceKey = await getOrCreateDeviceKey();
-      const key = await unwrapMasterKey(stored.wrap, deviceKey);
-      // Note: in a full impl we'd also fetch a fresh access_token here.
-      // For now we only restore the master_key; the user will be redirected
-      // to /login to obtain a new short-lived JWT.
-      masterKey.value = key;
-      userId.value = stored.userId;
+      // Restore master_key from device wrap (if present).
+      const stored = await loadDeviceWrap();
+      if (stored) {
+        const deviceKey = await getOrCreateDeviceKey();
+        masterKey.value = await unwrapMasterKey(stored.wrap, deviceKey);
+        userId.value = stored.userId;
+      }
+
+      // Obtain a fresh access token via the refresh endpoint.
+      const rt = getRefreshToken();
+      if (rt) {
+        const pair = await authApi.refresh(rt);
+        setAuthToken(pair.access_token);
+        setRefreshToken(pair.refresh_token);
+        isAuthenticated.value = true;
+      }
     } catch (e) {
-      // eslint-disable-next-line no-console
-      console.warn("Failed to restore device session:", e);
+      console.warn("Failed to restore session:", e);
+      clearRefreshToken();
+      setAuthToken(null);
     } finally {
       isRestoring.value = false;
     }
   }
 
-  async function register(p: {
-    email: string;
-    password: string;
-  }): Promise<void> {
+  async function register(p: { username: string; password: string }): Promise<void> {
     await ensureCryptoReady();
-    const normalised = normaliseEmail(p.email);
+    const normalised = normaliseUsername(p.username);
 
     const passwordKey = await derivePasswordKey(p.password, normalised);
     const serverSalt = randomBytes(16);
@@ -86,44 +95,58 @@ export const useAuthStore = defineStore("auth", () => {
     const master = generateMasterKey();
     const { ciphertext, iv } = await wrapMasterKey(master, passwordKey);
 
-    // Pre-create device wrap so the user is immediately logged-in on
+    // Pre-create a device wrap so the user is immediately logged-in on
     // this device without re-entering the password.
     const deviceKey = await getOrCreateDeviceKey();
     const deviceWrap = await wrapMasterKey(master, deviceKey);
 
     const res = await authApi.register({
-      email: normalised,
+      username: normalised,
       auth_verifier: toHex(authVerifier),
-      kdf_salt: toHex(await derivePasswordKeySalt(normalised)),
+      kdf_salt: toHex(await usernameToSalt(normalised)),
       server_salt: toHex(serverSalt),
       encrypted_master_key: toBase64(ciphertext),
       encrypted_master_key_nonce: toBase64(iv),
     });
 
     await persistDeviceWrap(res.user_id, deviceWrap);
-    setSession(res, master, res.tokens.access_token);
+    setSession(res, master, res.tokens);
   }
 
-  async function login(p: { email: string; password: string }): Promise<void> {
+  async function login(p: { username: string; password: string }): Promise<void> {
     await ensureCryptoReady();
-    const normalised = normaliseEmail(p.email);
+    const normalised = normaliseUsername(p.username);
 
-    const _passwordKey = await derivePasswordKey(p.password, normalised);
-    // The client doesn't know the server_salt ahead of time; the real flow
-    // will fetch it from a /api/auth/prelogin endpoint. For the scaffold we
-    // assume the server returns it in the login response challenge.
-    // TODO(p1-impl): add prelogin endpoint that returns kdf_salt + server_salt.
-    void _passwordKey;
-    throw new Error(
-      "login flow requires prelogin endpoint (to be implemented in p1)",
+    const pre = await authApi.prelogin(normalised);
+    const passwordKey = await derivePasswordKey(p.password, normalised);
+    const authVerifier = deriveAuthVerifier(passwordKey, fromHex(pre.server_salt));
+
+    const res = await authApi.login({
+      username: normalised,
+      auth_verifier: toHex(authVerifier),
+    });
+
+    const master = await unwrapMasterKey(
+      {
+        ciphertext: fromBase64(res.encrypted_master_key),
+        iv: fromBase64(res.encrypted_master_key_nonce),
+      },
+      passwordKey,
     );
+
+    const deviceKey = await getOrCreateDeviceKey();
+    const deviceWrap = await wrapMasterKey(master, deviceKey);
+    await persistDeviceWrap(res.user_id, deviceWrap);
+
+    setSession(res, master, res.tokens);
   }
 
   async function logout(): Promise<void> {
     setAuthToken(null);
+    clearRefreshToken();
     isAuthenticated.value = false;
     userId.value = null;
-    email.value = null;
+    username.value = null;
     masterKey.value = null;
     await clearDeviceWrap();
   }
@@ -131,7 +154,7 @@ export const useAuthStore = defineStore("auth", () => {
   return {
     isAuthenticated,
     userId,
-    email,
+    username,
     masterKey,
     isRestoring,
     tryRestoreSession,
@@ -149,13 +172,23 @@ function toHex(b: Uint8Array): string {
     .join("");
 }
 
+function fromHex(hex: string): Uint8Array {
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = parseInt(hex.substr(i * 2, 2), 16);
+  }
+  return out;
+}
+
 function toBase64(b: Uint8Array): string {
   let s = "";
   for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]!);
   return btoa(s);
 }
 
-function derivePasswordKeySalt(_email: string): Promise<Uint8Array> {
-  // Placeholder - in p1 this comes from the prelogin endpoint.
-  return Promise.resolve(new Uint8Array(16));
+function fromBase64(b64: string): Uint8Array {
+  const s = atob(b64);
+  const out = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+  return out;
 }

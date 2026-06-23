@@ -3,8 +3,8 @@ import fc from "fast-check";
 
 import { bytes, shortString } from "@/__tests__/fc-arbitrary";
 import {
-  normaliseEmail,
-  emailToSalt,
+  normaliseUsername,
+  usernameToSalt,
   derivePasswordKey,
   deriveAuthVerifier,
   deriveSubkey,
@@ -12,49 +12,49 @@ import {
   KEY_BYTES,
 } from "./kdf";
 
-describe("normaliseEmail", () => {
+describe("normaliseUsername", () => {
   it("trims and lowercases", () => {
-    expect(normaliseEmail("  Foo@BAR.com ")).toBe("foo@bar.com");
+    expect(normaliseUsername("  Alice ")).toBe("alice");
   });
   it("is idempotent", () => {
-    const once = normaliseEmail("A@B.c");
-    expect(normaliseEmail(once)).toBe(once);
+    const once = normaliseUsername("Bob");
+    expect(normaliseUsername(once)).toBe(once);
   });
 });
 
-describe("emailToSalt", () => {
+describe("usernameToSalt", () => {
   it("is deterministic", async () => {
-    expect(Array.from(await emailToSalt("foo@bar.com"))).toEqual(
-      Array.from(await emailToSalt("foo@bar.com")),
+    expect(Array.from(await usernameToSalt("alice"))).toEqual(
+      Array.from(await usernameToSalt("alice")),
     );
   });
   it("produces 16 bytes", async () => {
-    expect((await emailToSalt("foo@bar.com")).length).toBe(16);
+    expect((await usernameToSalt("alice")).length).toBe(16);
   });
-  it("differs for different emails", async () => {
-    expect(Array.from(await emailToSalt("foo@bar.com"))).not.toEqual(
-      Array.from(await emailToSalt("baz@bar.com")),
+  it("differs for different usernames", async () => {
+    expect(Array.from(await usernameToSalt("alice"))).not.toEqual(
+      Array.from(await usernameToSalt("bob")),
     );
   });
 });
 
 describe("derivePasswordKey", () => {
   it("is deterministic", async () => {
-    expect(Array.from(await derivePasswordKey("pw", "foo@bar.com"))).toEqual(
-      Array.from(await derivePasswordKey("pw", "foo@bar.com")),
+    expect(Array.from(await derivePasswordKey("pw", "alice"))).toEqual(
+      Array.from(await derivePasswordKey("pw", "alice")),
     );
   });
   it("produces 32 bytes", async () => {
-    expect((await derivePasswordKey("pw", "foo@bar.com")).length).toBe(KEY_BYTES);
+    expect((await derivePasswordKey("pw", "alice")).length).toBe(KEY_BYTES);
   });
   it("differs for different passwords", async () => {
-    expect(Array.from(await derivePasswordKey("pw1", "foo@bar.com"))).not.toEqual(
-      Array.from(await derivePasswordKey("pw2", "foo@bar.com")),
+    expect(Array.from(await derivePasswordKey("pw1", "alice"))).not.toEqual(
+      Array.from(await derivePasswordKey("pw2", "alice")),
     );
   });
-  it("differs for different emails", async () => {
-    expect(Array.from(await derivePasswordKey("pw", "foo@bar.com"))).not.toEqual(
-      Array.from(await derivePasswordKey("pw", "baz@bar.com")),
+  it("differs for different usernames", async () => {
+    expect(Array.from(await derivePasswordKey("pw", "alice"))).not.toEqual(
+      Array.from(await derivePasswordKey("pw", "bob")),
     );
   });
 });

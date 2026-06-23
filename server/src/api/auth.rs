@@ -7,17 +7,31 @@
 
 use axum::extract::State;
 use axum::Json;
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
-use crate::auth::{issue_token_pair, TokenPair};
+use crate::auth::{issue_token_pair, persist_refresh_token, revoke_refresh_token, verify_access_token, TokenPair};
 use crate::error::{ApiError, ApiResult};
+use crate::models::User;
 use crate::state::AppState;
+
+/// `^[a-z0-9_-]{3,32}$`
+fn is_valid_username(s: &str) -> bool {
+    let len = s.len();
+    (3..=32).contains(&len)
+        && s.chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+}
+
+fn normalise_username(s: &str) -> String {
+    s.trim().to_lowercase()
+}
 
 #[derive(Debug, Deserialize)]
 pub struct RegisterRequest {
-    pub email: String,
+    pub username: String,
     /// Argon2id-derived verifier of the password-derived key. Server hashes this
-    /// again (Argon2id with its own salt) before storing.
+    /// again (Argon2id with server_salt) before storing.
     pub auth_verifier: String,
     /// Per-user salt used by the client for KDF (hex).
     pub kdf_salt: String,
@@ -25,15 +39,20 @@ pub struct RegisterRequest {
     pub server_salt: String,
     /// `master_key` wrapped by `password_key` (AES-256-GCM, base64).
     pub encrypted_master_key: String,
-    /// Associated data: nonce/iv for the wrapped master key (base64).
+    /// nonce/iv for the wrapped master key (base64).
     pub encrypted_master_key_nonce: String,
 }
 
 #[derive(Debug, Deserialize)]
+pub struct PreloginRequest {
+    pub username: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct LoginRequest {
-    pub email: String,
+    pub username: String,
     pub auth_verifier: String,
-    /// Optional: name of the new device requesting login.
+    /// Optional: name of the new device requesting login (unused in P1).
     pub device_name: Option<String>,
 }
 
@@ -43,9 +62,15 @@ pub struct RefreshRequest {
 }
 
 #[derive(Debug, Serialize)]
+pub struct PreloginResponse {
+    pub kdf_salt: String,
+    pub server_salt: String,
+}
+
+#[derive(Debug, Serialize)]
 pub struct AuthResponse {
     pub user_id: String,
-    pub email: String,
+    pub username: String,
     pub encrypted_master_key: String,
     pub encrypted_master_key_nonce: String,
     pub kdf_salt: String,
@@ -56,41 +81,328 @@ pub async fn register(
     State(state): State<AppState>,
     Json(req): Json<RegisterRequest>,
 ) -> ApiResult<Json<AuthResponse>> {
-    tracing::info!(email = %req.email, "register request");
+    let username = normalise_username(&req.username);
+    if !is_valid_username(&username) {
+        return Err(ApiError::BadRequest(
+            "username must be 3-32 chars of [a-z0-9_-]".into(),
+        ));
+    }
+    tracing::info!(username = %username, "register request");
 
-    // TODO(p1-impl): hash auth_verifier with argon2 + server_salt, insert user,
-    //                issue token pair. For now we return a placeholder so the
-    //                handler signature compiles & routes wire up correctly.
-    let _ = (state, req);
-    Err(ApiError::Internal(anyhow::anyhow!(
-        "register not yet implemented (p1 milestone)"
-    )))
+    let verifier_hash = crate::crypto::hash_verifier(&req.auth_verifier, &req.server_salt)
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?;
+    let id = uuid::Uuid::new_v4().to_string();
+
+    let insert = sqlx::query(
+        "INSERT INTO users (id, username, kdf_salt, server_salt, verifier_hash, \
+         encrypted_master_key, encrypted_master_key_nonce) \
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(&username)
+    .bind(&req.kdf_salt)
+    .bind(&req.server_salt)
+    .bind(&verifier_hash)
+    .bind(&req.encrypted_master_key)
+    .bind(&req.encrypted_master_key_nonce)
+    .execute(&state.db)
+    .await;
+
+    match insert {
+        Ok(_) => {}
+        Err(sqlx::Error::Database(db_err)) if db_err.is_unique_violation() => {
+            return Err(ApiError::Conflict("username already taken".into()));
+        }
+        Err(e) => return Err(e.into()),
+    }
+
+    let pair = issue_token_pair(&state, &id, None)?;
+    persist_refresh_token(&state, &id, None, &pair.refresh_token).await?;
+
+    Ok(Json(AuthResponse {
+        user_id: id,
+        username,
+        encrypted_master_key: req.encrypted_master_key,
+        encrypted_master_key_nonce: req.encrypted_master_key_nonce,
+        kdf_salt: req.kdf_salt,
+        tokens: pair,
+    }))
+}
+
+pub async fn prelogin(
+    State(state): State<AppState>,
+    Json(req): Json<PreloginRequest>,
+) -> ApiResult<Json<PreloginResponse>> {
+    let username = normalise_username(&req.username);
+    let row: Option<(String, String)> = sqlx::query_as(
+        "SELECT kdf_salt, server_salt FROM users WHERE username = ?",
+    )
+    .bind(&username)
+    .fetch_optional(&state.db)
+    .await?;
+    match row {
+        Some((kdf_salt, server_salt)) => Ok(Json(PreloginResponse { kdf_salt, server_salt })),
+        None => Err(ApiError::NotFound),
+    }
 }
 
 pub async fn login(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
 ) -> ApiResult<Json<AuthResponse>> {
-    tracing::info!(email = %req.email, "login request");
+    let username = normalise_username(&req.username);
+    tracing::info!(username = %username, "login request");
 
-    let _ = (state, req);
-    Err(ApiError::Internal(anyhow::anyhow!(
-        "login not yet implemented (p1 milestone)"
-    )))
+    // Don't distinguish "no such user" from "wrong password" in the response.
+    let user: User = sqlx::query_as::<_, User>(
+        "SELECT id, username, kdf_salt, server_salt, verifier_hash, \
+         encrypted_master_key, encrypted_master_key_nonce, created_at, updated_at \
+         FROM users WHERE username = ?",
+    )
+    .bind(&username)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or(ApiError::Unauthorized)?;
+
+    let ok = crate::crypto::verify_verifier(&req.auth_verifier, &user.verifier_hash)
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?;
+    if !ok {
+        return Err(ApiError::Unauthorized);
+    }
+
+    let pair = issue_token_pair(&state, &user.id, None)?;
+    persist_refresh_token(&state, &user.id, None, &pair.refresh_token).await?;
+
+    Ok(Json(AuthResponse {
+        user_id: user.id,
+        username: user.username,
+        encrypted_master_key: user.encrypted_master_key,
+        encrypted_master_key_nonce: user.encrypted_master_key_nonce,
+        kdf_salt: user.kdf_salt,
+        tokens: pair,
+    }))
 }
 
 pub async fn refresh(
     State(state): State<AppState>,
     Json(req): Json<RefreshRequest>,
 ) -> ApiResult<Json<TokenPair>> {
-    let _ = (state, req);
-    Err(ApiError::Internal(anyhow::anyhow!(
-        "refresh not yet implemented (p1 milestone)"
-    )))
+    let claims = verify_access_token(&state, &req.refresh_token)?;
+    let hash = crate::crypto::hash_refresh_token(&req.refresh_token);
+
+    let active: Option<(String,)> = sqlx::query_as(
+        "SELECT id FROM refresh_tokens \
+         WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?",
+    )
+    .bind(&hash)
+    .bind(Utc::now().to_rfc3339())
+    .fetch_optional(&state.db)
+    .await?;
+    if active.is_none() {
+        return Err(ApiError::Unauthorized);
+    }
+
+    revoke_refresh_token(&state, &hash).await?;
+    let pair = issue_token_pair(&state, &claims.sub, claims.dev.as_deref())?;
+    persist_refresh_token(&state, &claims.sub, claims.dev.as_deref(), &pair.refresh_token)
+        .await?;
+    Ok(Json(pair))
 }
 
-// Suppress unused-import warning for issue_token_pair; will be wired in p1 impl.
-#[allow(dead_code)]
-fn _ensure_used(state: &AppState, user_id: &str) -> ApiResult<TokenPair> {
-    issue_token_pair(state, user_id, None)
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Settings;
+    use crate::db;
+    use crate::state::AppState;
+    use std::sync::Arc;
+
+    async fn test_state_with_db() -> (AppState, tempfile::TempDir) {
+        let mut settings = Settings::default();
+        settings.jwt.secret = "test-secret".into();
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir
+            .path()
+            .join("test.db")
+            .to_string_lossy()
+            .replace('\\', "/");
+        let url = format!("sqlite://{}?mode=rwc", db_path);
+        let pool = db::connect(&url).await.unwrap();
+        db::migrate(&pool).await.unwrap();
+        (AppState::new(Arc::new(settings), pool), dir)
+    }
+
+    fn req(username: &str) -> RegisterRequest {
+        RegisterRequest {
+            username: username.into(),
+            auth_verifier: "ab".repeat(32), // 64 hex chars = 32 bytes
+            kdf_salt: "cd".repeat(16),
+            server_salt: "ef".repeat(16),
+            encrypted_master_key: "enc".into(),
+            encrypted_master_key_nonce: "nonce".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn register_returns_tokens_and_username() {
+        let (state, _dir) = test_state_with_db().await;
+        let res = register(State(state.clone()), Json(req("alice"))).await.unwrap();
+        assert_eq!(res.0.username, "alice");
+        assert!(!res.0.tokens.access_token.is_empty());
+        assert!(!res.0.tokens.refresh_token.is_empty());
+    }
+
+    #[tokio::test]
+    async fn register_rejects_duplicate_username() {
+        let (state, _dir) = test_state_with_db().await;
+        register(State(state.clone()), Json(req("alice"))).await.unwrap();
+        match register(State(state.clone()), Json(req("Alice"))).await {
+            Err(ApiError::Conflict(_)) => {}
+            other => panic!("expected Conflict (409), got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn register_rejects_invalid_username() {
+        let (state, _dir) = test_state_with_db().await;
+        for bad in ["ab", "a".repeat(33).as_str(), "With Space", "bad!"] {
+            match register(State(state.clone()), Json(req(bad))).await {
+                Err(ApiError::BadRequest(_)) => {}
+                other => panic!("username {bad:?}: expected BadRequest, got {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn prelogin_returns_salts_for_a_known_user() {
+        let (state, _dir) = test_state_with_db().await;
+        register(State(state.clone()), Json(req("alice"))).await.unwrap();
+        let res = prelogin(
+            State(state.clone()),
+            Json(PreloginRequest { username: "ALICE ".into() }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(res.0.server_salt, "ef".repeat(16));
+        assert_eq!(res.0.kdf_salt, "cd".repeat(16));
+    }
+
+    #[tokio::test]
+    async fn prelogin_returns_not_found_for_unknown_user() {
+        let (state, _dir) = test_state_with_db().await;
+        match prelogin(
+            State(state.clone()),
+            Json(PreloginRequest { username: "ghost".into() }),
+        )
+        .await
+        {
+            Err(ApiError::NotFound) => {}
+            other => panic!("expected NotFound, got {other:?}"),
+        }
+    }
+
+    fn login_req(username: &str, verifier_hex: &str) -> LoginRequest {
+        LoginRequest {
+            username: username.into(),
+            auth_verifier: verifier_hex.into(),
+            device_name: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn login_succeeds_with_the_registered_verifier() {
+        let (state, _dir) = test_state_with_db().await;
+        register(State(state.clone()), Json(req("alice"))).await.unwrap();
+        let res = login(
+            State(state.clone()),
+            Json(login_req("alice", &"ab".repeat(32))),
+        )
+        .await
+        .unwrap();
+        assert_eq!(res.0.username, "alice");
+        assert!(!res.0.tokens.refresh_token.is_empty());
+    }
+
+    #[tokio::test]
+    async fn login_rejects_a_wrong_verifier() {
+        let (state, _dir) = test_state_with_db().await;
+        register(State(state.clone()), Json(req("alice"))).await.unwrap();
+        match login(
+            State(state.clone()),
+            Json(login_req("alice", &"00".repeat(32))),
+        )
+        .await
+        {
+            Err(ApiError::Unauthorized) => {}
+            other => panic!("expected Unauthorized, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn login_rejects_an_unknown_user() {
+        let (state, _dir) = test_state_with_db().await;
+        assert!(matches!(
+            login(
+                State(state.clone()),
+                Json(login_req("ghost", &"ab".repeat(32))),
+            )
+            .await,
+            Err(ApiError::Unauthorized)
+        ));
+    }
+
+    async fn register_tokens(state: &AppState, username: &str) -> TokenPair {
+        let res = register(State(state.clone()), Json(req(username))).await.unwrap();
+        res.0.tokens
+    }
+
+    #[tokio::test]
+    async fn refresh_issues_a_new_pair_and_revokes_the_old_token() {
+        let (state, _dir) = test_state_with_db().await;
+        let pair = register_tokens(&state, "alice").await;
+
+        let new_pair = refresh(
+            State(state.clone()),
+            Json(RefreshRequest { refresh_token: pair.refresh_token.clone() }),
+        )
+        .await
+        .unwrap();
+        assert_ne!(new_pair.0.refresh_token, pair.refresh_token);
+        assert_ne!(new_pair.0.access_token, pair.access_token);
+    }
+
+    #[tokio::test]
+    async fn refresh_rejects_a_replayed_old_token() {
+        let (state, _dir) = test_state_with_db().await;
+        let pair = register_tokens(&state, "alice").await;
+        let old = pair.refresh_token.clone();
+        refresh(
+            State(state.clone()),
+            Json(RefreshRequest { refresh_token: old.clone() }),
+        )
+        .await
+        .unwrap();
+        match refresh(
+            State(state.clone()),
+            Json(RefreshRequest { refresh_token: old }),
+        )
+        .await
+        {
+            Err(ApiError::Unauthorized) => {}
+            other => panic!("expected Unauthorized on replay, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn refresh_rejects_a_garbage_token() {
+        let (state, _dir) = test_state_with_db().await;
+        assert!(matches!(
+            refresh(
+                State(state.clone()),
+                Json(RefreshRequest { refresh_token: "not.a.jwt".into() }),
+            )
+            .await,
+            Err(ApiError::Unauthorized)
+        ));
+    }
 }

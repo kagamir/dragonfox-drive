@@ -4,6 +4,9 @@ import {
   request,
   setAuthToken,
   getAuthToken,
+  setRefreshToken,
+  getRefreshToken,
+  clearRefreshToken,
   ApiError,
   http as httpApi,
 } from "./client";
@@ -17,6 +20,8 @@ beforeEach(() => {
   fetchMock = vi.fn();
   vi.stubGlobal("fetch", fetchMock);
   setAuthToken(null);
+  clearRefreshToken();
+  localStorage.clear();
 });
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -156,5 +161,77 @@ describe("http method helpers", () => {
     expect(fetchMock.mock.calls[2][1].method).toBe("PUT");
     await httpApi.delete("/api/m");
     expect(fetchMock.mock.calls[3][1].method).toBe("DELETE");
+  });
+});
+
+describe("refresh-token storage", () => {
+  it("persists to localStorage and reads back", () => {
+    setRefreshToken("rt-1");
+    expect(getRefreshToken()).toBe("rt-1");
+    expect(localStorage.getItem("df_refresh_token")).toBe("rt-1");
+  });
+  it("clears from both memory and localStorage", () => {
+    setRefreshToken("rt-1");
+    clearRefreshToken();
+    expect(getRefreshToken()).toBeNull();
+    expect(localStorage.getItem("df_refresh_token")).toBeNull();
+  });
+});
+
+describe("401 auto-refresh", () => {
+  it("refreshes once and replays the request on 401", async () => {
+    setRefreshToken("old-refresh");
+    setAuthToken("old-access");
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.endsWith("/api/auth/refresh")) {
+        return new Response(
+          JSON.stringify({ access_token: "new-access", refresh_token: "new-refresh" }),
+          { status: 200 },
+        );
+      }
+      // guarded endpoint: first call 401, replay 200
+      const guardedCalls = fetchMock.mock.calls.filter(
+        (c) => !(c[0] as string).endsWith("/api/auth/refresh"),
+      ).length;
+      if (guardedCalls === 1) {
+        return new Response(JSON.stringify({ error: "expired" }), { status: 401 });
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+    const res = await request<{ ok: boolean }>("/api/files");
+    expect(res).toEqual({ ok: true });
+    expect(getAuthToken()).toBe("new-access");
+    expect(getRefreshToken()).toBe("new-refresh");
+  });
+
+  it("clears the refresh token when refresh itself fails", async () => {
+    setRefreshToken("bad");
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.endsWith("/api/auth/refresh")) return new Response("{}", { status: 401 });
+      return new Response(JSON.stringify({ error: "expired" }), { status: 401 });
+    });
+    await expect(request("/api/x")).rejects.toThrow();
+    expect(getRefreshToken()).toBeNull();
+  });
+
+  it("deduplicates concurrent 401s to a single refresh", async () => {
+    setRefreshToken("r");
+    let refreshCalls = 0;
+    const hits = new Map<string, number>();
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.endsWith("/api/auth/refresh")) {
+        refreshCalls++;
+        return new Response(
+          JSON.stringify({ access_token: "a", refresh_token: "r2" }),
+          { status: 200 },
+        );
+      }
+      const n = (hits.get(url) ?? 0) + 1;
+      hits.set(url, n);
+      if (n === 1) return new Response(JSON.stringify({ error: "expired" }), { status: 401 });
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    });
+    await Promise.all([request("/api/x"), request("/api/y")]);
+    expect(refreshCalls).toBe(1);
   });
 });

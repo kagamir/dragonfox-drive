@@ -78,9 +78,9 @@ describe("wrapMasterKey [property]", () => {
 describe("wrapWithPassword / unwrapWithPassword", () => {
   it("round-trip", async () => {
     const master = generateMasterKey();
-    const wrapped = await wrapWithPassword(master, "correct horse", "u@x.com");
+    const wrapped = await wrapWithPassword(master, "correct horse", "alice");
     expect(
-      Array.from(await unwrapWithPassword(wrapped, "correct horse", "u@x.com")),
+      Array.from(await unwrapWithPassword(wrapped, "correct horse", "alice")),
     ).toEqual(Array.from(master));
   });
 
@@ -88,10 +88,10 @@ describe("wrapWithPassword / unwrapWithPassword", () => {
     const wrapped = await wrapWithPassword(
       generateMasterKey(),
       "right",
-      "u@x.com",
+      "alice",
     );
     await expect(
-      unwrapWithPassword(wrapped, "wrong", "u@x.com"),
+      unwrapWithPassword(wrapped, "wrong", "alice"),
     ).rejects.toThrow();
   });
 });

@@ -4,7 +4,7 @@
  * Key layout (see docs/crypto-design.md):
  *   - `master_key`: random 32 bytes, generated once per user. Root of trust.
  *   - `file_key`:   random 32 bytes, one per file. Wraps file chunks.
- *   - `password_key`: Argon2id(password, email). Used to wrap `master_key`
+ *   - `password_key`: Argon2id(password, username). Used to wrap `master_key`
  *     for cross-device password login.
  *   - `device_key`: random 32 bytes, persisted in IndexedDB per browser.
  *     Wraps `master_key` for passwordless unlock from this device.
@@ -83,9 +83,9 @@ export async function unwrapMasterKey(
 export async function wrapWithPassword(
   masterKey: RawKey,
   password: string,
-  email: string,
+  username: string,
 ): Promise<WrappedKey> {
-  const passwordKey = await derivePasswordKey(password, email);
+  const passwordKey = await derivePasswordKey(password, username);
   return wrapMasterKey(masterKey, passwordKey);
 }
 
@@ -93,9 +93,9 @@ export async function wrapWithPassword(
 export async function unwrapWithPassword(
   wrapped: WrappedKey,
   password: string,
-  email: string,
+  username: string,
 ): Promise<RawKey> {
-  const passwordKey = await derivePasswordKey(password, email);
+  const passwordKey = await derivePasswordKey(password, username);
   return unwrapMasterKey(wrapped, passwordKey);
 }
 
