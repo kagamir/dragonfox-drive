@@ -11,7 +11,7 @@ material.
                         │  password   │  (user memory, never sent to server)
                         └──────┬──────┘
                                │ Argon2id(m=64MiB, t=3, p=1)
-                               │   salt = first 16B of SHA-256(normalised_email)
+                               │   salt = first 16B of SHA-256(normalised_username)
                                ▼
                         ┌─────────────┐
                         │ password_key│  (32 B, client-only)

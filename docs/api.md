@@ -13,7 +13,7 @@ All requests/responses are JSON unless noted. Errors use the envelope
 Request:
 ```json
 {
-  "email": "user@example.com",
+  "username": "alice",
   "auth_verifier": "<hex>",
   "kdf_salt": "<hex>",
   "server_salt": "<hex>",
@@ -26,7 +26,7 @@ Response `200`:
 ```json
 {
   "user_id": "uuid",
-  "email": "user@example.com",
+  "username": "alice",
   "encrypted_master_key": "<base64>",
   "encrypted_master_key_nonce": "<base64>",
   "kdf_salt": "<hex>",
@@ -41,10 +41,24 @@ Response `200`:
 ### `POST /api/auth/login`
 
 ```json
-{ "email": "user@example.com", "auth_verifier": "<hex>", "device_name": "laptop" }
+{ "username": "alice", "auth_verifier": "<hex>", "device_name": "laptop" }
 ```
 
 Same response shape as register.
+
+### `POST /api/auth/prelogin`
+
+```json
+{ "username": "alice" }
+```
+
+Response `200`:
+```json
+{ "kdf_salt": "<hex>", "server_salt": "<hex>" }
+```
+
+Returns `404` if the username is unknown. The client uses `server_salt` to
+derive `auth_verifier` before calling `/login`.
 
 ### `POST /api/auth/refresh`
 
@@ -164,6 +178,6 @@ Revokes a share.
 | 401  | Missing or invalid bearer token         |
 | 403  | Authenticated but not the resource owner |
 | 404  | Resource not found                      |
-| 409  | Conflict (e.g. email already registered)|
+| 409  | Conflict (e.g. username already taken)|
 | 413  | Chunk exceeds `max_chunk_bytes`         |
 | 500  | Internal server error (logged)          |

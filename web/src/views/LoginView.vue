@@ -6,7 +6,7 @@ import { useAuthStore } from "@/stores/auth";
 const auth = useAuthStore();
 const router = useRouter();
 
-const email = ref("");
+const username = ref("");
 const password = ref("");
 const error = ref<string | null>(null);
 const loading = ref(false);
@@ -15,7 +15,7 @@ async function submit() {
   error.value = null;
   loading.value = true;
   try {
-    await auth.login({ email: email.value, password: password.value });
+    await auth.login({ username: username.value, password: password.value });
     router.push({ name: "drive" });
   } catch (e) {
     error.value = (e as Error).message;
@@ -35,11 +35,11 @@ async function submit() {
 
       <form @submit.prevent="submit">
         <label>
-          Email
+          Username
           <input
-            v-model="email"
-            type="email"
-            autocomplete="email"
+            v-model="username"
+            type="text"
+            autocomplete="username"
             required
             :disabled="loading"
           />

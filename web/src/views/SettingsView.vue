@@ -13,7 +13,7 @@ const auth = useAuthStore();
       <h1>Settings</h1>
       <div class="card">
         <h2>Account</h2>
-        <p>Signed in as <strong>{{ auth.email }}</strong></p>
+        <p>Signed in as <strong>{{ auth.username }}</strong></p>
       </div>
       <div class="card">
         <h2>Devices</h2>
