@@ -129,6 +129,23 @@ pub async fn register(
     }))
 }
 
+pub async fn prelogin(
+    State(state): State<AppState>,
+    Json(req): Json<PreloginRequest>,
+) -> ApiResult<Json<PreloginResponse>> {
+    let username = normalise_username(&req.username);
+    let row: Option<(String, String)> = sqlx::query_as(
+        "SELECT kdf_salt, server_salt FROM users WHERE username = ?",
+    )
+    .bind(&username)
+    .fetch_optional(&state.db)
+    .await?;
+    match row {
+        Some((kdf_salt, server_salt)) => Ok(Json(PreloginResponse { kdf_salt, server_salt })),
+        None => Err(ApiError::NotFound),
+    }
+}
+
 pub async fn login(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
@@ -212,6 +229,34 @@ mod tests {
                 Err(ApiError::BadRequest(_)) => {}
                 other => panic!("username {bad:?}: expected BadRequest, got {other:?}"),
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn prelogin_returns_salts_for_a_known_user() {
+        let (state, _dir) = test_state_with_db().await;
+        register(State(state.clone()), Json(req("alice"))).await.unwrap();
+        let res = prelogin(
+            State(state.clone()),
+            Json(PreloginRequest { username: "ALICE ".into() }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(res.0.server_salt, "ef".repeat(16));
+        assert_eq!(res.0.kdf_salt, "cd".repeat(16));
+    }
+
+    #[tokio::test]
+    async fn prelogin_returns_not_found_for_unknown_user() {
+        let (state, _dir) = test_state_with_db().await;
+        match prelogin(
+            State(state.clone()),
+            Json(PreloginRequest { username: "ghost".into() }),
+        )
+        .await
+        {
+            Err(ApiError::NotFound) => {}
+            other => panic!("expected NotFound, got {other:?}"),
         }
     }
 }

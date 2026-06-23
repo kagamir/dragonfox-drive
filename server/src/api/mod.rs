@@ -18,6 +18,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/health", get(health::health))
         .route("/api/auth/register", post(auth::register))
         .route("/api/auth/login", post(auth::login))
+        .route("/api/auth/prelogin", post(auth::prelogin))
         .route("/api/auth/refresh", post(auth::refresh))
         .route("/api/files", get(files::list).post(files::create))
         .route(
