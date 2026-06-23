@@ -97,8 +97,8 @@ Response:
 { "id": "uuid", "upload_url": "/api/files/uuid/chunks/{idx}" }
 ```
 
-`total_size` must be `<= limits.max_upload_bytes` (default 100 MiB) or the
-server responds `413`.
+`total_size` must be `<= limits.max_file_bytes` (default 10 GiB) or the server
+responds `413`.
 
 ### `PUT /api/files/:id/manifest`
 
@@ -113,12 +113,25 @@ server responds `413`.
 
 Returns the stored (still-encrypted) manifest blob + nonce.
 
+### `GET /api/files/:id/chunks`
+
+Returns the indices of chunks already stored on the server, plus the file's
+declared `chunk_count` and current `status`. Used by clients to reconcile
+resumable uploads (skip already-uploaded chunks).
+
+Response:
+```json
+{ "indices": [0, 1, 3], "chunk_count": 10, "status": "pending" }
+```
+
+Returns `404` for an unknown id or a non-owner.
+
 ### `PUT /api/files/:id/chunks/:idx`
 
 `Content-Type: application/octet-stream`. The request body is the raw
 encrypted chunk bytes (single whole-file chunk in P1). Server stores it as an
 opaque blob at `<data_dir>/blobs/<shard1>/<shard2>/<file_id>/chunk_<idx>`.
-Responds `413` if the body exceeds `limits.max_upload_bytes`.
+Responds `413` if the body exceeds `limits.max_chunk_bytes` (default 8 MiB).
 
 ### `GET /api/files/:id/chunks/:idx`
 
