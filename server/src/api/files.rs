@@ -216,24 +216,46 @@ pub async fn put_chunk(
 
 pub async fn finalize(
     State(state): State<AppState>,
-    _user: AuthUser,
-    Path(_id): Path<String>,
+    user: AuthUser,
+    Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let _ = state;
-    Err(ApiError::Internal(anyhow::anyhow!(
-        "files::finalize not yet implemented"
-    )))
+    let file: Option<(i32,)> = sqlx::query_as(
+        "SELECT chunk_count FROM files WHERE id = ? AND owner_id = ?")
+        .bind(&id).bind(&user.user_id)
+        .fetch_optional(&state.db).await?;
+    let chunk_count = match file {
+        None => return Err(ApiError::NotFound),
+        Some((c,)) => c,
+    };
+    let count: (i64,) = sqlx::query_as(
+        "SELECT count(*) FROM file_chunks WHERE file_id = ?")
+        .bind(&id).fetch_one(&state.db).await?;
+    if count.0 != chunk_count as i64 {
+        return Err(ApiError::BadRequest(format!(
+            "expected {} chunks, found {}", chunk_count, count.0)));
+    }
+    let now = chrono::Utc::now().to_rfc3339();
+    sqlx::query("UPDATE files SET status = 'ready', updated_at = ? WHERE id = ?")
+        .bind(&now).bind(&id)
+        .execute(&state.db).await?;
+    Ok(Json(json!({ "ok": true })))
 }
 
 pub async fn delete(
     State(state): State<AppState>,
-    _user: AuthUser,
-    Path(_id): Path<String>,
+    user: AuthUser,
+    Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    let _ = state;
-    Err(ApiError::Internal(anyhow::anyhow!(
-        "files::delete not yet implemented"
-    )))
+    let now = chrono::Utc::now().to_rfc3339();
+    let res = sqlx::query(
+        "UPDATE files SET status = 'deleted', updated_at = ? WHERE id = ? AND owner_id = ?")
+        .bind(&now).bind(&id).bind(&user.user_id)
+        .execute(&state.db).await?;
+    if res.rows_affected() == 0 {
+        return Err(ApiError::NotFound);
+    }
+    storage::delete_file_chunks(&state, &id).await?;
+    Ok(Json(json!({ "ok": true })))
 }
 
 #[cfg(test)]
@@ -455,5 +477,53 @@ mod tests {
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
         let bytes = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
         assert_eq!(&bytes[..], b"payload");
+    }
+
+    #[tokio::test]
+    async fn finalize_marks_ready_when_chunk_count_matches() {
+        let (state, _guard) = files_state().await;
+        seed_user(&state, "u1").await;
+        seed_ready_file(&state, "f1", "u1").await;
+        storage::write_chunk(&state, "f1", 0, b"x").await.unwrap();
+        sqlx::query("INSERT INTO file_chunks (file_id, idx, cipher_size, storage_path) \
+                     VALUES ('f1', 0, 1, 'p')")
+            .execute(&state.db).await.unwrap();
+        finalize(State(state.clone()), auth("u1"), Path("f1".into())).await.unwrap();
+        let row: (String,) = sqlx::query_as("SELECT status FROM files WHERE id = 'f1'")
+            .fetch_one(&state.db).await.unwrap();
+        assert_eq!(row.0, "ready");
+    }
+
+    #[tokio::test]
+    async fn finalize_rejects_when_count_mismatch() {
+        let (state, _guard) = files_state().await;
+        seed_user(&state, "u1").await;
+        // file declares chunk_count=1 but no chunk rows exist
+        seed_ready_file(&state, "f1", "u1").await;
+        let err = finalize(State(state.clone()), auth("u1"), Path("f1".into())).await.unwrap_err();
+        assert!(matches!(err, ApiError::BadRequest(_)));
+    }
+
+    #[tokio::test]
+    async fn delete_soft_deletes_and_removes_chunks() {
+        let (state, _guard) = files_state().await;
+        seed_user(&state, "u1").await;
+        seed_ready_file(&state, "f1", "u1").await;
+        storage::write_chunk(&state, "f1", 0, b"abc").await.unwrap();
+        delete(State(state.clone()), auth("u1"), Path("f1".into())).await.unwrap();
+        let row: (String,) = sqlx::query_as("SELECT status FROM files WHERE id = 'f1'")
+            .fetch_one(&state.db).await.unwrap();
+        assert_eq!(row.0, "deleted");
+        assert!(storage::read_chunk(&state, "f1", 0).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn delete_returns_404_for_non_owner() {
+        let (state, _guard) = files_state().await;
+        seed_user(&state, "u1").await;
+        seed_user(&state, "u2").await;
+        seed_ready_file(&state, "f1", "u1").await;
+        let err = delete(State(state.clone()), auth("u2"), Path("f1".into())).await.unwrap_err();
+        assert!(matches!(err, ApiError::NotFound));
     }
 }
