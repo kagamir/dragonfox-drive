@@ -150,12 +150,37 @@ pub async fn login(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
 ) -> ApiResult<Json<AuthResponse>> {
-    tracing::info!(username = %req.username, "login request");
+    let username = normalise_username(&req.username);
+    tracing::info!(username = %username, "login request");
 
-    let _ = (state, req);
-    Err(ApiError::Internal(anyhow::anyhow!(
-        "login not yet implemented (p1 milestone)"
-    )))
+    // Don't distinguish "no such user" from "wrong password" in the response.
+    let user: User = sqlx::query_as::<_, User>(
+        "SELECT id, username, kdf_salt, server_salt, verifier_hash, \
+         encrypted_master_key, encrypted_master_key_nonce, created_at, updated_at \
+         FROM users WHERE username = ?",
+    )
+    .bind(&username)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or(ApiError::Unauthorized)?;
+
+    let ok = crate::crypto::verify_verifier(&req.auth_verifier, &user.verifier_hash)
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?;
+    if !ok {
+        return Err(ApiError::Unauthorized);
+    }
+
+    let pair = issue_token_pair(&state, &user.id, None)?;
+    persist_refresh_token(&state, &user.id, None, &pair.refresh_token).await?;
+
+    Ok(Json(AuthResponse {
+        user_id: user.id,
+        username: user.username,
+        encrypted_master_key: user.encrypted_master_key,
+        encrypted_master_key_nonce: user.encrypted_master_key_nonce,
+        kdf_salt: user.kdf_salt,
+        tokens: pair,
+    }))
 }
 
 pub async fn refresh(
@@ -258,5 +283,55 @@ mod tests {
             Err(ApiError::NotFound) => {}
             other => panic!("expected NotFound, got {other:?}"),
         }
+    }
+
+    fn login_req(username: &str, verifier_hex: &str) -> LoginRequest {
+        LoginRequest {
+            username: username.into(),
+            auth_verifier: verifier_hex.into(),
+            device_name: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn login_succeeds_with_the_registered_verifier() {
+        let (state, _dir) = test_state_with_db().await;
+        register(State(state.clone()), Json(req("alice"))).await.unwrap();
+        let res = login(
+            State(state.clone()),
+            Json(login_req("alice", &"ab".repeat(32))),
+        )
+        .await
+        .unwrap();
+        assert_eq!(res.0.username, "alice");
+        assert!(!res.0.tokens.refresh_token.is_empty());
+    }
+
+    #[tokio::test]
+    async fn login_rejects_a_wrong_verifier() {
+        let (state, _dir) = test_state_with_db().await;
+        register(State(state.clone()), Json(req("alice"))).await.unwrap();
+        match login(
+            State(state.clone()),
+            Json(login_req("alice", &"00".repeat(32))),
+        )
+        .await
+        {
+            Err(ApiError::Unauthorized) => {}
+            other => panic!("expected Unauthorized, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn login_rejects_an_unknown_user() {
+        let (state, _dir) = test_state_with_db().await;
+        assert!(matches!(
+            login(
+                State(state.clone()),
+                Json(login_req("ghost", &"ab".repeat(32))),
+            )
+            .await,
+            Err(ApiError::Unauthorized)
+        ));
     }
 }
