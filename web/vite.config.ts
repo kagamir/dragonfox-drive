@@ -52,6 +52,14 @@ export default defineConfig({
       },
     },
   },
+  optimizeDeps: {
+    // esbuild pre-bundles deps before Vite's plugin pipeline runs, so it
+    // would choke on libsodium-wrappers-sumo's broken relative import
+    // before `fixLibsodiumImport` can rewrite it. Excluding these keeps
+    // them on the Vite plugin path where the rewrite applies. (The same
+    // trick is used for vitest via `test.server.deps.inline` below.)
+    exclude: ["libsodium-wrappers-sumo", "libsodium-sumo"],
+  },
   build: {
     outDir: "dist",
     target: "es2022",
