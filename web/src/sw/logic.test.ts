@@ -146,6 +146,80 @@ describe("sw logic: request handling", () => {
     expect(res.status).toBe(200);
   });
 
+  it("handleStreamRequest caps an open-ended range to one segment and fetches only the covering chunks", async () => {
+    const key = crypto.getRandomValues(new Uint8Array(32));
+    const ivBase = crypto.getRandomValues(new Uint8Array(12));
+    const chunkSize = 4;
+    const size = 20; // 5 chunks of 4 bytes
+    const pts = [
+      new Uint8Array([0, 0, 0, 1]),
+      new Uint8Array([0, 0, 0, 2]),
+      new Uint8Array([0, 0, 0, 3]),
+      new Uint8Array([0, 0, 0, 4]),
+      new Uint8Array([0, 0, 0, 5]),
+    ];
+    const cts = await Promise.all(pts.map((pt, i) => enc(key, ivBase, i, pt)));
+    const store = new Map<number, Uint8Array>(cts.map((c, i) => [i, c]));
+    let calls = 0;
+    const fetcher: ChunkFetcher = async (idx) => { calls++; return store.get(idx)!; };
+    const cache = new L2(1024);
+    const meta = mkMeta({ fileKey: key, ivBase, size, chunkCount: 5, chunkSize });
+    const req = { url: "/api/stream/f1", headers: new Headers({ range: "bytes=0-" }) };
+    // segmentBytes=8 ⇒ effectiveEnd=7 ⇒ only chunks 0 and 1 fetched (NOT all 5)
+    const res = await handleStreamRequest(req, meta, cache, fetcher, 8);
+    expect(res.status).toBe(206);
+    expect(res.headers.get("content-range")).toBe("bytes 0-7/20");
+    expect(res.headers.get("content-length")).toBe("8");
+    expect(Array.from(new Uint8Array(await res.arrayBuffer()))).toEqual([0, 0, 0, 1, 0, 0, 0, 2]);
+    expect(calls).toBe(2);
+  });
+
+  it("handleStreamRequest serves the next segment and reuses cached chunks at the boundary", async () => {
+    const key = crypto.getRandomValues(new Uint8Array(32));
+    const ivBase = crypto.getRandomValues(new Uint8Array(12));
+    const chunkSize = 4;
+    const size = 20;
+    const pts = [
+      new Uint8Array([0, 0, 0, 1]),
+      new Uint8Array([0, 0, 0, 2]),
+      new Uint8Array([0, 0, 0, 3]),
+      new Uint8Array([0, 0, 0, 4]),
+      new Uint8Array([0, 0, 0, 5]),
+    ];
+    const cts = await Promise.all(pts.map((pt, i) => enc(key, ivBase, i, pt)));
+    const store = new Map<number, Uint8Array>(cts.map((c, i) => [i, c]));
+    let calls = 0;
+    const fetcher: ChunkFetcher = async (idx) => { calls++; return store.get(idx)!; };
+    const cache = new L2(1024);
+    const meta = mkMeta({ fileKey: key, ivBase, size, chunkCount: 5, chunkSize });
+    const req = (range: string) => ({ url: "/api/stream/f1", headers: new Headers({ range }) });
+    // first segment: bytes=0- capped to [0..7] (chunks 0,1). Drain the body so the
+    // fetches complete before counting (Task 2 makes the body a lazy stream).
+    const res1 = await handleStreamRequest(req("bytes=0-"), meta, cache, fetcher, 8);
+    await res1.arrayBuffer();
+    expect(calls).toBe(2);
+    // second segment: bytes=4- capped to [4..11] (chunks 1,2); chunk 1 already cached
+    const res2 = await handleStreamRequest(req("bytes=4-"), meta, cache, fetcher, 8);
+    await res2.arrayBuffer();
+    expect(res2.headers.get("content-range")).toBe("bytes 4-11/20");
+    expect(calls).toBe(3); // only chunk 2 newly fetched (chunk 1 hit the LRU)
+  });
+
+  it("handleStreamRequest returns 206 capped when no Range header is present on a large file", async () => {
+    const key = crypto.getRandomValues(new Uint8Array(32));
+    const ivBase = crypto.getRandomValues(new Uint8Array(12));
+    const chunkSize = 4;
+    const size = 20;
+    const cts = await Promise.all([0, 1].map((i) => enc(key, ivBase, i, new Uint8Array([0, 0, 0, i + 1]))));
+    const store = new Map<number, Uint8Array>(cts.map((c, i) => [i, c]));
+    const fetcher: ChunkFetcher = async (idx) => store.get(idx)!;
+    const cache = new L2(1024);
+    const meta = mkMeta({ fileKey: key, ivBase, size, chunkCount: 5, chunkSize });
+    const res = await handleStreamRequest({ url: "/api/stream/f1", headers: new Headers() }, meta, cache, fetcher, 8);
+    expect(res.status).toBe(206);
+    expect(res.headers.get("content-range")).toBe("bytes 0-7/20");
+  });
+
   it("decryptChunkSubtle round-trips against WebCrypto encrypt", async () => {
     const key = crypto.getRandomValues(new Uint8Array(32));
     const ivBase = crypto.getRandomValues(new Uint8Array(12));

@@ -2,6 +2,10 @@
 
 export const SW_CHUNK_SIZE = 4 * 1024 * 1024; // MUST equal FILE_CHUNK_SIZE
 
+/** Per-response cap so the browser re-requests the next segment as playback
+ *  progresses instead of pulling the whole file up front. 4× chunk size. */
+export const STREAM_SEGMENT_BYTES = 4 * SW_CHUNK_SIZE;
+
 /** Which chunk indices cover the inclusive byte range [start..end] of a file of `size` bytes. */
 export function chunksCovering(
   start: number,
@@ -133,16 +137,22 @@ export function parseRange(header: string, size: number): { start: number; end: 
   return { start, end: Math.min(end, size - 1) };
 }
 
-/** Serve a Range request: fetch+decrypt covering chunks (cached), slice, respond 206/200. */
+/** Serve a Range request: fetch+decrypt the covering chunks (cached), slice the
+ *  requested window, and respond 206/200. The response is capped to
+ *  `segmentBytes` so the browser re-requests the next segment as playback
+ *  advances, instead of pulling the whole file up front. */
 export async function handleStreamRequest(
   req: StreamRequestLike,
   meta: StreamMeta,
   cache: LruCache,
   fetcher: ChunkFetcher,
+  segmentBytes: number = STREAM_SEGMENT_BYTES,
 ): Promise<Response> {
   const rangeHeader = req.headers.get("range") ?? "";
+  const hasRange = !!rangeHeader;
   const { start, end } = parseRange(rangeHeader, meta.size);
-  const { firstIdx, lastIdx } = chunksCovering(start, end, meta.size, meta.chunkSize);
+  const effectiveEnd = Math.min(end, start + segmentBytes - 1, meta.size - 1);
+  const { firstIdx, lastIdx } = chunksCovering(start, effectiveEnd, meta.size, meta.chunkSize);
   const plaintexts: Uint8Array[] = [];
   for (let idx = firstIdx; idx <= lastIdx; idx++) {
     const key = `${meta.fileId}:${idx}`;
@@ -154,14 +164,16 @@ export async function handleStreamRequest(
     }
     plaintexts.push(pt);
   }
-  const body = sliceRange(plaintexts, firstIdx, meta.chunkSize, start, end);
+  const body = sliceRange(plaintexts, firstIdx, meta.chunkSize, start, effectiveEnd);
+  const length = effectiveEnd - start + 1;
+  const isPartial = hasRange || effectiveEnd < meta.size - 1;
   const headers = new Headers({
     "Content-Type": meta.mime,
     "Accept-Ranges": "bytes",
-    "Content-Length": String(body.length),
+    "Content-Length": String(length),
   });
-  if (rangeHeader) {
-    headers.set("Content-Range", `bytes ${start}-${end}/${meta.size}`);
+  if (isPartial) {
+    headers.set("Content-Range", `bytes ${start}-${effectiveEnd}/${meta.size}`);
     return new Response(body, { status: 206, headers });
   }
   return new Response(body, { status: 200, headers });
