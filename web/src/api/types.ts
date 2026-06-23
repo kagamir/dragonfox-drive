@@ -12,7 +12,7 @@ export interface TokenPair {
 
 export interface AuthResponse {
   user_id: string;
-  email: string;
+  username: string;
   encrypted_master_key: string; // base64
   encrypted_master_key_nonce: string; // base64
   kdf_salt: string; // hex
@@ -20,7 +20,7 @@ export interface AuthResponse {
 }
 
 export interface RegisterRequest {
-  email: string;
+  username: string;
   auth_verifier: string; // hex
   kdf_salt: string; // hex
   server_salt: string; // hex
@@ -29,9 +29,14 @@ export interface RegisterRequest {
 }
 
 export interface LoginRequest {
-  email: string;
+  username: string;
   auth_verifier: string; // hex
   device_name?: string;
+}
+
+export interface PreloginResponse {
+  kdf_salt: string; // hex
+  server_salt: string; // hex
 }
 
 export interface FileMeta {

@@ -2,6 +2,7 @@ import { http } from "./client";
 import type {
   AuthResponse,
   LoginRequest,
+  PreloginResponse,
   RegisterRequest,
   TokenPair,
 } from "./types";
@@ -9,6 +10,9 @@ import type {
 export const authApi = {
   register: (body: RegisterRequest) =>
     http.post<AuthResponse>("/api/auth/register", body),
+
+  prelogin: (username: string) =>
+    http.post<PreloginResponse>("/api/auth/prelogin", { username }),
 
   login: (body: LoginRequest) =>
     http.post<AuthResponse>("/api/auth/login", body),
