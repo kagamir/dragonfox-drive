@@ -36,8 +36,8 @@ export const api = {
 
   // --- KDF --------------------------------------------------------------
 
-  async derivePasswordKey(password: string, email: string): Promise<RawKey> {
-    return derivePasswordKey(password, email);
+  async derivePasswordKey(password: string, username: string): Promise<RawKey> {
+    return derivePasswordKey(password, username);
   },
 
   async deriveAuthVerifier(
