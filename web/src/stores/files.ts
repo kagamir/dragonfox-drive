@@ -5,6 +5,39 @@ import { filesApi } from "@/api/files";
 import type { FileMeta } from "@/api/types";
 import { cryptoApi, ensureCryptoReady } from "@/workers/crypto";
 import { useAuthStore } from "./auth";
+import { FILE_CHUNK_SIZE, chunkCount, toBase64 } from "@/crypto/file";
+import type { WrappedKey } from "@/crypto/keys";
+
+export interface UploadSession {
+  fileId: string;
+  file: File;
+  fileKey: Uint8Array;
+  ivBase: Uint8Array;
+  chunkCount: number;
+  done: Set<number>;
+  phase: "uploading" | "finalizing" | "done" | "error";
+  progress: number; // 0..1
+  abort: AbortController;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Run `fn` over `items` with at most `limit` concurrent invocations. */
+async function asyncPool<T>(
+  limit: number,
+  items: readonly T[],
+  fn: (item: T) => Promise<void>,
+): Promise<void> {
+  const executing = new Set<Promise<void>>();
+  for (const item of items) {
+    const p = (async () => fn(item))().finally(() => executing.delete(p));
+    executing.add(p);
+    if (executing.size >= limit) await Promise.race(executing);
+  }
+  await Promise.all(executing);
+}
 
 export const useFilesStore = defineStore("files", () => {
   const files = ref<FileMeta[]>([]);
@@ -14,6 +47,7 @@ export const useFilesStore = defineStore("files", () => {
   const uploadProgress = ref(0);
   const downloading = ref(false);
   const displayNames = ref<Record<string, string>>({});
+  const activeUploads = ref<UploadSession[]>([]);
 
   function masterKey(): Uint8Array {
     const key = useAuthStore().masterKey;
@@ -76,37 +110,103 @@ export const useFilesStore = defineStore("files", () => {
     uploading.value = true;
     uploadProgress.value = 0;
     error.value = null;
+    let session: UploadSession | null = null;
     try {
       await ensureCryptoReady();
-      const key = masterKey();
-      const plaintext = new Uint8Array(await file.arrayBuffer());
-      const payload = await cryptoApi.encryptFile(
-        key,
-        plaintext,
-        file.name,
-        file.type,
-      );
+      const mk = masterKey();
+      const { fileKey, ivBase } = await cryptoApi.newFileKeyMaterial();
+      const total = file.size;
+      const n = chunkCount(total);
+
+      const wrapped: WrappedKey = await cryptoApi.wrap(fileKey, mk);
       const { id } = await filesApi.create({
-        total_size: plaintext.length,
-        chunk_count: 1,
-        encrypted_file_key: payload.encrypted_file_key,
-        encrypted_file_key_nonce: payload.encrypted_file_key_nonce,
+        total_size: total,
+        chunk_count: n,
+        encrypted_file_key: toBase64(wrapped.ciphertext),
+        encrypted_file_key_nonce: toBase64(wrapped.iv),
       });
+
+      const manifestObj = {
+        version: 1,
+        name: file.name,
+        mime: file.type || "application/octet-stream",
+        size: total,
+        chunk_size: FILE_CHUNK_SIZE,
+        iv_base: toBase64(ivBase),
+        created_at: new Date().toISOString(),
+      };
+      const manifestBytes = new TextEncoder().encode(JSON.stringify(manifestObj));
+      const em = await cryptoApi.seal(fileKey, manifestBytes);
       await filesApi.putManifest(id, {
-        encrypted_manifest: payload.encrypted_manifest,
-        encrypted_manifest_nonce: payload.encrypted_manifest_nonce,
+        encrypted_manifest: toBase64(em.ciphertext),
+        encrypted_manifest_nonce: toBase64(em.iv),
       });
-      await filesApi.putChunk(id, 0, payload.ciphertext, (r) => {
-        uploadProgress.value = r;
+
+      session = {
+        fileId: id, file, fileKey, ivBase, chunkCount: n,
+        done: new Set<number>(), phase: "uploading", progress: 0,
+        abort: new AbortController(),
+      };
+      activeUploads.value.push(session);
+
+      const info = await filesApi.getChunks(id);
+      for (const idx of info.indices) session.done.add(idx);
+      session.progress = session.done.size / n;
+
+      const missing: number[] = [];
+      for (let i = 0; i < n; i++) if (!session.done.has(i)) missing.push(i);
+
+      await asyncPool(3, missing, async (i) => {
+        if (session!.abort.signal.aborted) return;
+        const start = i * FILE_CHUNK_SIZE;
+        const slice = file.slice(start, Math.min(start + FILE_CHUNK_SIZE, total));
+        const plaintext = new Uint8Array(await slice.arrayBuffer());
+        let attempt = 0;
+        while (true) {
+          const ciphertext = await cryptoApi.encryptChunk(fileKey, ivBase, i, plaintext);
+          try {
+            await filesApi.putChunk(
+              id, i, ciphertext,
+              (r) => { if (session) uploadProgress.value = r; },
+              session!.abort.signal,
+            );
+            break;
+          } catch (e) {
+            if (session!.abort.signal.aborted) return;
+            if (++attempt > 3) throw e;
+            await delay(500 * 2 ** attempt);
+          }
+        }
+        session!.done.add(i);
+        session!.progress = session!.done.size / n;
+        uploadProgress.value = session!.progress;
       });
+
+      if (session.abort.signal.aborted) return;
+      session.phase = "finalizing";
       await filesApi.finalize(id);
+      session.phase = "done";
       await refresh();
     } catch (e) {
+      if (session) session.phase = "error";
       error.value = (e as Error).message;
       throw e;
     } finally {
       uploading.value = false;
+      if (session && session.phase === "done") {
+        const idx = activeUploads.value.indexOf(session);
+        if (idx >= 0) activeUploads.value.splice(idx, 1);
+      }
     }
+  }
+
+  async function cancelUpload(fileId: string): Promise<void> {
+    const s = activeUploads.value.find((x) => x.fileId === fileId);
+    if (!s) return;
+    s.abort.abort();
+    try { await filesApi.remove(fileId); } catch { /* best effort cleanup */ }
+    const idx = activeUploads.value.indexOf(s);
+    if (idx >= 0) activeUploads.value.splice(idx, 1);
   }
 
   async function download(meta: FileMeta): Promise<void> {
@@ -154,8 +254,10 @@ export const useFilesStore = defineStore("files", () => {
     uploadProgress,
     downloading,
     displayNames,
+    activeUploads,
     refresh,
     upload,
+    cancelUpload,
     download,
     remove,
   };
