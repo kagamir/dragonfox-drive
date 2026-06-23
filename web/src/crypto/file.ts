@@ -30,7 +30,7 @@ export interface Manifest {
   size: number;
   chunk_size: number;
   iv_base: string; // base64 of the 12-byte iv_base
-  plaintext_sha256: string; // hex
+  plaintext_sha256?: string; // hex; omitted for multi-chunk P2a uploads
   created_at: string; // RFC-3339
 }
 
@@ -143,4 +143,29 @@ export async function decryptFile(
   const ivBase = fromBase64(manifest.iv_base);
   const plaintext = await decryptChunk(fileKey, chunkIv(ivBase, 0), ciphertext);
   return { plaintext, manifest };
+}
+
+/** Number of chunks for a file of `size` bytes (1-chunk floor). */
+export function chunkCount(size: number, chunkSize: number = FILE_CHUNK_SIZE): number {
+  return Math.max(1, Math.ceil(size / chunkSize));
+}
+
+/** Encrypt chunk `index` of a file (thin wrapper over the IV scheme). */
+export async function encryptFileChunk(
+  fileKey: RawKey,
+  ivBase: Uint8Array,
+  index: number,
+  plaintext: Uint8Array,
+): Promise<Uint8Array> {
+  return encryptChunk(fileKey, chunkIv(ivBase, index), plaintext);
+}
+
+/** Decrypt chunk `index` of a file. */
+export async function decryptFileChunk(
+  fileKey: RawKey,
+  ivBase: Uint8Array,
+  index: number,
+  ciphertext: Uint8Array,
+): Promise<Uint8Array> {
+  return decryptChunk(fileKey, chunkIv(ivBase, index), ciphertext);
 }

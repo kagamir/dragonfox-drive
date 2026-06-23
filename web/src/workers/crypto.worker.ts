@@ -17,6 +17,7 @@ import {
   decryptChunk,
   encryptChunk,
   chunkIv,
+  encrypt,
 } from "@/crypto/symmetric";
 import {
   generateMasterKey,
@@ -92,6 +93,22 @@ export const api = {
   ): Promise<Uint8Array> {
     const iv = chunkIv(ivBase, chunkIndex);
     return decryptChunk(key, iv, ciphertext);
+  },
+
+  /** Fresh per-file key material: random fileKey + random iv_base. */
+  newFileKeyMaterial(): { fileKey: Uint8Array; ivBase: Uint8Array } {
+    return {
+      fileKey: sodium.randombytes_buf(32),
+      ivBase: sodium.randombytes_buf(12),
+    };
+  },
+
+  /** Seal an arbitrary blob with a key (random IV) — used for the manifest. */
+  async seal(
+    key: RawKey,
+    plaintext: Uint8Array,
+  ): Promise<{ ciphertext: Uint8Array; iv: Uint8Array }> {
+    return encrypt(key, plaintext);
   },
 
   // --- Whole-file orchestration -----------------------------------------
