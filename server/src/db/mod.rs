@@ -72,6 +72,7 @@ mod tests {
             "devices",
             "file_chunks",
             "files",
+            "folders",
             "refresh_tokens",
             "shares",
             "users",
@@ -97,6 +98,22 @@ mod tests {
         assert!(
             !names.contains(&"email".to_string()),
             "users must NOT have an `email` column; got {names:?}"
+        );
+
+        // P3: files gained two encrypted-parent columns for the folder tree.
+        let file_cols: Vec<(String,)> =
+            sqlx::query_as("SELECT name FROM pragma_table_info('files') ORDER BY cid")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        let file_col_names: Vec<String> = file_cols.into_iter().map(|r| r.0).collect();
+        assert!(
+            file_col_names.contains(&"encrypted_parent_id".to_string()),
+            "files must have encrypted_parent_id; got {file_col_names:?}"
+        );
+        assert!(
+            file_col_names.contains(&"encrypted_parent_id_nonce".to_string()),
+            "files must have encrypted_parent_id_nonce; got {file_col_names:?}"
         );
     }
 }
