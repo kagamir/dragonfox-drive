@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { setActivePinia, createPinia } from "pinia";
+import { toBase64 } from "@/crypto/file";
 
 const {
   createMock,
@@ -511,6 +512,15 @@ describe("files store", () => {
       "f1",
       expect.objectContaining({ encrypted_parent_id: expect.any(String) }),
     );
+    // The local cache MUST be updated to the re-wrapped key + new parent, so the
+    // file can be opened/downloaded WITHOUT a refresh (unlockFile reads
+    // fileParents[id] for the unwrap key and meta.encrypted_file_key for the
+    // ciphertext — both must point at the new parent's wrap together).
+    const after = files.files.find((f) => f.id === "f1")!;
+    expect(after.encrypted_file_key).toBe(toBase64(new Uint8Array([9])));
+    expect(after.encrypted_file_key_nonce).toBe(toBase64(new Uint8Array([8])));
+    expect(after.encrypted_parent_id).toBe(toBase64(new Uint8Array([11])));
+    expect(after.encrypted_parent_id_nonce).toBe(toBase64(new Uint8Array([12])));
     folderKeyOfMock.mockReturnValue(undefined);
   });
 

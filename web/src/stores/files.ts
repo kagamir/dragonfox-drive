@@ -418,6 +418,21 @@ export const useFilesStore = defineStore("files", () => {
         encrypted_file_key: toBase64(rewrapped.ciphertext),
         encrypted_file_key_nonce: toBase64(rewrapped.iv),
       });
+      // Keep the local cache in sync with the server: unlockFile re-derives the
+      // wrap key from fileParents[id] and unwraps meta.encrypted_file_key, so
+      // both must reflect the new parent together — otherwise the file can't be
+      // opened/downloaded until a refresh re-fetches the re-wrapped key.
+      files.value = files.value.map((f) =>
+        f.id === id
+          ? {
+              ...f,
+              encrypted_file_key: toBase64(rewrapped.ciphertext),
+              encrypted_file_key_nonce: toBase64(rewrapped.iv),
+              encrypted_parent_id: parentEnc ? toBase64(parentEnc.ciphertext) : null,
+              encrypted_parent_id_nonce: parentEnc ? toBase64(parentEnc.iv) : null,
+            }
+          : f,
+      );
       fileParents.value[id] = newParentId;
     } catch (e) {
       error.value = (e as Error).message;
