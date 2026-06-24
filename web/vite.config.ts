@@ -2,7 +2,6 @@
 import { fileURLToPath, URL } from "node:url";
 import { defineConfig, type Plugin } from "vite";
 import vue from "@vitejs/plugin-vue";
-import { VitePWA } from "vite-plugin-pwa";
 
 /**
  * libsodium.js ships a broken ESM import: `libsodium-wrappers-sumo` imports
@@ -35,14 +34,6 @@ export default defineConfig({
   plugins: [
     fixLibsodiumImport(),
     vue(),
-    VitePWA({
-      strategies: "injectManifest",
-      srcDir: "src/sw",
-      filename: "sw.ts",
-      injectRegister: false,
-      injectManifest: { injectionPoint: undefined },
-      devOptions: { enabled: true, type: "module" },
-    }),
   ],
   resolve: {
     alias: {

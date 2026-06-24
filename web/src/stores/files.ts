@@ -10,7 +10,6 @@ import { useFoldersStore } from "./folders";
 import { FILE_CHUNK_SIZE, chunkCount, toBase64, fromBase64, type Manifest } from "@/crypto/file";
 import { kindOf, canPreview, PREVIEW_CAPS, type FileKind } from "@/crypto/preview";
 import type { WrappedKey } from "@/crypto/keys";
-import { ensureStreamSw, postToSw } from "@/sw/register";
 
 export interface UploadSession {
   fileId: string;
@@ -119,21 +118,6 @@ export const useFilesStore = defineStore("files", () => {
       meta.encrypted_manifest_nonce,
     );
     return { fileKey, manifest };
-  }
-
-  let swListenerBound = false;
-  function bindSwListener(): void {
-    if (swListenerBound || typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
-    swListenerBound = true;
-    navigator.serviceWorker.addEventListener("message", (e: MessageEvent) => {
-      const d = e.data;
-      if (d && d.type === "needToken" && d.fileId) {
-        void refreshAuthToken().then((ok) => {
-          const token = ok ? getAuthToken() : null;
-          if (token) postToSw({ type: "token", fileId: d.fileId, token });
-        });
-      }
-    });
   }
 
   async function refresh(): Promise<void> {
