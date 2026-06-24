@@ -3,6 +3,7 @@
 pub mod assets;
 pub mod auth;
 pub mod files;
+pub mod folders;
 pub mod health;
 pub mod shares;
 
@@ -32,6 +33,14 @@ pub fn routes() -> Router<AppState> {
         .route("/api/files/:id/chunks", get(files::list_chunks))
         .route("/api/files/:id/finalize", post(files::finalize))
         .route("/api/files/:id", delete(files::delete))
+        .route(
+            "/api/folders",
+            get(folders::list).post(folders::create),
+        )
+        .route(
+            "/api/folders/:id",
+            axum::routing::patch(folders::patch).delete(folders::delete),
+        )
         .route("/api/shares", post(shares::create))
         .route("/api/shares/:id", get(shares::get).delete(shares::revoke))
         .route("/api/shares/:id/chunks/:idx", get(shares::get_chunk))

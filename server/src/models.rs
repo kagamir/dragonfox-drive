@@ -27,3 +27,17 @@ pub struct FileRow {
     pub created_at: String,
     pub updated_at: String,
 }
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct FolderRow {
+    pub id: String,
+    pub owner_id: String,
+    pub encrypted_parent_id: Option<String>,
+    pub encrypted_parent_id_nonce: Option<String>,
+    pub encrypted_folder_key: String,
+    pub encrypted_folder_key_nonce: String,
+    pub encrypted_name: String,
+    pub encrypted_name_nonce: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
