@@ -26,9 +26,15 @@ export interface MseHandle {
 
 const FETCH_BYTES = 1 * 1024 * 1024; // bytes fetched per round into mp4box
 /** Backpressure: pause feeding/appending when more than this many seconds are
- *  buffered ahead of currentTime (bounds the SourceBuffer size). The browser's
- *  MSE auto-eviction reclaims played-out data behind the playhead. */
+ *  buffered ahead of currentTime (bounds the SourceBuffer size). */
 const AHEAD_SECONDS = 15;
+/** Eviction: drop already-played buffered data older than this (seconds behind
+ *  currentTime) before appending new data. This reclaims the disjoint buffered
+ *  islands left by prior seek positions (the browser's MSE auto-eviction only
+ *  fires on quota overflow and is unreliable for scattered ranges). Only removes
+ *  behind data — never ahead, never re-fed — so it is invisible to mp4box's
+ *  sample tracking and cannot corrupt emission. */
+const BEHIND_SECONDS = 10;
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -122,6 +128,11 @@ export function playMp4(
         // reclaims played-out data behind the playhead.
         while (!disposed && sbAhead(sb) >= AHEAD_SECONDS) await sleep(100);
         if (disposed) return;
+        // Reclaim played-out data (and stale seek islands) behind the playhead
+        // so the SourceBuffer can't fill up with disjoint ranges accumulated
+        // across seeks. Safe: only removes behind data, never re-fed.
+        await evictBehind(sb);
+        if (disposed) return;
         const seg = q.shift()!;
         try {
           await appendAndWait(sb, seg.buffer);
@@ -173,6 +184,23 @@ export function playMp4(
       min = Math.min(min, sbAhead(sb as SourceBuffer));
     }
     return Number.isFinite(min) ? min : 0;
+  }
+
+  /** Remove the portion of `sb`'s buffered data older than BEHIND_SECONDS behind
+   *  currentTime (already played, including stale seek islands). One range call
+   *  covers all behind ranges/gaps. Resolves immediately if nothing to remove. */
+  function evictBehind(sb: SourceBuffer): Promise<void> {
+    return new Promise(async (resolve) => {
+      while (!disposed && sb.updating) await sleep(10);
+      if (disposed || sb.buffered.length === 0) return resolve();
+      const cut = video.currentTime - BEHIND_SECONDS;
+      const earliest = sb.buffered.start(0);
+      if (cut <= earliest) return resolve();
+      try {
+        sb.addEventListener("updateend", () => resolve(), { once: true });
+        sb.remove(earliest, cut);
+      } catch { resolve(); }
+    });
   }
 
   async function feed(start: number): Promise<void> {
@@ -231,10 +259,17 @@ export function playMp4(
       if (t >= video.buffered.start(i) && t <= video.buffered.end(i)) return; // already buffered
     }
     // Demo-pattern seek: let mp4box reposition and re-feed from the seek offset.
-    // No manual clear/eviction — that corrupts mp4box's sample tracking (it
-    // doesn't know MSE evicted data) and produces erratic timestamps. The feed
-    // backpressure + per-SB drainer pacing bound the buffer; the browser's MSE
-    // auto-eviction reclaims played-out data.
+    // We do NOT clear SourceBuffers on seek (that corrupts mp4box: re-feeding
+    // after a full clear makes it re-emit ahead data with erratic timestamps).
+    // Buffer bounding is handled without touching mp4box state: feed backpressure
+    // + per-SB drainer pacing bound ahead, evictBehind() reclaims played-out data
+    // behind, and we drop stale queued segments (below) so cancelled feeds don't
+    // leave junk islands.
+    // Drop segments mp4box already emitted for the previous (now-stale) seek/feed
+    // before repositioning — otherwise the drainer would append them as junk
+    // buffered islands at the old position. Safe: mp4box has already emitted
+    // them; we simply never append. Doesn't touch mp4box's sample tracking.
+    for (const q of segQueues.values()) q.length = 0;
     const seekInfo = mp4box.seek(t, true) as { offset: number };
     void feed(seekInfo.offset);
   }
