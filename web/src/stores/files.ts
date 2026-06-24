@@ -2,7 +2,7 @@ import { defineStore } from "pinia";
 import { ref } from "vue";
 
 import { filesApi } from "@/api/files";
-import { refreshAuthToken, ApiError, getAuthToken } from "@/api/client";
+import { refreshAuthToken, ApiError } from "@/api/client";
 import type { FileMeta } from "@/api/types";
 import { cryptoApi, ensureCryptoReady } from "@/workers/crypto";
 import { useAuthStore } from "./auth";
