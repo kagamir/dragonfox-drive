@@ -95,57 +95,97 @@ export function playMp4(
     void feed(seekInfo.offset);
   }
 
+  // Per-SourceBuffer segment queue + drainer. Serializes appends per buffer
+  // and paces each one against buffered-ahead, so a burst of segments from
+  // mp4box (it emits synchronously per fed chunk) can't overflow the
+  // SourceBuffer before backpressure re-engages.
+  interface PendingSeg { buffer: ArrayBuffer; id: number; sampleNum: number; isLast: boolean }
+  const segQueues = new Map<SourceBuffer, PendingSeg[]>();
+  const draining = new Set<SourceBuffer>();
+
   mp4box.onSegment = (id: number, user: unknown, buffer: ArrayBuffer, sampleNum: number, isLast: boolean): void => {
     const sb = user as unknown as SourceBuffer;
-    queueAppend(sb, buffer, () => {
-      try { mp4box.releaseUsedSamples(id, sampleNum); } catch { /* ignore */ }
-      if (isLast) { try { ms.endOfStream(); } catch { /* ignore */ } }
-    });
+    const q = segQueues.get(sb) ?? [];
+    q.push({ buffer, id, sampleNum, isLast });
+    segQueues.set(sb, q);
+    void drain(sb);
   };
 
-  function queueAppend(sb: SourceBuffer, buffer: ArrayBuffer, after: () => void): void {
-    const tryAppend = async () => {
+  async function drain(sb: SourceBuffer): Promise<void> {
+    if (draining.has(sb)) return;
+    draining.add(sb);
+    try {
       while (!disposed) {
-        if (!sb.updating) {
-          // Drop already-played data so the SourceBuffer doesn't fill up.
-          await evictBehind(sb);
-        }
+        const q = segQueues.get(sb);
+        if (!q || q.length === 0) return;
+        // Pace: don't append if this buffer already has AHEAD_SECONDS of
+        // continuous data ahead of the playhead — wait for playback to consume.
+        while (!disposed && sbAhead(sb) >= AHEAD_SECONDS) await sleep(100);
         if (disposed) return;
-        if (!sb.updating) {
-          try {
-            sb.appendBuffer(buffer);
-            sb.addEventListener("updateend", after, { once: true });
-            return;
-          } catch (e) {
-            const name = (e as { name?: string })?.name;
-            if (name === "QuotaExceededError") {
-              // Proactive eviction wasn't enough (in-flight segments, edit-list
-              // timeline gaps, video/audio divergence). Aggressively drop
-              // everything behind the playhead and retry once.
-              await evictAggressive(sb);
-              if (disposed) return;
-              try {
-                sb.appendBuffer(buffer);
-                sb.addEventListener("updateend", after, { once: true });
-                return;
-              } catch (e2) {
-                if (!disposed) onError(e2 as Error);
-                return;
-              }
-            }
+        const seg = q.shift()!;
+        await evictBehind(sb);
+        if (disposed) return;
+        try {
+          await appendAndWait(sb, seg.buffer);
+        } catch (e) {
+          if ((e as { name?: string })?.name === "QuotaExceededError") {
+            await evictAggressive(sb);
+            if (disposed) return;
+            try { await appendAndWait(sb, seg.buffer); }
+            catch (e2) { if (!disposed) onError(e2 as Error); return; }
+          } else {
             if (!disposed) onError(e as Error);
             return;
           }
         }
-        await sleep(10);
+        try { mp4box.releaseUsedSamples(seg.id, seg.sampleNum); } catch { /* ignore */ }
+        if (seg.isLast) { try { ms.endOfStream(); } catch { /* ignore */ } }
       }
-    };
-    void tryAppend();
+    } finally {
+      draining.delete(sb);
+    }
+  }
+
+  /** Append `buffer` to `sb`, resolving on its updateend (waits for any
+   *  in-flight op first). Rejects on append error. */
+  function appendAndWait(sb: SourceBuffer, buffer: ArrayBuffer): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const doAppend = () => {
+        if (disposed) return resolve();
+        try {
+          sb.appendBuffer(buffer);
+          sb.addEventListener("updateend", () => resolve(), { once: true });
+        } catch (e) { reject(e as Error); }
+      };
+      if (sb.updating) sb.addEventListener("updateend", doAppend, { once: true });
+      else doAppend();
+    });
+  }
+
+  /** Continuous buffered data ahead of the playhead in THIS SourceBuffer
+   *  (0 if the playhead is in a gap). Bounds each buffer individually. */
+  function sbAhead(sb: SourceBuffer): number {
+    const t = video.currentTime;
+    for (let i = 0; i < sb.buffered.length; i++) {
+      if (t >= sb.buffered.start(i) && t <= sb.buffered.end(i)) {
+        return sb.buffered.end(i) - t;
+      }
+    }
+    return 0;
+  }
+
+  /** Continuous buffered data ahead of the playhead across ALL SourceBuffers
+   *  (the minimum — what playback can actually consume). Used by the feed loop. */
+  function continuousAhead(): number {
+    let min = Infinity;
+    for (const sb of Array.from(ms.sourceBuffers)) {
+      min = Math.min(min, sbAhead(sb as SourceBuffer));
+    }
+    return Number.isFinite(min) ? min : 0;
   }
 
   /** Remove the portion of `sb`'s buffered range that is BEHIND_SECONDS behind
-   *  currentTime (already played). Returns once the remove completes (or nothing
-   *  to remove). Keeps the SourceBuffer from filling past its quota. */
+   *  currentTime (already played). Keeps the SourceBuffer from filling up. */
   function evictBehind(sb: SourceBuffer): Promise<void> {
     return new Promise((resolve) => {
       if (sb.buffered.length === 0) return resolve();
@@ -155,14 +195,12 @@ export function playMp4(
       try {
         sb.addEventListener("updateend", () => resolve(), { once: true });
         sb.remove(earliest, until);
-      } catch {
-        resolve();
-      }
+      } catch { resolve(); }
     });
   }
 
-  /** Emergency eviction: drop EVERYTHING behind the playhead (keep only the
-   *  frame at currentTime). Used to recover from a QuotaExceededError. */
+  /** Emergency eviction: drop EVERYTHING behind the playhead. Used to recover
+   *  from a QuotaExceededError. */
   function evictAggressive(sb: SourceBuffer): Promise<void> {
     return new Promise((resolve) => {
       if (sb.buffered.length === 0) return resolve();
@@ -172,22 +210,8 @@ export function playMp4(
       try {
         sb.addEventListener("updateend", () => resolve(), { once: true });
         sb.remove(earliest, until);
-      } catch {
-        resolve();
-      }
+      } catch { resolve(); }
     });
-  }
-
-  /** Seconds of continuous buffered data ahead of the playhead. Returns 0 if
-   *  currentTime is not inside any buffered range (a gap — must feed). */
-  function continuousAhead(): number {
-    const t = video.currentTime;
-    for (let i = 0; i < video.buffered.length; i++) {
-      if (t >= video.buffered.start(i) && t <= video.buffered.end(i)) {
-        return video.buffered.end(i) - t;
-      }
-    }
-    return 0;
   }
 
   async function feed(start: number): Promise<void> {
@@ -269,8 +293,11 @@ export function playMp4(
   }
 
   function removeRange(sb: SourceBuffer, start: number, end: number): Promise<void> {
-    return new Promise((resolve) => {
-      if (sb.updating || sb.buffered.length === 0 || start >= end) return resolve();
+    return new Promise(async (resolve) => {
+      // Wait for any in-flight append/remove so we don't bail without clearing
+      // (a busy SourceBuffer still holds the data we need to free).
+      while (!disposed && sb.updating) await sleep(10);
+      if (disposed || sb.buffered.length === 0 || start >= end) return resolve();
       try {
         sb.addEventListener("updateend", () => resolve(), { once: true });
         sb.remove(start, end);
