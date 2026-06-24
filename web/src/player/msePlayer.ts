@@ -26,11 +26,9 @@ export interface MseHandle {
 
 const FETCH_BYTES = 1 * 1024 * 1024; // bytes fetched per round into mp4box
 /** Backpressure: pause feeding/appending when more than this many seconds are
- *  buffered ahead of currentTime (bounds the SourceBuffer size). */
+ *  buffered ahead of currentTime (bounds the SourceBuffer size). The browser's
+ *  MSE auto-eviction reclaims played-out data behind the playhead. */
 const AHEAD_SECONDS = 15;
-/** Eviction: drop already-played buffered data older than this (seconds behind
- *  currentTime) before appending new data. Kept small — clear aggressively. */
-const BEHIND_SECONDS = 5;
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -120,23 +118,16 @@ export function playMp4(
         if (!q || q.length === 0) return;
         // Pace: don't append if this buffer already has AHEAD_SECONDS of
         // continuous data ahead of the playhead — wait for playback to consume.
+        // This bounds each SourceBuffer; the browser's MSE auto-eviction
+        // reclaims played-out data behind the playhead.
         while (!disposed && sbAhead(sb) >= AHEAD_SECONDS) await sleep(100);
         if (disposed) return;
         const seg = q.shift()!;
-        await evictBehind(sb);
-        if (disposed) return;
         try {
           await appendAndWait(sb, seg.buffer);
         } catch (e) {
-          if ((e as { name?: string })?.name === "QuotaExceededError") {
-            await evictAggressive(sb);
-            if (disposed) return;
-            try { await appendAndWait(sb, seg.buffer); }
-            catch (e2) { if (!disposed) onError(e2 as Error); return; }
-          } else {
-            if (!disposed) onError(e as Error);
-            return;
-          }
+          if (!disposed) onError(e as Error);
+          return;
         }
         try { mp4box.releaseUsedSamples(seg.id, seg.sampleNum); } catch { /* ignore */ }
         if (seg.isLast) { try { ms.endOfStream(); } catch { /* ignore */ } }
@@ -182,34 +173,6 @@ export function playMp4(
       min = Math.min(min, sbAhead(sb as SourceBuffer));
     }
     return Number.isFinite(min) ? min : 0;
-  }
-
-  /** Remove the portion of `sb`'s buffered range that is BEHIND_SECONDS behind
-   *  currentTime (already played). Keeps the SourceBuffer from filling up. */
-  function evictBehind(sb: SourceBuffer): Promise<void> {
-    return new Promise((resolve) => {
-      if (sb.buffered.length === 0) return resolve();
-      const earliest = sb.buffered.start(0);
-      const until = video.currentTime - BEHIND_SECONDS;
-      if (until <= earliest) return resolve();
-      try {
-        sb.addEventListener("updateend", () => resolve(), { once: true });
-        sb.remove(earliest, until);
-      } catch { resolve(); }
-    });
-  }
-
-  /** Emergency eviction: drop EVERYTHING except a 2 s window around the
-   *  playhead — both behind AND ahead. Ahead data (e.g. from a burst or a prior
-   *  seek position) otherwise can't be freed and "cannot free space" is thrown.
-   *  Used to recover from a QuotaExceededError. */
-  function evictAggressive(sb: SourceBuffer): Promise<void> {
-    return new Promise(async (resolve) => {
-      const t = video.currentTime;
-      await removeRange(sb, 0, Math.max(0, t - 2));
-      if (!disposed) await removeRange(sb, t + 2, Number.MAX_SAFE_INTEGER);
-      resolve();
-    });
   }
 
   async function feed(start: number): Promise<void> {
@@ -267,45 +230,13 @@ export function playMp4(
     for (let i = 0; i < video.buffered.length; i++) {
       if (t >= video.buffered.start(i) && t <= video.buffered.end(i)) return; // already buffered
     }
-    // Rapid seeks accumulate one disjoint buffered range per seek position, and
-    // behind/aggressive eviction can only free ranges around currentTime — the
-    // far ranges survive and the SourceBuffer hits "full, cannot free space".
-    // Clear everything and re-buffer from the seek point so the buffer holds a
-    // single region.
-    void clearAllBuffers().then(() => {
-      if (disposed) return;
-      const seekInfo = mp4box.seek(t, true) as { offset: number };
-      void feed(seekInfo.offset);
-    });
-  }
-
-  /** Remove all buffered media from every SourceBuffer (init/config persists)
-   *  AND drop all pending segments, so stale data from the previous playback
-   *  position isn't appended after the clear (rapid seeks would otherwise
-   *  accumulate one disjoint range per position). Used on seek. */
-  function clearAllBuffers(): Promise<void> {
-    for (const q of segQueues.values()) q.length = 0;
-    const end = Number.isFinite(ms.duration) && ms.duration > 0
-      ? ms.duration
-      : Number.MAX_SAFE_INTEGER;
-    return Promise.all(
-      Array.from(ms.sourceBuffers).map((sb) => removeRange(sb as SourceBuffer, 0, end)),
-    ).then(() => undefined);
-  }
-
-  function removeRange(sb: SourceBuffer, start: number, end: number): Promise<void> {
-    return new Promise(async (resolve) => {
-      // Wait for any in-flight append/remove so we don't bail without clearing
-      // (a busy SourceBuffer still holds the data we need to free).
-      while (!disposed && sb.updating) await sleep(10);
-      if (disposed || sb.buffered.length === 0 || start >= end) return resolve();
-      try {
-        sb.addEventListener("updateend", () => resolve(), { once: true });
-        sb.remove(start, end);
-      } catch {
-        resolve();
-      }
-    });
+    // Demo-pattern seek: let mp4box reposition and re-feed from the seek offset.
+    // No manual clear/eviction — that corrupts mp4box's sample tracking (it
+    // doesn't know MSE evicted data) and produces erratic timestamps. The feed
+    // backpressure + per-SB drainer pacing bound the buffer; the browser's MSE
+    // auto-eviction reclaims played-out data.
+    const seekInfo = mp4box.seek(t, true) as { offset: number };
+    void feed(seekInfo.offset);
   }
 
   video.addEventListener("seeking", onSeeking);
