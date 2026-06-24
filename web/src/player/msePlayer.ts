@@ -25,12 +25,12 @@ export interface MseHandle {
 }
 
 const FETCH_BYTES = 1 * 1024 * 1024; // bytes fetched per round into mp4box
-/** Backpressure: pause feeding when more than this many seconds are buffered
- *  ahead of currentTime (bounds the SourceBuffer size). */
-const AHEAD_SECONDS = 30;
+/** Backpressure: pause feeding/appending when more than this many seconds are
+ *  buffered ahead of currentTime (bounds the SourceBuffer size). */
+const AHEAD_SECONDS = 15;
 /** Eviction: drop already-played buffered data older than this (seconds behind
- *  currentTime) before appending new data. */
-const BEHIND_SECONDS = 10;
+ *  currentTime) before appending new data. Kept small — clear aggressively. */
+const BEHIND_SECONDS = 5;
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -199,18 +199,16 @@ export function playMp4(
     });
   }
 
-  /** Emergency eviction: drop EVERYTHING behind the playhead. Used to recover
-   *  from a QuotaExceededError. */
+  /** Emergency eviction: drop EVERYTHING except a 2 s window around the
+   *  playhead — both behind AND ahead. Ahead data (e.g. from a burst or a prior
+   *  seek position) otherwise can't be freed and "cannot free space" is thrown.
+   *  Used to recover from a QuotaExceededError. */
   function evictAggressive(sb: SourceBuffer): Promise<void> {
-    return new Promise((resolve) => {
-      if (sb.buffered.length === 0) return resolve();
-      const earliest = sb.buffered.start(0);
-      const until = video.currentTime;
-      if (until <= earliest) return resolve();
-      try {
-        sb.addEventListener("updateend", () => resolve(), { once: true });
-        sb.remove(earliest, until);
-      } catch { resolve(); }
+    return new Promise(async (resolve) => {
+      const t = video.currentTime;
+      await removeRange(sb, 0, Math.max(0, t - 2));
+      if (!disposed) await removeRange(sb, t + 2, Number.MAX_SAFE_INTEGER);
+      resolve();
     });
   }
 
@@ -281,9 +279,12 @@ export function playMp4(
     });
   }
 
-  /** Remove all buffered media from every SourceBuffer (init/config persists).
-   *  Used on seek to reset the buffer to a single fresh region. */
+  /** Remove all buffered media from every SourceBuffer (init/config persists)
+   *  AND drop all pending segments, so stale data from the previous playback
+   *  position isn't appended after the clear (rapid seeks would otherwise
+   *  accumulate one disjoint range per position). Used on seek. */
   function clearAllBuffers(): Promise<void> {
+    for (const q of segQueues.values()) q.length = 0;
     const end = Number.isFinite(ms.duration) && ms.duration > 0
       ? ms.duration
       : Number.MAX_SAFE_INTEGER;
