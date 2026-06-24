@@ -122,10 +122,14 @@ export function playMp4(
         return;
       }
       if (disposed || myToken !== feedToken) return;
-      (chunk as unknown as { fileStart: number }).fileStart = cursor;
+      // mp4box.appendBuffer needs an ArrayBuffer (it constructs a DataView from
+      // the arg). fetchRange returns a fresh full-buffer Uint8Array, so hand
+      // over its underlying .buffer with fileStart set on it.
+      const ab = chunk.buffer as ArrayBuffer;
+      (ab as unknown as { fileStart: number }).fileStart = cursor;
       let next: number;
       try {
-        next = mp4box.appendBuffer(chunk as unknown as ArrayBuffer) as number;
+        next = mp4box.appendBuffer(ab) as number;
       } catch (e) {
         if (!disposed) onError(e as Error);
         return;
