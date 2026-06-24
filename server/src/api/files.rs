@@ -31,6 +31,8 @@ pub struct FileMeta {
     pub encrypted_manifest_nonce: Option<String>,
     pub encrypted_file_key: Option<String>,
     pub encrypted_file_key_nonce: Option<String>,
+    pub encrypted_parent_id: Option<String>,
+    pub encrypted_parent_id_nonce: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -47,6 +49,8 @@ impl From<FileRow> for FileMeta {
             encrypted_manifest_nonce: r.encrypted_manifest_nonce,
             encrypted_file_key: r.encrypted_file_key,
             encrypted_file_key_nonce: r.encrypted_file_key_nonce,
+            encrypted_parent_id: r.encrypted_parent_id,
+            encrypted_parent_id_nonce: r.encrypted_parent_id_nonce,
             created_at: r.created_at,
             updated_at: r.updated_at,
         }
@@ -57,7 +61,9 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> ApiResult<Js
     let rows: Vec<FileRow> = sqlx::query_as(
         "SELECT id, owner_id, status, total_size, chunk_count, \
          encrypted_manifest, encrypted_manifest_nonce, \
-         encrypted_file_key, encrypted_file_key_nonce, created_at, updated_at \
+         encrypted_file_key, encrypted_file_key_nonce, \
+         encrypted_parent_id, encrypted_parent_id_nonce, \
+         created_at, updated_at \
          FROM files WHERE owner_id = ? AND status != 'deleted' \
          ORDER BY created_at DESC")
         .bind(&user.user_id)
@@ -72,6 +78,10 @@ pub struct CreateFileRequest {
     pub chunk_count: u32,
     pub encrypted_file_key: String,
     pub encrypted_file_key_nonce: String,
+    #[serde(default)]
+    pub encrypted_parent_id: Option<String>,
+    #[serde(default)]
+    pub encrypted_parent_id_nonce: Option<String>,
 }
 
 pub async fn create(
@@ -92,14 +102,17 @@ pub async fn create(
     let id = uuid::Uuid::new_v4().to_string();
     sqlx::query(
         "INSERT INTO files (id, owner_id, status, total_size, chunk_count, \
-         encrypted_file_key, encrypted_file_key_nonce) \
-         VALUES (?, ?, 'pending', ?, ?, ?, ?)")
+         encrypted_file_key, encrypted_file_key_nonce, \
+         encrypted_parent_id, encrypted_parent_id_nonce) \
+         VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?)")
         .bind(&id)
         .bind(&user.user_id)
         .bind(req.total_size as i64)
         .bind(req.chunk_count as i32)
         .bind(&req.encrypted_file_key)
         .bind(&req.encrypted_file_key_nonce)
+        .bind(&req.encrypted_parent_id)
+        .bind(&req.encrypted_parent_id_nonce)
         .execute(&state.db).await?;
     Ok(Json(json!({
         "id": id,
@@ -272,15 +285,54 @@ pub async fn delete(
     user: AuthUser,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
+    // Verify ownership first so we don't touch blobs for an unknown/non-owned id.
+    let exists: Option<(String,)> =
+        sqlx::query_as("SELECT id FROM files WHERE id = ? AND owner_id = ?")
+            .bind(&id).bind(&user.user_id)
+            .fetch_optional(&state.db).await?;
+    if exists.is_none() {
+        return Err(ApiError::NotFound);
+    }
+    sqlx::query("DELETE FROM files WHERE id = ? AND owner_id = ?")
+        .bind(&id).bind(&user.user_id)
+        .execute(&state.db).await?;
+    storage::delete_file_chunks(&state, &id).await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// Move a file to a new parent (or root). The client supplies the already
+/// re-wrapped file_key + the new encrypted parent; the server does no crypto.
+pub async fn patch_move(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<String>,
+    Json(req): Json<Value>,
+) -> ApiResult<Json<Value>> {
     let now = chrono::Utc::now().to_rfc3339();
+    let get_str = |k: &str| -> ApiResult<String> {
+        req.get(k).and_then(|v| v.as_str()).map(|s| s.to_string())
+            .ok_or_else(|| ApiError::BadRequest(format!("{k} must be a string")))
+    };
+    let encrypted_file_key = get_str("encrypted_file_key")?;
+    let encrypted_file_key_nonce = get_str("encrypted_file_key_nonce")?;
+    let (encrypted_parent_id, encrypted_parent_id_nonce) = match req.get("encrypted_parent_id") {
+        None | Some(Value::Null) => (None, None),
+        Some(_) => (Some(get_str("encrypted_parent_id")?), Some(get_str("encrypted_parent_id_nonce")?)),
+    };
+
     let res = sqlx::query(
-        "UPDATE files SET status = 'deleted', updated_at = ? WHERE id = ? AND owner_id = ?")
+        "UPDATE files SET encrypted_file_key = ?, encrypted_file_key_nonce = ?, \
+         encrypted_parent_id = ?, encrypted_parent_id_nonce = ?, updated_at = ? \
+         WHERE id = ? AND owner_id = ?")
+        .bind(&encrypted_file_key)
+        .bind(&encrypted_file_key_nonce)
+        .bind(&encrypted_parent_id)
+        .bind(&encrypted_parent_id_nonce)
         .bind(&now).bind(&id).bind(&user.user_id)
         .execute(&state.db).await?;
     if res.rows_affected() == 0 {
         return Err(ApiError::NotFound);
     }
-    storage::delete_file_chunks(&state, &id).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -359,6 +411,8 @@ mod tests {
             chunk_count: 1,
             encrypted_file_key: "k".into(),
             encrypted_file_key_nonce: "kn".into(),
+            encrypted_parent_id: None,
+            encrypted_parent_id_nonce: None,
         };
         let res = create(State(state.clone()), auth("u1"), Json(req)).await.unwrap();
         let id = res.0["id"].as_str().unwrap().to_string();
@@ -378,6 +432,7 @@ mod tests {
         let req = CreateFileRequest {
             total_size: 10, chunk_count: 0,
             encrypted_file_key: "k".into(), encrypted_file_key_nonce: "kn".into(),
+            encrypted_parent_id: None, encrypted_parent_id_nonce: None,
         };
         let err = create(State(state.clone()), auth("u1"), Json(req)).await.unwrap_err();
         assert!(matches!(err, ApiError::BadRequest(_)));
@@ -391,6 +446,7 @@ mod tests {
             total_size: state.settings.limits.max_file_bytes + 1,
             chunk_count: 1,
             encrypted_file_key: "k".into(), encrypted_file_key_nonce: "kn".into(),
+            encrypted_parent_id: None, encrypted_parent_id_nonce: None,
         };
         let err = create(State(state.clone()), auth("u1"), Json(req)).await.unwrap_err();
         assert!(matches!(err, ApiError::PayloadTooLarge));
@@ -531,15 +587,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_soft_deletes_and_removes_chunks() {
+    async fn delete_hard_deletes_row_and_removes_chunks() {
         let (state, _guard) = files_state().await;
         seed_user(&state, "u1").await;
         seed_ready_file(&state, "f1", "u1").await;
         storage::write_chunk(&state, "f1", 0, b"abc").await.unwrap();
         delete(State(state.clone()), auth("u1"), Path("f1".into())).await.unwrap();
-        let row: (String,) = sqlx::query_as("SELECT status FROM files WHERE id = 'f1'")
-            .fetch_one(&state.db).await.unwrap();
-        assert_eq!(row.0, "deleted");
+        let row: Option<(String,)> = sqlx::query_as("SELECT id FROM files WHERE id = 'f1'")
+            .fetch_optional(&state.db).await.unwrap();
+        assert!(row.is_none(), "hard delete must remove the row entirely");
         assert!(storage::read_chunk(&state, "f1", 0).await.unwrap().is_none());
     }
 
@@ -550,6 +606,41 @@ mod tests {
         seed_user(&state, "u2").await;
         seed_ready_file(&state, "f1", "u1").await;
         let err = delete(State(state.clone()), auth("u2"), Path("f1".into())).await.unwrap_err();
+        assert!(matches!(err, ApiError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn patch_move_updates_parent_and_file_key() {
+        let (state, _guard) = files_state().await;
+        seed_user(&state, "u1").await;
+        seed_ready_file(&state, "f1", "u1").await;
+        patch_move(
+            State(state.clone()), auth("u1"), Path("f1".into()),
+            Json(json!({
+                "encrypted_parent_id": "encP", "encrypted_parent_id_nonce": "encPn",
+                "encrypted_file_key": "newK", "encrypted_file_key_nonce": "newKn",
+            })),
+        ).await.unwrap();
+        let row: (Option<String>, String) = sqlx::query_as(
+            "SELECT encrypted_parent_id, encrypted_file_key FROM files WHERE id = 'f1'")
+            .fetch_one(&state.db).await.unwrap();
+        assert_eq!(row.0.as_deref(), Some("encP"));
+        assert_eq!(row.1, "newK");
+    }
+
+    #[tokio::test]
+    async fn patch_move_returns_404_for_non_owner() {
+        let (state, _guard) = files_state().await;
+        seed_user(&state, "u1").await;
+        seed_user(&state, "u2").await;
+        seed_ready_file(&state, "f1", "u1").await;
+        let err = patch_move(
+            State(state.clone()), auth("u2"), Path("f1".into()),
+            Json(json!({
+                "encrypted_parent_id": null, "encrypted_parent_id_nonce": null,
+                "encrypted_file_key": "k", "encrypted_file_key_nonce": "kn",
+            })),
+        ).await.unwrap_err();
         assert!(matches!(err, ApiError::NotFound));
     }
 

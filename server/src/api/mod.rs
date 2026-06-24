@@ -8,7 +8,7 @@ pub mod health;
 pub mod shares;
 
 use axum::{
-    routing::{delete, get, post},
+    routing::{get, post},
     Router,
 };
 
@@ -32,7 +32,10 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/api/files/:id/chunks", get(files::list_chunks))
         .route("/api/files/:id/finalize", post(files::finalize))
-        .route("/api/files/:id", delete(files::delete))
+        .route(
+            "/api/files/:id",
+            axum::routing::patch(files::patch_move).delete(files::delete),
+        )
         .route(
             "/api/folders",
             get(folders::list).post(folders::create),

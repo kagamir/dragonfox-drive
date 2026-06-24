@@ -24,6 +24,8 @@ pub struct FileRow {
     pub encrypted_manifest_nonce: Option<String>,
     pub encrypted_file_key: Option<String>,
     pub encrypted_file_key_nonce: Option<String>,
+    pub encrypted_parent_id: Option<String>,
+    pub encrypted_parent_id_nonce: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
