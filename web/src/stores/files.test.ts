@@ -29,9 +29,24 @@ const { ensureStreamSwMock, postToSwMock, getTokenMock } = vi.hoisted(() => ({
   getTokenMock: vi.fn().mockReturnValue("tok"),
 }));
 
+const { currentFolderIdMock, folderKeyOfMock, filesMoveMock } = vi.hoisted(() => ({
+  currentFolderIdMock: { value: null as string | null },
+  folderKeyOfMock: vi.fn(() => undefined),
+  filesMoveMock: vi.fn().mockResolvedValue({ ok: true }),
+}));
+
 vi.mock("@/sw/register", () => ({
   ensureStreamSw: ensureStreamSwMock,
   postToSw: postToSwMock,
+}));
+
+vi.mock("@/stores/folders", () => ({
+  useFoldersStore: () => ({
+    get currentFolderId() {
+      return currentFolderIdMock.value;
+    },
+    folderKeyOf: folderKeyOfMock,
+  }),
 }));
 
 vi.mock("@/api/client", async (importOriginal) => {
@@ -53,6 +68,9 @@ vi.mock("@/workers/crypto", () => ({
       ciphertext: new Uint8Array([7]),
       iv: new Uint8Array([6]),
     }),
+    encryptParentId: vi.fn().mockImplementation(async (_k: unknown, p: string | null) =>
+      p === null ? null : { ciphertext: new Uint8Array([11]), iv: new Uint8Array([12]) },
+    ),
     encryptChunk: vi.fn().mockResolvedValue(new Uint8Array([5])),
     decryptManifest: vi.fn().mockResolvedValue({
       name: "dl.txt", mime: "text/plain", size: 2,
@@ -77,6 +95,7 @@ vi.mock("@/api/files", () => ({
     remove: removeMock,
     getChunk: getChunkMock,
     getChunks: getChunksMock,
+    move: filesMoveMock,
   },
 }));
 
@@ -435,5 +454,62 @@ describe("files store", () => {
     };
     await files.openPreview(meta);
     expect(files.preview!.url).toBe("blob:small");
+  });
+
+  it("upload into a folder wraps fileKey with the folder key + sets parent", async () => {
+    const auth = useAuthStore();
+    auth.masterKey = new Uint8Array(32) as any;
+    currentFolderIdMock.value = "fold";
+    folderKeyOfMock.mockReturnValue(new Uint8Array(32).fill(7));
+    const files = useFilesStore();
+    const file = new File([new Uint8Array([7, 7])], "u.txt", { type: "text/plain" });
+    await files.upload(file);
+    expect(createMock).toHaveBeenCalledWith(
+      expect.objectContaining({ encrypted_parent_id: expect.any(String) }),
+    );
+    // fileKey was wrapped with the folder key, not masterKey: cryptoApi.wrap was
+    // called with the folder key (32 bytes of 7) as the wrapper.
+    expect((cryptoApi.wrap as any)).toHaveBeenCalledWith(
+      expect.any(Uint8Array),
+      new Uint8Array(32).fill(7),
+    );
+    currentFolderIdMock.value = null;
+    folderKeyOfMock.mockReturnValue(undefined);
+  });
+
+  it("upload to root wraps fileKey with masterKey and omits parent", async () => {
+    const auth = useAuthStore();
+    auth.masterKey = new Uint8Array(32) as any;
+    currentFolderIdMock.value = null;
+    const files = useFilesStore();
+    const file = new File([new Uint8Array([7, 7])], "u.txt", { type: "text/plain" });
+    await files.upload(file);
+    // create body should omit encrypted_parent_id (undefined → not in object)
+    expect(createMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({ encrypted_parent_id: expect.anything() }),
+    );
+  });
+
+  it("moveFile re-wraps the file_key and PATCHes the new parent", async () => {
+    const auth = useAuthStore();
+    auth.masterKey = new Uint8Array(32) as any;
+    const files = useFilesStore();
+    // a file currently at root (no parent); move it into "dest"
+    files.files = []; // ensure clean
+    const meta = {
+      id: "f1", owner_id: "u", status: "ready" as const,
+      total_size: 2, chunk_count: 1,
+      encrypted_manifest: "em", encrypted_manifest_nonce: "emn",
+      encrypted_file_key: "fk", encrypted_file_key_nonce: "fkn",
+      encrypted_parent_id: null, encrypted_parent_id_nonce: null,
+      created_at: "", updated_at: "",
+    };
+    files.files = [meta];
+    folderKeyOfMock.mockReturnValue(new Uint8Array(32).fill(9)); // dest's folder key
+    await files.moveFile("f1", "dest");
+    expect(filesMoveMock).toHaveBeenCalledWith(
+      "f1",
+      expect.objectContaining({ encrypted_parent_id: expect.any(String) }),
+    );
   });
 });

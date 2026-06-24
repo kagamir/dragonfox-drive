@@ -6,6 +6,7 @@ import { refreshAuthToken, ApiError, getAuthToken } from "@/api/client";
 import type { FileMeta } from "@/api/types";
 import { cryptoApi, ensureCryptoReady } from "@/workers/crypto";
 import { useAuthStore } from "./auth";
+import { useFoldersStore } from "./folders";
 import { FILE_CHUNK_SIZE, chunkCount, toBase64, fromBase64, type Manifest } from "@/crypto/file";
 import { kindOf, canPreview, PREVIEW_CAPS, type FileKind } from "@/crypto/preview";
 import type { WrappedKey } from "@/crypto/keys";
@@ -59,6 +60,7 @@ export const useFilesStore = defineStore("files", () => {
   const uploadProgress = ref(0);
   const downloading = ref(false);
   const displayNames = ref<Record<string, string>>({});
+  const fileParents = ref<Record<string, string | null>>({});
   const activeUploads = ref<UploadSession[]>([]);
   const preview = ref<{
     meta: FileMeta;
@@ -95,6 +97,7 @@ export const useFilesStore = defineStore("files", () => {
       const res = await filesApi.list();
       files.value = res.files;
       void decryptNames();
+      void decryptParents();
     } catch (e) {
       error.value = (e as Error).message;
     } finally {
@@ -139,6 +142,36 @@ export const useFilesStore = defineStore("files", () => {
     }
   }
 
+  async function decryptParents(): Promise<void> {
+    let key: Uint8Array;
+    try {
+      key = masterKey();
+    } catch {
+      return;
+    }
+    for (const f of files.value) {
+      if (fileParents.value[f.id] === undefined) {
+        if (f.encrypted_parent_id && f.encrypted_parent_id_nonce) {
+          try {
+            fileParents.value[f.id] = await cryptoApi.decryptParentId(
+              key,
+              fromBase64(f.encrypted_parent_id),
+              fromBase64(f.encrypted_parent_id_nonce),
+            );
+          } catch {
+            fileParents.value[f.id] = null;
+          }
+        } else {
+          fileParents.value[f.id] = null;
+        }
+      }
+    }
+  }
+
+  function filesWithParent(parentId: string | null): FileMeta[] {
+    return files.value.filter((f) => (fileParents.value[f.id] ?? null) === parentId);
+  }
+
   async function upload(file: File): Promise<void> {
     uploading.value = true;
     uploadProgress.value = 0;
@@ -151,13 +184,31 @@ export const useFilesStore = defineStore("files", () => {
       const total = file.size;
       const n = chunkCount(total);
 
-      const wrapped: WrappedKey = await cryptoApi.wrap(fileKey, mk);
+      const foldersStore = useFoldersStore();
+      const parentId = foldersStore.currentFolderId;
+      let wrapKey: Uint8Array;
+      if (parentId === null) {
+        wrapKey = mk;
+      } else {
+        const fk = foldersStore.folderKeyOf(parentId);
+        if (!fk) throw new Error("current folder key not available");
+        wrapKey = fk;
+      }
+      const wrapped: WrappedKey = await cryptoApi.wrap(fileKey, wrapKey);
+      const parentEnc = await cryptoApi.encryptParentId(mk, parentId);
       const { id } = await filesApi.create({
         total_size: total,
         chunk_count: n,
         encrypted_file_key: toBase64(wrapped.ciphertext),
         encrypted_file_key_nonce: toBase64(wrapped.iv),
+        ...(parentEnc
+          ? {
+              encrypted_parent_id: toBase64(parentEnc.ciphertext),
+              encrypted_parent_id_nonce: toBase64(parentEnc.iv),
+            }
+          : {}),
       });
+      fileParents.value[id] = parentId;
 
       const manifestObj = {
         version: 1,
@@ -296,6 +347,55 @@ export const useFilesStore = defineStore("files", () => {
       throw e;
     } finally {
       downloading.value = false;
+    }
+  }
+
+  async function moveFile(id: string, newParentId: string | null): Promise<void> {
+    error.value = null;
+    try {
+      await ensureCryptoReady();
+      const mk = masterKey();
+      const foldersStore = useFoldersStore();
+      const meta = files.value.find((f) => f.id === id);
+      if (!meta || !meta.encrypted_file_key || !meta.encrypted_file_key_nonce) {
+        throw new Error("file not found");
+      }
+      const curParent = fileParents.value[id] ?? null;
+      let curWrapKey: Uint8Array;
+      if (curParent === null) {
+        curWrapKey = mk;
+      } else {
+        const fk = foldersStore.folderKeyOf(curParent);
+        if (!fk) throw new Error("current folder key not available");
+        curWrapKey = fk;
+      }
+      const fileKey = await cryptoApi.unwrap(
+        {
+          ciphertext: fromBase64(meta.encrypted_file_key),
+          iv: fromBase64(meta.encrypted_file_key_nonce),
+        },
+        curWrapKey,
+      );
+      let newWrapKey: Uint8Array;
+      if (newParentId === null) {
+        newWrapKey = mk;
+      } else {
+        const fk = foldersStore.folderKeyOf(newParentId);
+        if (!fk) throw new Error("target folder key not available");
+        newWrapKey = fk;
+      }
+      const rewrapped = await cryptoApi.wrap(fileKey, newWrapKey);
+      const parentEnc = await cryptoApi.encryptParentId(mk, newParentId);
+      await filesApi.move(id, {
+        encrypted_parent_id: parentEnc ? toBase64(parentEnc.ciphertext) : null,
+        encrypted_parent_id_nonce: parentEnc ? toBase64(parentEnc.iv) : null,
+        encrypted_file_key: toBase64(rewrapped.ciphertext),
+        encrypted_file_key_nonce: toBase64(rewrapped.iv),
+      });
+      fileParents.value[id] = newParentId;
+    } catch (e) {
+      error.value = (e as Error).message;
+      throw e;
     }
   }
 
@@ -450,6 +550,8 @@ export const useFilesStore = defineStore("files", () => {
     cancelUpload,
     download,
     remove,
+    filesWithParent,
+    moveFile,
     preview,
     openPreview,
     closePreview,
