@@ -229,7 +229,7 @@ export const useFoldersStore = defineStore("folders", () => {
   }
 
   function isDescendant(candidateId: string, ancestorId: string): boolean {
-    let cur = byId.value.get(candidateId);
+    let cur = byId.value.get(candidateId) ?? null;
     while (cur) {
       if (cur.id === ancestorId) return true;
       cur = cur.parentId ? byId.value.get(cur.parentId) ?? null : null;
