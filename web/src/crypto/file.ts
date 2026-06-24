@@ -127,7 +127,7 @@ export async function decryptManifest(
 /** Like decryptManifest, but the file_key has already been unwrapped by the
  *  caller (e.g. with a folder key rather than master_key). Used so the
  *  manifest decrypt can be folder-aware without a new unwrap path. */
-export async function decryptManifestWithFileKey(
+export async function decryptManifestWithKey(
   fileKey: RawKey,
   encryptedManifest: string,
   encryptedManifestNonce: string,

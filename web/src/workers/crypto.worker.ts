@@ -28,7 +28,7 @@ import {
 import {
   decryptFile as decryptFilePayload,
   decryptManifest as decryptManifestPayload,
-  decryptManifestWithFileKey as decryptManifestWithFileKeyPayload,
+  decryptManifestWithKey as decryptManifestWithKeyPayload,
   encryptFile as encryptFilePayload,
   type EncryptedFilePayload,
   type Manifest,
@@ -150,7 +150,7 @@ export const api = {
     encryptedManifest: string,
     encryptedManifestNonce: string,
   ): Promise<Manifest> {
-    return decryptManifestWithFileKeyPayload(
+    return decryptManifestWithKeyPayload(
       fileKey, encryptedManifest, encryptedManifestNonce,
     );
   },

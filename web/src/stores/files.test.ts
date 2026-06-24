@@ -72,10 +72,6 @@ vi.mock("@/workers/crypto", () => ({
       p === null ? null : { ciphertext: new Uint8Array([11]), iv: new Uint8Array([12]) },
     ),
     encryptChunk: vi.fn().mockResolvedValue(new Uint8Array([5])),
-    decryptManifest: vi.fn().mockResolvedValue({
-      name: "dl.txt", mime: "text/plain", size: 2,
-      iv_base: "iv==", chunk_size: 4 * 1024 * 1024,
-    }),
     decryptManifestWithKey: vi.fn().mockResolvedValue({
       name: "dl.txt", mime: "text/plain", size: 2,
       iv_base: "iv==", chunk_size: 4 * 1024 * 1024,

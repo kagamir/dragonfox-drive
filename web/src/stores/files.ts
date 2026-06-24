@@ -87,6 +87,39 @@ export const useFilesStore = defineStore("files", () => {
     return fk;
   }
 
+  /** Unwrap a file's file_key and decrypt its manifest. Folder-aware: the
+   *  wrap key is the parent folder's folder_key (or master_key at root).
+   *  Returns both the file_key (for chunk decrypt / openVideo) and manifest. */
+  async function unlockFile(meta: {
+    id: string;
+    encrypted_file_key: string | null;
+    encrypted_file_key_nonce: string | null;
+    encrypted_manifest: string | null;
+    encrypted_manifest_nonce: string | null;
+  }): Promise<{ fileKey: Uint8Array; manifest: Manifest }> {
+    if (
+      !meta.encrypted_file_key ||
+      !meta.encrypted_file_key_nonce ||
+      !meta.encrypted_manifest ||
+      !meta.encrypted_manifest_nonce
+    ) {
+      throw new Error("file not fully uploaded");
+    }
+    const fileKey = await cryptoApi.unwrap(
+      {
+        ciphertext: fromBase64(meta.encrypted_file_key),
+        iv: fromBase64(meta.encrypted_file_key_nonce),
+      },
+      wrapKeyForFile(meta.id),
+    );
+    const manifest = await cryptoApi.decryptManifestWithKey(
+      fileKey,
+      meta.encrypted_manifest,
+      meta.encrypted_manifest_nonce,
+    );
+    return { fileKey, manifest };
+  }
+
   let swListenerBound = false;
   function bindSwListener(): void {
     if (swListenerBound || typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
@@ -138,18 +171,7 @@ export const useFilesStore = defineStore("files", () => {
         !displayNames.value[f.id]
       ) {
         try {
-          const fileKey = await cryptoApi.unwrap(
-            {
-              ciphertext: fromBase64(f.encrypted_file_key),
-              iv: fromBase64(f.encrypted_file_key_nonce),
-            },
-            wrapKeyForFile(f.id),
-          );
-          const m = await cryptoApi.decryptManifestWithKey(
-            fileKey,
-            f.encrypted_manifest,
-            f.encrypted_manifest_nonce,
-          );
+          const { manifest: m } = await unlockFile(f);
           displayNames.value[f.id] = m.name;
         } catch {
           /* leave id as the display fallback */
@@ -330,18 +352,7 @@ export const useFilesStore = defineStore("files", () => {
     error.value = null;
     try {
       await ensureCryptoReady();
-      const fileKey = await cryptoApi.unwrap(
-        {
-          ciphertext: fromBase64(meta.encrypted_file_key!),
-          iv: fromBase64(meta.encrypted_file_key_nonce!),
-        },
-        wrapKeyForFile(meta.id),
-      );
-      const manifest = await cryptoApi.decryptManifestWithKey(
-        fileKey,
-        meta.encrypted_manifest!,
-        meta.encrypted_manifest_nonce!,
-      );
+      const { fileKey, manifest } = await unlockFile(meta);
       const ivBase = fromBase64(manifest.iv_base);
       const n = meta.chunk_count;
       const parts = new Array<Uint8Array>(n);
@@ -474,18 +485,7 @@ export const useFilesStore = defineStore("files", () => {
     error.value = null;
     try {
       await ensureCryptoReady();
-      const fileKey = await cryptoApi.unwrap(
-        {
-          ciphertext: fromBase64(meta.encrypted_file_key!),
-          iv: fromBase64(meta.encrypted_file_key_nonce!),
-        },
-        wrapKeyForFile(meta.id),
-      );
-      const manifest = await cryptoApi.decryptManifestWithKey(
-        fileKey,
-        meta.encrypted_manifest!,
-        meta.encrypted_manifest_nonce!,
-      );
+      const { fileKey, manifest } = await unlockFile(meta);
       const kind = kindOf(manifest.mime);
       if (kind === "video") {
         return await openVideo(meta, manifest, fileKey);
