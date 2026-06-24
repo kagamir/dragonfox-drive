@@ -145,17 +145,32 @@ export function playMp4(
     });
   }
 
+  /** Seconds of continuous buffered data ahead of the playhead. Returns 0 if
+   *  currentTime is not inside any buffered range (a gap — must feed). */
+  function continuousAhead(): number {
+    const t = video.currentTime;
+    for (let i = 0; i < video.buffered.length; i++) {
+      if (t >= video.buffered.start(i) && t <= video.buffered.end(i)) {
+        return video.buffered.end(i) - t;
+      }
+    }
+    return 0;
+  }
+
   async function feed(start: number): Promise<void> {
     const myToken = ++feedToken;
     let cursor = start;
     while (!disposed && myToken === feedToken) {
       // Backpressure: don't feed (and thus don't append) more than AHEAD_SECONDS
-      // ahead of playback. mp4box only emits segments for the bytes it has, so
-      // throttling the byte feed bounds the SourceBuffer size. Without this, a
-      // long video is buffered end-to-end and the SourceBuffer fills past quota.
-      while (!disposed && myToken === feedToken && video.buffered.length > 0) {
-        const bufferedEnd = video.buffered.end(video.buffered.length - 1);
-        if (bufferedEnd - video.currentTime < AHEAD_SECONDS) break;
+      // of CONTINUOUS buffered data ahead of the playhead. mp4box only emits
+      // segments for the bytes it has, so throttling the byte feed bounds the
+      // SourceBuffer size. Critically, this measures the continuous range from
+      // currentTime — if the playhead sits in a gap (e.g. after a backward seek
+      // into evicted territory), continuousAhead() is 0 and we feed immediately,
+      // avoiding a deadlock where buffered-end is far ahead but the playhead has
+      // no data to advance into.
+      while (!disposed && myToken === feedToken) {
+        if (continuousAhead() < AHEAD_SECONDS) break;
         await sleep(200);
       }
       if (disposed || myToken !== feedToken) return;
