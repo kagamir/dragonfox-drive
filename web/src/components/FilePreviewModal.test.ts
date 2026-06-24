@@ -2,6 +2,14 @@ import { describe, it, expect, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 import FilePreviewModal from "./FilePreviewModal.vue";
 
+// FilePreviewModal -> Mp4Player -> chunkbuf -> @/workers/crypto, which calls
+// `new Worker(...)` at module load. happy-dom has no Worker constructor, so
+// mock the module the same way every other crypto-touching test does.
+vi.mock("@/workers/crypto", () => ({
+  cryptoApi: {},
+  ensureCryptoReady: vi.fn(),
+}));
+
 describe("FilePreviewModal", () => {
   it("renders an <img> for image kind", () => {
     const w = mount(FilePreviewModal, { props: { kind: "image", url: "blob:i", name: "a.png" } });
