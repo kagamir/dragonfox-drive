@@ -25,6 +25,14 @@ export interface MseHandle {
 }
 
 const FETCH_BYTES = 1 * 1024 * 1024; // bytes fetched per round into mp4box
+/** Backpressure: pause feeding when more than this many seconds are buffered
+ *  ahead of currentTime (bounds the SourceBuffer size). */
+const AHEAD_SECONDS = 60;
+/** Eviction: drop already-played buffered data older than this (seconds behind
+ *  currentTime) before appending new data. */
+const BEHIND_SECONDS = 30;
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 export function playMp4(
   video: HTMLVideoElement,
@@ -96,23 +104,62 @@ export function playMp4(
   };
 
   function queueAppend(sb: SourceBuffer, buffer: ArrayBuffer, after: () => void): void {
-    const tryAppend = () => {
-      if (disposed) return;
-      if (sb.updating) { setTimeout(tryAppend, 10); return; }
-      try {
-        sb.appendBuffer(buffer);
-        sb.addEventListener("updateend", after, { once: true });
-      } catch (e) {
-        if (!disposed) onError(e as Error);
+    const tryAppend = async () => {
+      while (!disposed) {
+        if (!sb.updating) {
+          // Drop already-played data so the SourceBuffer doesn't fill up.
+          await evictBehind(sb);
+        }
+        if (disposed) return;
+        if (!sb.updating) {
+          try {
+            sb.appendBuffer(buffer);
+            sb.addEventListener("updateend", after, { once: true });
+            return;
+          } catch (e) {
+            if (!disposed) onError(e as Error);
+            return;
+          }
+        }
+        await sleep(10);
       }
     };
-    tryAppend();
+    void tryAppend();
+  }
+
+  /** Remove the portion of `sb`'s buffered range that is BEHIND_SECONDS behind
+   *  currentTime (already played). Returns once the remove completes (or nothing
+   *  to remove). Keeps the SourceBuffer from filling past its quota. */
+  function evictBehind(sb: SourceBuffer): Promise<void> {
+    return new Promise((resolve) => {
+      if (sb.buffered.length === 0) return resolve();
+      const earliest = sb.buffered.start(0);
+      const until = video.currentTime - BEHIND_SECONDS;
+      if (until <= earliest) return resolve();
+      try {
+        sb.addEventListener("updateend", () => resolve(), { once: true });
+        sb.remove(earliest, until);
+      } catch {
+        resolve();
+      }
+    });
   }
 
   async function feed(start: number): Promise<void> {
     const myToken = ++feedToken;
     let cursor = start;
-    while (!disposed && myToken === feedToken && cursor < totalSize) {
+    while (!disposed && myToken === feedToken) {
+      // Backpressure: don't feed (and thus don't append) more than AHEAD_SECONDS
+      // ahead of playback. mp4box only emits segments for the bytes it has, so
+      // throttling the byte feed bounds the SourceBuffer size. Without this, a
+      // long video is buffered end-to-end and the SourceBuffer fills past quota.
+      while (!disposed && myToken === feedToken && video.buffered.length > 0) {
+        const bufferedEnd = video.buffered.end(video.buffered.length - 1);
+        if (bufferedEnd - video.currentTime < AHEAD_SECONDS) break;
+        await sleep(200);
+      }
+      if (disposed || myToken !== feedToken) return;
+      if (cursor >= totalSize) break;
       const end = Math.min(cursor + FETCH_BYTES - 1, totalSize - 1);
       let chunk: Uint8Array;
       try {
