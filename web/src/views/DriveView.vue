@@ -18,9 +18,9 @@ const dragOver = ref(false);
 // Move-picker state: kind + id of the item being moved.
 const moveTarget = ref<{ kind: "folder" | "file"; id: string } | null>(null);
 
-onMounted(() => {
-  void folders.loadTree();
-  void files.refresh();
+onMounted(async () => {
+  await folders.loadTree();
+  await files.refresh();
 });
 
 function signOut() {

@@ -141,8 +141,10 @@ export const useFilesStore = defineStore("files", () => {
     try {
       const res = await filesApi.list();
       files.value = res.files;
-      void decryptNames();
-      void decryptParents();
+      void (async () => {
+        await decryptParents();
+        await decryptNames();
+      })();
     } catch (e) {
       error.value = (e as Error).message;
     } finally {

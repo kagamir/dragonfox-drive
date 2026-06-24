@@ -267,6 +267,8 @@ export const useFoldersStore = defineStore("folders", () => {
   }
 
   async function deleteFolder(id: string): Promise<void> {
+    const filesStore = useFilesStore();
+    await filesStore.refresh();
     const folderIds = new Set<string>([id]);
     const stack = [id];
     while (stack.length) {
@@ -278,7 +280,6 @@ export const useFoldersStore = defineStore("folders", () => {
         }
       }
     }
-    const filesStore = useFilesStore();
     const fileIds = new Set<string>();
     for (const fid of folderIds) {
       for (const file of filesStore.filesWithParent(fid)) {

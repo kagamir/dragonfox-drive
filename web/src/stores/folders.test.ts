@@ -196,4 +196,29 @@ describe("folders store", () => {
     );
     expect(folders.folders.length).toBe(0);
   });
+
+  it("deleteFolder refreshes the files cache before computing the cascade", async () => {
+    const auth = useAuthStore();
+    auth.masterKey = new Uint8Array(32) as any;
+    listMock.mockResolvedValue({ folders: [row("root", null), row("sub", "root")] });
+    decryptParentIdMock.mockResolvedValueOnce("root").mockResolvedValue("x");
+    unwrapFolderKeyMock.mockResolvedValue(new Uint8Array(32));
+    decryptFolderNameMock.mockResolvedValue("n");
+    filesWithParentMock.mockReturnValue([]);
+    removeMock.mockResolvedValue({ ok: true, deleted_folders: 2, deleted_files: 0 });
+
+    const folders = useFoldersStore();
+    await folders.loadTree();
+
+    filesRefreshMock.mockClear();
+    removeMock.mockClear();
+    await folders.deleteFolder("root");
+
+    // refresh must run before the cascade DELETE is sent so the parent cache
+    // (fileParents) is fresh when filesWithParent is read.
+    expect(filesRefreshMock).toHaveBeenCalled();
+    expect(filesRefreshMock.mock.invocationCallOrder[0]).toBeLessThan(
+      removeMock.mock.invocationCallOrder[0],
+    );
+  });
 });
