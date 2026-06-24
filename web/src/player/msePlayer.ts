@@ -245,8 +245,39 @@ export function playMp4(
     for (let i = 0; i < video.buffered.length; i++) {
       if (t >= video.buffered.start(i) && t <= video.buffered.end(i)) return; // already buffered
     }
-    const seekInfo = mp4box.seek(t, true) as { offset: number };
-    void feed(seekInfo.offset);
+    // Rapid seeks accumulate one disjoint buffered range per seek position, and
+    // behind/aggressive eviction can only free ranges around currentTime — the
+    // far ranges survive and the SourceBuffer hits "full, cannot free space".
+    // Clear everything and re-buffer from the seek point so the buffer holds a
+    // single region.
+    void clearAllBuffers().then(() => {
+      if (disposed) return;
+      const seekInfo = mp4box.seek(t, true) as { offset: number };
+      void feed(seekInfo.offset);
+    });
+  }
+
+  /** Remove all buffered media from every SourceBuffer (init/config persists).
+   *  Used on seek to reset the buffer to a single fresh region. */
+  function clearAllBuffers(): Promise<void> {
+    const end = Number.isFinite(ms.duration) && ms.duration > 0
+      ? ms.duration
+      : Number.MAX_SAFE_INTEGER;
+    return Promise.all(
+      Array.from(ms.sourceBuffers).map((sb) => removeRange(sb as SourceBuffer, 0, end)),
+    ).then(() => undefined);
+  }
+
+  function removeRange(sb: SourceBuffer, start: number, end: number): Promise<void> {
+    return new Promise((resolve) => {
+      if (sb.updating || sb.buffered.length === 0 || start >= end) return resolve();
+      try {
+        sb.addEventListener("updateend", () => resolve(), { once: true });
+        sb.remove(start, end);
+      } catch {
+        resolve();
+      }
+    });
   }
 
   video.addEventListener("seeking", onSeeking);
