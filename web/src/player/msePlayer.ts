@@ -27,10 +27,10 @@ export interface MseHandle {
 const FETCH_BYTES = 1 * 1024 * 1024; // bytes fetched per round into mp4box
 /** Backpressure: pause feeding when more than this many seconds are buffered
  *  ahead of currentTime (bounds the SourceBuffer size). */
-const AHEAD_SECONDS = 60;
+const AHEAD_SECONDS = 30;
 /** Eviction: drop already-played buffered data older than this (seconds behind
  *  currentTime) before appending new data. */
-const BEHIND_SECONDS = 30;
+const BEHIND_SECONDS = 10;
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -117,6 +117,22 @@ export function playMp4(
             sb.addEventListener("updateend", after, { once: true });
             return;
           } catch (e) {
+            const name = (e as { name?: string })?.name;
+            if (name === "QuotaExceededError") {
+              // Proactive eviction wasn't enough (in-flight segments, edit-list
+              // timeline gaps, video/audio divergence). Aggressively drop
+              // everything behind the playhead and retry once.
+              await evictAggressive(sb);
+              if (disposed) return;
+              try {
+                sb.appendBuffer(buffer);
+                sb.addEventListener("updateend", after, { once: true });
+                return;
+              } catch (e2) {
+                if (!disposed) onError(e2 as Error);
+                return;
+              }
+            }
             if (!disposed) onError(e as Error);
             return;
           }
@@ -135,6 +151,23 @@ export function playMp4(
       if (sb.buffered.length === 0) return resolve();
       const earliest = sb.buffered.start(0);
       const until = video.currentTime - BEHIND_SECONDS;
+      if (until <= earliest) return resolve();
+      try {
+        sb.addEventListener("updateend", () => resolve(), { once: true });
+        sb.remove(earliest, until);
+      } catch {
+        resolve();
+      }
+    });
+  }
+
+  /** Emergency eviction: drop EVERYTHING behind the playhead (keep only the
+   *  frame at currentTime). Used to recover from a QuotaExceededError. */
+  function evictAggressive(sb: SourceBuffer): Promise<void> {
+    return new Promise((resolve) => {
+      if (sb.buffered.length === 0) return resolve();
+      const earliest = sb.buffered.start(0);
+      const until = video.currentTime;
       if (until <= earliest) return resolve();
       try {
         sb.addEventListener("updateend", () => resolve(), { once: true });
