@@ -229,7 +229,7 @@ describe("sw logic: request handling", () => {
     expect(Array.from(out)).toEqual([42, 43, 44]);
   });
 
-  it("handleStreamRequest streams chunk slices in ascending byte order", async () => {
+  it("handleStreamRequest returns the windowed bytes in ascending order (materialized body)", async () => {
     const key = crypto.getRandomValues(new Uint8Array(32));
     const ivBase = crypto.getRandomValues(new Uint8Array(12));
     const chunkSize = 4;
@@ -245,41 +245,11 @@ describe("sw logic: request handling", () => {
     const meta = mkMeta({ fileKey: key, ivBase, size: 12, chunkCount: 3, chunkSize });
     const req = { url: "/api/stream/f1", headers: new Headers({ range: "bytes=2-9" }) };
     const res = await handleStreamRequest(req, meta, cache, fetcher, 1024);
-    // drain the stream chunk-by-chunk
-    const reader = res.body!.getReader();
-    const chunks: Uint8Array[] = [];
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      chunks.push(value);
-    }
-    // range [2..9]: chunk0→[3,4], chunk1→[5,6,7,8], chunk2→[9,10]
-    expect(chunks.length).toBe(3);
-    expect(chunks.flatMap((c) => Array.from(c))).toEqual([3, 4, 5, 6, 7, 8, 9, 10]);
-  });
-
-  it("handleStreamRequest aborts the in-flight fetch and halts the loop when the body is cancelled", async () => {
-    const chunkSize = 4;
-    const size = 20; // 5 chunks
-    const signals: (AbortSignal | undefined)[] = [];
-    const fetcher: ChunkFetcher = (idx, signal) => {
-      signals[idx] = signal;
-      // Never resolves on its own — only rejects when the signal aborts.
-      return new Promise<Uint8Array>((_resolve, reject) => {
-        signal?.addEventListener("abort", () => reject(new Error("aborted")));
-      });
-    };
-    const cache = new L2(1024);
-    const meta = mkMeta({ size, chunkCount: 5, chunkSize });
-    const req = { url: "/api/stream/f1", headers: new Headers({ range: "bytes=0-" }) };
-    const res = await handleStreamRequest(req, meta, cache, fetcher, 8);
-    // start() reached chunk 0 synchronously during stream construction:
-    expect(signals[0]).toBeDefined();
-    expect(signals[1]).toBeUndefined(); // loop is blocked on chunk 0, hasn't advanced
-    await res.body!.cancel();
-    await new Promise((r) => setTimeout(r, 0)); // let the abort reject propagate
-    expect(signals[0]!.aborted).toBe(true);
-    expect(signals[1]).toBeUndefined(); // loop halted — chunk 1 never requested
+    // Body is now a single materialized buffer covering range [2..9]:
+    // chunk0→[3,4], chunk1→[5,6,7,8], chunk2→[9,10].
+    expect(Array.from(new Uint8Array(await res.arrayBuffer()))).toEqual(
+      [3, 4, 5, 6, 7, 8, 9, 10],
+    );
   });
 });
 

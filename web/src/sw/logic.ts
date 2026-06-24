@@ -130,11 +130,16 @@ export function parseRange(header: string, size: number): { start: number; end: 
   return { start, end: Math.min(end, size - 1) };
 }
 
-/** Serve a Range request: fetch+decrypt the covering chunks (cached), stream the
- *  requested window chunk-by-chunk, and respond 206/200. The response is capped
- *  to `segmentBytes` so the browser re-requests the next segment as playback
- *  advances, instead of pulling the whole file up front. If the consumer aborts
- *  the response (seek / navigate away), the in-flight chunk fetch is cancelled. */
+/** Serve a Range request: fetch+decrypt the covering chunks (cached) and
+ *  respond 206/200 with the requested byte window, capped to `segmentBytes` so
+ *  the browser re-requests the next segment as playback advances.
+ *
+ *  The body is MATERIALIALIZED into one buffer up front (not a streaming
+ *  ReadableStream). Chrome's media cache does not progressively read
+ *  SW-synthesized streaming 206 bodies — it reads ~320 KiB blocks then cancels
+ *  and re-requests, thrashing large videos. A complete buffer body is read like
+ *  any normal response. Memory cost is one segment (default 16 MiB) per request,
+ *  which is fine alongside the 256 MiB LRU. */
 export async function handleStreamRequest(
   req: StreamRequestLike,
   meta: StreamMeta,
@@ -150,43 +155,30 @@ export async function handleStreamRequest(
   const length = effectiveEnd - start + 1;
   const isPartial = hasRange || effectiveEnd < meta.size - 1;
 
-  async function getPlain(idx: number, signal: AbortSignal): Promise<Uint8Array> {
+  async function getPlain(idx: number): Promise<Uint8Array> {
     const key = `${meta.fileId}:${idx}`;
     const cached = cache.get(key);
     if (cached) return cached;
-    const cipher = await fetcher(idx, signal);
+    const cipher = await fetcher(idx);
     const pt = await decryptChunkSubtle(meta.fileKey, meta.ivBase, idx, cipher);
     cache.set(key, pt);
     return pt;
   }
 
-  const ac = new AbortController();
-  const body = new ReadableStream<Uint8Array>({
-    async start(controller) {
-      try {
-        for (let idx = firstIdx; idx <= lastIdx; idx++) {
-          if (ac.signal.aborted) return;
-          const pt = await getPlain(idx, ac.signal);
-          if (ac.signal.aborted) return;
-          const slice = chunkSlice(pt, idx, meta.chunkSize, start, effectiveEnd);
-          if (slice.length) controller.enqueue(slice);
-        }
-        controller.close();
-      } catch (e) {
-        // Swallow the rejection if WE caused it via cancel(); only surface
-        // unexpected errors to the stream consumer.
-        if (!ac.signal.aborted) controller.error(e);
-      }
-    },
-    cancel() { ac.abort(); },
-  });
+  // Materialize the segment: fetch+decrypt every covering chunk, slice each to
+  // the requested window, concatenate into one buffer. chunkSlice bounds itself
+  // by plaintext.length so a short tail chunk still slices correctly.
+  const body = new Uint8Array(length);
+  let off = 0;
+  for (let idx = firstIdx; idx <= lastIdx; idx++) {
+    const pt = await getPlain(idx);
+    const slice = chunkSlice(pt, idx, meta.chunkSize, start, effectiveEnd);
+    if (slice.length) {
+      body.set(slice, off);
+      off += slice.length;
+    }
+  }
 
-  // Content-Length is fixed up front from the (capped) byte window, before the
-  // body streams. This relies on every non-tail chunk decrypting to exactly
-  // `meta.chunkSize` bytes — an invariant the whole E2EE pipeline already
-  // guarantees (the tail chunk is the only one that may be shorter, and it is
-  // always the last chunk in the window). chunkSlice bounds itself by
-  // `plaintext.length`, so a short tail still slices correctly.
   const headers = new Headers({
     "Content-Type": meta.mime,
     "Accept-Ranges": "bytes",
