@@ -1,214 +1,73 @@
-# Video Streaming Design (Service-Worker Proxy)
+# Video Streaming Design (MSE + mp4box.js)
 
-Goal: play arbitrarily large encrypted videos (up to ~100 GiB) with
-byte-exact random seek, without ever exposing plaintext to the server and
-without holding the whole file in page memory.
+Goal: play arbitrarily large encrypted videos with byte-exact random seek,
+without exposing plaintext to the server and without holding the whole file
+in memory.
 
-> **Superseded.** An earlier revision of this document described an
-> MSE / `SourceBuffer` pipeline with a JS transmuxer (mp4box.js / mux.js)
-> and client-side container-index (`moov` / `Cues`) parsing to map
-> `currentTime → byte offset → chunk index`. That plan was abandoned in
-> favor of the **Service-Worker proxy** described below: the browser's
-> native media engine drives seeking/buffering/codecs and emits the byte
-> `Range` requests; the SW maps bytes → chunks by simple division and
-> decrypts on demand. This is materially simpler, has no transmuxer
-> dependency, supports every native-playable container, and makes
-> byte-exact seek free.
+> **History.** An earlier design used a Service Worker that synthesized
+> `206` byte-range responses at `/api/stream/:id` for the native `<video>`
+> element. That was browser-fragile: Chrome's media cache does not
+> progressively read SW-synthesized streaming bodies, so large videos (and
+> any file lacking usable duration/seek metadata — fragmented MP4, screen
+> recordings) degraded to "load everything before play." The SW path has
+> been **removed** in favor of the MSE pipeline below.
 
-## Pipeline overview
+## Pipeline
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  Page (main thread)                                             │
-│                                                                 │
-│  openVideoPreview(meta)                                         │
-│    │ worker.unwrap(fileKey, masterKey) ──► fileKey              │
-│    │ worker.decryptManifest(...) ──► { ivBase, size, mime, … }  │
-│    │ ensureStreamSw()  (register + wait for controller)         │
-│    │ controller.postMessage({ type:'play', fileId, fileKey,     │
-│    │                          ivBase, size, mime, chunkCount,   │
-│    │                          token })                          │
-│    ▼                                                            │
-│  preview.url = `/api/stream/${fileId}`                          │
-│    │                                                            │
-│    ▼                                                            │
-│  <video :src=url>   ──► browser emits Range requests on the     │
-│                         virtual plaintext URL                    │
-└─────────────────────────┬───────────────────────────────────────┘
-                          │  GET /api/stream/:id  +  Range: bytes=a-b
-                          ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  Service Worker  (fetch event, matches GET /api/stream/:id)     │
-│                                                                 │
-│  1. parse Range: bytes=start-end   (end ∅ ⇒ EOF, clamp size-1)  │
-│  2. CAP the window to STREAM_SEGMENT_BYTES (16 MiB):            │
-│       effectiveEnd = min(end, start + 16 MiB - 1, size - 1)     │
-│  3. firstIdx = ⌊start / 4 MiB⌋; lastIdx = ⌊effectiveEnd / 4 MiB⌋│
-│  4. ReadableStream (one slice per chunk, in order):             │
-│       LRU(256 MiB) hit  ⇒ reuse plaintext                       │
-│       miss ⇒ fetch /api/files/:id/chunks/:idx (Bearer, signal)  │
-│             ⇒ crypto.subtle AES-GCM decrypt(iv = chunkIv(       │
-│               ivBase, idx))  ⇒ store in LRU                     │
-│       enqueue chunkSlice(chunk, …, start, effectiveEnd)         │
-│     (on consumer abort ⇒ AbortController cancels the fetch)     │
-│  5. respond: 206 + Content-Range + Content-Length               │
-│              (200 only when the file fits in one segment AND no │
-│               Range header was sent)                            │
-└─────────────────────────────────────────────────────────────────┘
+<video>  ←  src = MediaSource objectURL
+  │
+MediaSource  →  SourceBuffer (codec from moov, via mp4box)
+  ▲
+  │ appendBuffer(init / media segments)
+mp4box.js  (JS demuxer: parses moov/fragments, computes duration, slices
+            segments, maps seek-time → byte offset)
+  ▲
+  │ requests byte range [start..end]
+chunkbuf (web/src/player/chunkbuf.ts)
+  │  chunksCovering → filesApi.getChunk(id,idx) → cryptoApi.decryptChunk
+  │  (crypto worker) → 256 MiB LRU → chunkSlice → assembled range
+  ▼
+/api/files/:id/chunks/:idx   (existing backend, unchanged)
 ```
 
-The native `<video>` element owns seeking, buffering, and codec support.
-The page never assembles buffers itself — it simply points the element at
-the virtual plaintext URL and the SW serves whatever byte ranges the
-browser asks for.
+## Why this works where the SW didn't
 
-## Byte → chunk mapping
+- The failure was specifically `<video>` *directly consuming* an
+  SW-synthesized streaming `206`. Here `<video>` reads from an in-page
+  `MediaSource`; bytes reach it via JS (`fetch` + mp4box + MSE), which has no
+  such limitation.
+- mp4box.js parses **incrementally** (you feed byte ranges on demand) — the
+  whole file is never loaded, so there is no large-file OOM.
+- mp4box.js computes duration and handles seeking for progressive MP4,
+  fragmented MP4, moov-at-end, and missing-`mvhd`-duration files (the actual
+  root cause of the earlier Chrome issue).
 
-There is **no container-index parsing**. The browser already knows where
-`moov`/data live; it asks for the bytes it wants, and the SW maps a byte
-window to chunks by division:
+## Routing & fallback
 
-```
-firstIdx = floor(start / 4 MiB)
-lastIdx  = floor(end   / 4 MiB)
-```
+- MP4 family (`video/mp4`, `video/quicktime`, `video/x-m4v`) with MSE
+  available → MSE player (`Mp4Player.vue`).
+- Non-MP4 video, or MSE/codec unsupported, small enough (≤
+  `PREVIEW_CAPS.video`, 256 MiB) → decrypt-all → in-memory `Blob` →
+  `<video src=blob>`.
+- Otherwise → "use Download" (no in-page playback).
 
-Each 4 MiB chunk is encrypted with its own IV derived as
-`chunkIv(ivBase, idx)` (an XOR counter), so any chunk can be fetched and
-decrypted independently. The requested byte window is then sliced out of
-the covering plaintexts.
+No upload-time container probing; routing is by manifest MIME at playback.
+MSE-unsupported browsers (older iOS Safari) get the blob fallback.
 
-## Key delivery to the SW
+## Components
 
-The SW cannot read the page's `localStorage` (refresh token) or module
-state, so the page pushes everything it needs on play:
+- `web/src/player/chunkbuf.ts` — pure chunk math + decrypted byte-range
+  fetcher (the only unit-testable piece; the rest is MSE orchestration).
+- `web/src/player/msePlayer.ts` — mp4box + MediaSource orchestration.
+- `web/src/components/Mp4Player.vue` — `<video>` wrapper that mounts the
+  player and disposes on unmount.
+- `web/src/stores/files.ts` `openVideo` — routes MP4 → MSE payload, else
+  blob/download.
 
-| Field        | Source                                  |
-|--------------|-----------------------------------------|
-| `fileKey`    | worker `unwrap(fileKey, masterKey)`     |
-| `ivBase`     | decrypted manifest                      |
-| `size`       | decrypted manifest                      |
-| `mime`       | decrypted manifest                      |
-| `chunkCount` | decrypted manifest                      |
-| `token`      | current access token (Bearer for fetch) |
+## Limitations
 
-The SW holds this in an in-memory `metaStore: Map<fileId, Meta>` until
-the page sends `stop` (on `closePreview`) — at which point the meta and
-that file's LRU entries are dropped. Plaintext exists only in SW process
-memory (transient slice buffers + the 256 MiB LRU) and is **never
-persisted to disk**.
-
-## Token refresh
-
-SW chunk fetches hit the authenticated chunk endpoint. On `401` the SW
-asks the page for a fresh token rather than implementing refresh itself,
-keeping all refresh logic in one place (`client.ts`):
-
-```
-SW chunk-fetch returns 401
-  └─ SW.postMessage to page { type:'needToken', fileId }
-       └─ page: refreshAuthToken() ──► controller.postMessage
-                                       { type:'token', token }
-            └─ SW retries the chunk fetch with the fresh Bearer token
-```
-
-## Cache layer
-
-Decrypted chunks are cached in an **in-SW memory LRU bounded to 256 MiB**
-(keyed by `fileId:chunkIndex`). Eviction is by byte budget: `set` drops
-the oldest entries until the new chunk fits. Repeat playback and
-back-and-forth seeking hit the cache (instant); forward seek past the
-cache window fetches only the uncovered chunks.
-
-The cache is memory-only by design — no plaintext is ever written to
-IndexedDB / Cache API / disk. It is cleared on `stop`, page close, or SW
-restart.
-
-## SW build wiring
-
-`vite-plugin-pwa` (injectManifest strategy) builds the SW from TypeScript
-source at `web/src/sw/sw.ts`:
-
-- `install` → `self.skipWaiting()`; `activate` → `clients.claim()`.
-- `message` handler: `play` (store meta), `stop` (drop meta + evict that
-  file's chunks), `token` (update the stored token).
-- `fetch` handler: if `GET` and URL matches `/api/stream/:id` and meta is
-  present → `respondWith(handleStreamRequest(...))`; otherwise the request
-  passes through to the network unmodified. The SW intercepts **only**
-  `GET /api/stream/:id` — never `/api/auth`, `/api/files`, etc.
-
-The SW does not import Workbox or the app/worker bundle (which would pull
-in libsodium); it uses `crypto.subtle` directly and a self-contained
-`chunkIv` copy of the symmetric IV derivation. The pure streaming logic
-(byte math, slicing, LRU, `handleStreamRequest`) lives in
-`web/src/sw/logic.ts` so it is unit-testable in happy-dom without a real
-SW.
-
-## Fallback path
-
-If the SW is unavailable (older browsers, registration failure, iOS
-Safari restrictions, or no controller after the `ensureStreamSw()`
-timeout), `video/*` files degrade gracefully:
-
-1. `size ≤ PREVIEW_CAPS.video` (256 MiB) → P2a whole-file blob:
-   fetch all chunks → decrypt → single in-memory `Blob` →
-   `video.src = URL.createObjectURL(blob)`.
-2. Otherwise → the modal shows "streaming unavailable, use Download".
-
-The small-file path works for typical short clips; large videos require
-the SW.
-
-## Performance targets (1080p, 5 Mbps stream)
-
-| Metric                     | Target |
-|----------------------------|--------|
-| Time to first frame        | < 1.5 s |
-| Seek response (cached)     | < 100 ms |
-| Seek response (uncached)   | < 800 ms |
-| UI frame rate during seek  | 60 fps (crypto off the main thread) |
-
-These are achieved by:
-
-- 4 MiB chunks (≈ 6 s of 1080p content) — good granularity for seeking.
-- All crypto in the SW (no main-thread blocking during playback).
-- 256 MiB in-memory LRU — repeated/backward seek is a cache hit.
-- HTTP/2 multiplexing for parallel chunk downloads.
-
-## Known limitations
-
-- **SW cold start**: first play after install may need one reload until
-  the controller is active; `ensureStreamSw()` polls `controllerchange`.
-- **Segmented read-ahead.** Each `/api/stream/:id` response is capped to
-  `STREAM_SEGMENT_BYTES` (16 MiB). The browser's native media engine issues
-  follow-up `Range` requests as the buffer drains, so only the bytes needed
-  for current playback are fetched+decrypted — the whole file is never
-  pulled at once. The body is a `ReadableStream` emitting one chunk slice at
-  a time, so SW memory stays flat regardless of file size.
-- **Abort on seek.** When the browser aborts a response (seek / navigate),
-  the SW's per-response `AbortController` cancels the in-flight chunk
-  `fetch()`, so rapid seeking doesn't leave orphan downloads.
-- **Mid-stream error semantics.** Because the body is a lazy `ReadableStream`
-  with the `206`/`Content-Length` headers already sent, a chunk-fetch or
-  decrypt failure *during* streaming no longer surfaces as an HTTP 500 —
-  it errors the body mid-response. `/api/stream/:id` is video-only, and the
-  native `<video>` element treats a truncated range as recoverable (it
-  re-issues the Range), so playback degrades rather than aborting hard.
-- **iOS Safari** may restrict module SWs / certain Range behavior → the
-  fallback path applies.
-- Abandoned playback without `closePreview` leaves SW meta + LRU entries
-  until the next `stop` or SW restart (bounded by the 256 MiB budget).
-- **Non-faststart MP4 (moov at end).** A non-faststart MP4 has its `moov`
-  (the decode index) after its `mdat`. Browsers must read `moov` before
-  decoding; for a byte-range source they normally seek to the end to fetch
-  it, but Chrome's media stack, served through the Service Worker, does a
-  sequential scan instead — so the whole file is traversed before playback
-  can start (effectively "load everything to play"). Firefox seeks and is
-  unaffected. This is a property of the file, not the SW; the SW cannot fix
-  it. DragonFox detects it at upload (`crypto/videoprobe.ts` parses the
-  ISO-BMFF top-level boxes; `mdat` before `moov` ⇒ non-streamable) and (a)
-  warns the user, (b) blocks the streaming path at open time, offering
-  Download instead. The robust fix — re-muxing to faststart (`-movflags
-  faststart -c copy`) at upload, before encryption — is **deferred**: it
-  requires client-side video parsing/repackaging (ffmpeg.wasm or a hand-
-  rolled qt-faststart). The probe currently covers MP4/QuickTime only;
-  WebM/Matroska are seek-via-Cues and not flagged.
+- MP4 family only for streaming. WebM/AVI/MKV use the blob fallback (or
+  "use Download" when too large); a WebM MSE demuxer is future work.
+- MSE/codec support still varies by browser (e.g. HEVC). Unsupported codecs
+  fall back to blob/download.
