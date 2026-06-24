@@ -71,6 +71,7 @@ export const useFilesStore = defineStore("files", () => {
     url: string;
     kind: FileKind;
     name: string;
+    player?: { fileId: string; fileKey: Uint8Array; ivBase: Uint8Array; chunkSize: number; totalSize: number } | null;
   } | null>(null);
 
   function masterKey(): Uint8Array {
@@ -464,44 +465,29 @@ export const useFilesStore = defineStore("files", () => {
   }
 
   async function openVideo(meta: FileMeta, manifest: Manifest, fileKey: Uint8Array): Promise<void> {
-    if (manifest.streamable === false) {
-      error.value =
-        `“${manifest.name}” isn't fast-start (moov at end) and can't be streamed ` +
-        `in this browser. Use Download, or re-mux with ‘ffmpeg -movflags faststart -c copy’.`;
-      return;
-    }
     const ivBase = fromBase64(manifest.iv_base);
-    bindSwListener();
-    let swOk = true;
-    try {
-      await ensureStreamSw();
-    } catch {
-      swOk = false;
-    }
-    if (swOk) {
+    const isMp4 = ["video/mp4", "video/quicktime", "video/x-m4v"].includes(manifest.mime);
+
+    if (isMp4 && typeof MediaSource !== "undefined") {
+      // MSE path: the FilePreviewModal renders <Mp4Player> using this payload.
       if (preview.value) closePreview();
-      postToSw({
-        type: "play",
-        meta: {
+      preview.value = {
+        meta,
+        url: "",
+        kind: "video",
+        name: manifest.name,
+        player: {
           fileId: meta.id,
           fileKey,
           ivBase,
-          size: manifest.size,
-          chunkCount: meta.chunk_count,
           chunkSize: FILE_CHUNK_SIZE,
-          token: getAuthToken() ?? "",
-          mime: manifest.mime,
+          totalSize: manifest.size,
         },
-      });
-      preview.value = {
-        meta,
-        url: `/api/stream/${meta.id}`,
-        kind: "video",
-        name: manifest.name,
       };
       return;
     }
-    // Fallback: whole-file blob for small videos; otherwise degrade.
+
+    // Fallback: whole-file blob for non-MP4 / MSE-unsupported small videos.
     if (manifest.size <= PREVIEW_CAPS.video) {
       const n = meta.chunk_count;
       const parts = new Array<Uint8Array>(n);
@@ -521,10 +507,12 @@ export const useFilesStore = defineStore("files", () => {
         url: URL.createObjectURL(blob),
         kind: "video",
         name: manifest.name,
+        player: null,
       };
       return;
     }
-    error.value = "Streaming is unavailable in this browser — use Download.";
+
+    error.value = "This video can't be played in the browser — use Download.";
   }
 
   async function openPreview(meta: FileMeta): Promise<void> {
@@ -572,10 +560,7 @@ export const useFilesStore = defineStore("files", () => {
   function closePreview(): void {
     if (!preview.value) return;
     const p = preview.value;
-    if (p.url.startsWith("blob:")) URL.revokeObjectURL(p.url);
-    if (p.kind === "video" && p.url.startsWith("/api/stream/")) {
-      postToSw({ type: "stop", fileId: p.meta.id });
-    }
+    if (!p.player && p.url.startsWith("blob:")) URL.revokeObjectURL(p.url);
     preview.value = null;
   }
 

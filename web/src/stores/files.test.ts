@@ -24,9 +24,7 @@ const { refreshAuthTokenMock } = vi.hoisted(() => ({
   refreshAuthTokenMock: vi.fn().mockResolvedValue(true),
 }));
 
-const { ensureStreamSwMock, postToSwMock, getTokenMock } = vi.hoisted(() => ({
-  ensureStreamSwMock: vi.fn().mockResolvedValue(undefined),
-  postToSwMock: vi.fn(),
+const { getTokenMock } = vi.hoisted(() => ({
   getTokenMock: vi.fn().mockReturnValue("tok"),
 }));
 
@@ -34,11 +32,6 @@ const { currentFolderIdMock, folderKeyOfMock, filesMoveMock } = vi.hoisted(() =>
   currentFolderIdMock: { value: null as string | null },
   folderKeyOfMock: vi.fn(() => undefined),
   filesMoveMock: vi.fn().mockResolvedValue({ ok: true }),
-}));
-
-vi.mock("@/sw/register", () => ({
-  ensureStreamSw: ensureStreamSwMock,
-  postToSw: postToSwMock,
 }));
 
 vi.mock("@/stores/folders", () => ({
@@ -117,6 +110,8 @@ describe("files store", () => {
     getChunksMock.mockResolvedValue({ indices: [], chunk_count: 1, status: "pending" });
     refreshAuthTokenMock.mockClear();
     refreshAuthTokenMock.mockResolvedValue(true);
+    (globalThis as unknown as { MediaSource: unknown }).MediaSource =
+      class { static isTypeSupported = () => true; };
   });
 
   it("upload runs create → putManifest → putChunk → finalize", async () => {
@@ -343,10 +338,9 @@ describe("files store", () => {
     expect(files.preview).toBeNull();
   });
 
-  it("openPreview routes video to the streaming URL via the SW", async () => {
+  it("openPreview routes an MP4 to the MSE player payload", async () => {
     const auth = useAuthStore();
     auth.masterKey = new Uint8Array(32) as any;
-    ensureStreamSwMock.mockResolvedValue(undefined);
     (cryptoApi.decryptManifestWithKey as any).mockResolvedValue({
       name: "clip.mp4", mime: "video/mp4", size: 5 * 1024 * 1024 * 1024,
       iv_base: "iv==", chunk_size: 4 * 1024 * 1024,
@@ -360,125 +354,36 @@ describe("files store", () => {
       created_at: "", updated_at: "",
     };
     await files.openPreview(meta);
-    expect(ensureStreamSwMock).toHaveBeenCalled();
-    expect(postToSwMock).toHaveBeenCalledWith(expect.objectContaining({
-      type: "play",
-      meta: expect.objectContaining({ fileId: "vid1", chunkCount: 2, mime: "video/mp4" }),
-    }));
     expect(files.preview).not.toBeNull();
-    expect(files.preview!.url).toBe("/api/stream/vid1");
-    expect(files.preview!.kind).toBe("video");
+    expect(files.preview!.player).not.toBeNull();
+    expect(files.preview!.player!.fileId).toBe("vid1");
+    expect(files.preview!.url).toBe("");
   });
 
-  it("openPreview blocks streaming for a non-faststart video and surfaces an error", async () => {
+  it("openPreview falls back to blob for a non-MP4 small video", async () => {
     const auth = useAuthStore();
     auth.masterKey = new Uint8Array(32) as any;
-    (cryptoApi.decryptManifestWithKey as any).mockResolvedValue({
-      name: "clip.mp4", mime: "video/mp4", size: 5 * 1024 * 1024 * 1024,
-      iv_base: "iv==", chunk_size: 4 * 1024 * 1024, streamable: false,
-    });
-    ensureStreamSwMock.mockClear();
-    postToSwMock.mockClear();
-    const files = useFilesStore();
-    const meta = {
-      id: "vid1", owner_id: "u", status: "ready" as const,
-      total_size: 0, chunk_count: 2,
-      encrypted_manifest: "em", encrypted_manifest_nonce: "emn",
-      encrypted_file_key: "fk", encrypted_file_key_nonce: "fkn",
-      created_at: "", updated_at: "",
-    };
-    await files.openPreview(meta);
-    expect(ensureStreamSwMock).not.toHaveBeenCalled();
-    expect(postToSwMock).not.toHaveBeenCalled();
-    expect(files.preview).toBeNull();
-    expect(files.error).toMatch(/fast-start/i);
-  });
-
-  it("needToken SW message refreshes the token and posts it back", async () => {
-    const auth = useAuthStore();
-    auth.masterKey = new Uint8Array(32) as any;
-    ensureStreamSwMock.mockResolvedValue(undefined);
-    (cryptoApi.decryptManifestWithKey as any).mockResolvedValue({
-      name: "clip.mp4", mime: "video/mp4", size: 5 * 1024 * 1024 * 1024,
-      iv_base: "iv==", chunk_size: 4 * 1024 * 1024,
-    });
-    let captured: ((e: { data: unknown }) => void) | undefined;
-    vi.stubGlobal("navigator", {
-      ...(navigator as any),
-      serviceWorker: {
-        addEventListener: vi.fn((_: string, cb: (e: { data: unknown }) => void) => {
-          captured = cb;
-        }),
-        controller: null,
-      },
-    });
-    getTokenMock.mockReturnValue("fresh");
-    const files = useFilesStore();
-    const meta = {
-      id: "vid1", owner_id: "u", status: "ready" as const,
-      total_size: 0, chunk_count: 2,
-      encrypted_manifest: "em", encrypted_manifest_nonce: "emn",
-      encrypted_file_key: "fk", encrypted_file_key_nonce: "fkn",
-      created_at: "", updated_at: "",
-    };
-    await files.openPreview(meta);
-    expect(captured).toBeDefined();
-    postToSwMock.mockClear();
-    refreshAuthTokenMock.mockClear();
-    captured!({ data: { type: "needToken", fileId: "vid1" } });
-    // the handler awaits refreshAuthToken (a resolved promise) before posting
-    await new Promise((r) => setTimeout(r, 0));
-    expect(refreshAuthTokenMock).toHaveBeenCalled();
-    expect(postToSwMock).toHaveBeenCalledWith({ type: "token", fileId: "vid1", token: "fresh" });
-    // restore so other tests are unaffected
-    vi.unstubAllGlobals();
-    getTokenMock.mockReturnValue("tok");
-  });
-
-  it("closePreview posts stop for a stream URL", async () => {
-    const auth = useAuthStore();
-    auth.masterKey = new Uint8Array(32) as any;
-    ensureStreamSwMock.mockResolvedValue(undefined);
-    (cryptoApi.decryptManifestWithKey as any).mockResolvedValue({
-      name: "clip.mp4", mime: "video/mp4", size: 1000,
-      iv_base: "iv==", chunk_size: 4 * 1024 * 1024,
-    });
-    const files = useFilesStore();
-    const meta = {
-      id: "vid2", owner_id: "u", status: "ready" as const,
-      total_size: 0, chunk_count: 1,
-      encrypted_manifest: "em", encrypted_manifest_nonce: "emn",
-      encrypted_file_key: "fk", encrypted_file_key_nonce: "fkn",
-      created_at: "", updated_at: "",
-    };
-    await files.openPreview(meta);
-    postToSwMock.mockClear();
-    files.closePreview();
-    expect(postToSwMock).toHaveBeenCalledWith(expect.objectContaining({ type: "stop", fileId: "vid2" }));
-  });
-
-  it("falls back to blob when SW unavailable and the video is small", async () => {
-    const auth = useAuthStore();
-    auth.masterKey = new Uint8Array(32) as any;
-    ensureStreamSwMock.mockRejectedValue(new Error("unsupported"));
-    (cryptoApi.decryptManifestWithKey as any).mockResolvedValue({
-      name: "small.mp4", mime: "video/mp4", size: 1000,
-      iv_base: "iv==", chunk_size: 4 * 1024 * 1024,
-    });
     vi.stubGlobal("URL", {
-      createObjectURL: vi.fn(() => "blob:small"),
+      createObjectURL: vi.fn(() => "blob:webm"),
       revokeObjectURL: vi.fn(),
     });
+    (cryptoApi.decryptManifestWithKey as any).mockResolvedValue({
+      name: "clip.webm", mime: "video/webm", size: 1000,
+      iv_base: "iv==", chunk_size: 4 * 1024 * 1024,
+    });
     const files = useFilesStore();
     const meta = {
-      id: "vid3", owner_id: "u", status: "ready" as const,
+      id: "v2", owner_id: "u", status: "ready" as const,
       total_size: 0, chunk_count: 1,
       encrypted_manifest: "em", encrypted_manifest_nonce: "emn",
       encrypted_file_key: "fk", encrypted_file_key_nonce: "fkn",
       created_at: "", updated_at: "",
     };
     await files.openPreview(meta);
-    expect(files.preview!.url).toBe("blob:small");
+    expect(files.preview).not.toBeNull();
+    expect(files.preview!.player).toBeNull();
+    expect(files.preview!.url).toBe("blob:webm");
+    vi.unstubAllGlobals();
   });
 
   it("upload into a folder wraps fileKey with the folder key + sets parent", async () => {
