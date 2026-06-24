@@ -41,4 +41,25 @@ describe("crypto worker api", () => {
       Array.from(master),
     );
   });
+
+  it("folder name round-trips through the worker api", async () => {
+    const fk = api.newFolderKey();
+    const enc = await api.encryptFolderName(fk, "Photos");
+    expect(await api.decryptFolderName(fk, enc.ciphertext, enc.iv)).toBe("Photos");
+  });
+
+  it("parent id encrypts/decrypts and null means root", async () => {
+    const mk = api.newMasterKey();
+    expect(await api.encryptParentId(mk, null)).toBeNull();
+    const enc = await api.encryptParentId(mk, "pid");
+    expect(enc).not.toBeNull();
+    expect(await api.decryptParentId(mk, enc!.ciphertext, enc!.iv)).toBe("pid");
+  });
+
+  it("folder_key wraps by master_key then unwraps via worker api", async () => {
+    const mk = api.newMasterKey();
+    const fk = api.newFolderKey();
+    const wrapped = await api.wrapFolderKey(fk, mk);
+    expect(Array.from(await api.unwrapFolderKey(wrapped, mk))).toEqual(Array.from(fk));
+  });
 });

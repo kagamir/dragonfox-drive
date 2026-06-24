@@ -32,6 +32,15 @@ import {
   type EncryptedFilePayload,
   type Manifest,
 } from "@/crypto/file";
+import {
+  newFolderKey as newFolderKeyFn,
+  encryptFolderName as encryptFolderNameFn,
+  decryptFolderName as decryptFolderNameFn,
+  encryptParentId as encryptParentIdFn,
+  decryptParentId as decryptParentIdFn,
+  wrapFolderKey as wrapFolderKeyFn,
+  unwrapFolderKey as unwrapFolderKeyFn,
+} from "@/crypto/folder";
 
 export const api = {
   async init() {
@@ -147,6 +156,40 @@ export const api = {
       masterKey, encryptedFileKey, encryptedFileKeyNonce,
       encryptedManifest, encryptedManifestNonce, ciphertext,
     );
+  },
+
+  // --- Folders (P3) -----------------------------------------------------
+
+  newFolderKey(): RawKey {
+    return newFolderKeyFn();
+  },
+
+  async encryptFolderName(folderKey: RawKey, name: string) {
+    return encryptFolderNameFn(folderKey, name);
+  },
+
+  async decryptFolderName(folderKey: RawKey, ciphertext: Uint8Array, iv: Uint8Array) {
+    return decryptFolderNameFn(folderKey, ciphertext, iv);
+  },
+
+  async encryptParentId(masterKey: RawKey, parentId: string | null) {
+    return encryptParentIdFn(masterKey, parentId);
+  },
+
+  async decryptParentId(
+    masterKey: RawKey,
+    ciphertext: Uint8Array | null,
+    iv: Uint8Array | null,
+  ) {
+    return decryptParentIdFn(masterKey, ciphertext, iv);
+  },
+
+  async wrapFolderKey(folderKey: RawKey, wrapperKey: RawKey) {
+    return wrapFolderKeyFn(folderKey, wrapperKey);
+  },
+
+  async unwrapFolderKey(wrapped: WrappedKey, wrapperKey: RawKey) {
+    return unwrapFolderKeyFn(wrapped, wrapperKey);
   },
 };
 
