@@ -75,6 +75,18 @@ export const useFilesStore = defineStore("files", () => {
     return key;
   }
 
+  /** Resolve the key that wraps a file's file_key: the parent folder's
+   *  folder_key, or master_key when the file lives at root. */
+  function wrapKeyForFile(id: string): Uint8Array {
+    const mk = masterKey();
+    const parentId = fileParents.value[id] ?? null;
+    if (parentId === null) return mk;
+    const foldersStore = useFoldersStore();
+    const fk = foldersStore.folderKeyOf(parentId);
+    if (!fk) throw new Error("parent folder key not available");
+    return fk;
+  }
+
   let swListenerBound = false;
   function bindSwListener(): void {
     if (swListenerBound || typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
@@ -111,9 +123,8 @@ export const useFilesStore = defineStore("files", () => {
    * decrypt, we silently leave the file id as the display fallback.
    */
   async function decryptNames(): Promise<void> {
-    let key: Uint8Array;
     try {
-      key = masterKey();
+      masterKey();
     } catch {
       return;
     }
@@ -127,10 +138,15 @@ export const useFilesStore = defineStore("files", () => {
         !displayNames.value[f.id]
       ) {
         try {
-          const m = await cryptoApi.decryptManifest(
-            key,
-            f.encrypted_file_key,
-            f.encrypted_file_key_nonce,
+          const fileKey = await cryptoApi.unwrap(
+            {
+              ciphertext: fromBase64(f.encrypted_file_key),
+              iv: fromBase64(f.encrypted_file_key_nonce),
+            },
+            wrapKeyForFile(f.id),
+          );
+          const m = await cryptoApi.decryptManifestWithKey(
+            fileKey,
             f.encrypted_manifest,
             f.encrypted_manifest_nonce,
           );
@@ -314,20 +330,17 @@ export const useFilesStore = defineStore("files", () => {
     error.value = null;
     try {
       await ensureCryptoReady();
-      const mk = masterKey();
-      const manifest = await cryptoApi.decryptManifest(
-        mk,
-        meta.encrypted_file_key!,
-        meta.encrypted_file_key_nonce!,
-        meta.encrypted_manifest!,
-        meta.encrypted_manifest_nonce!,
-      );
       const fileKey = await cryptoApi.unwrap(
         {
           ciphertext: fromBase64(meta.encrypted_file_key!),
           iv: fromBase64(meta.encrypted_file_key_nonce!),
         },
-        mk,
+        wrapKeyForFile(meta.id),
+      );
+      const manifest = await cryptoApi.decryptManifestWithKey(
+        fileKey,
+        meta.encrypted_manifest!,
+        meta.encrypted_manifest_nonce!,
       );
       const ivBase = fromBase64(manifest.iv_base);
       const n = meta.chunk_count;
@@ -399,15 +412,7 @@ export const useFilesStore = defineStore("files", () => {
     }
   }
 
-  async function openVideo(meta: FileMeta, manifest: Manifest): Promise<void> {
-    const mk = masterKey();
-    const fileKey = await cryptoApi.unwrap(
-      {
-        ciphertext: fromBase64(meta.encrypted_file_key!),
-        iv: fromBase64(meta.encrypted_file_key_nonce!),
-      },
-      mk,
-    );
+  async function openVideo(meta: FileMeta, manifest: Manifest, fileKey: Uint8Array): Promise<void> {
     const ivBase = fromBase64(manifest.iv_base);
     bindSwListener();
     let swOk = true;
@@ -469,17 +474,21 @@ export const useFilesStore = defineStore("files", () => {
     error.value = null;
     try {
       await ensureCryptoReady();
-      const mk = masterKey();
-      const manifest = await cryptoApi.decryptManifest(
-        mk,
-        meta.encrypted_file_key!,
-        meta.encrypted_file_key_nonce!,
+      const fileKey = await cryptoApi.unwrap(
+        {
+          ciphertext: fromBase64(meta.encrypted_file_key!),
+          iv: fromBase64(meta.encrypted_file_key_nonce!),
+        },
+        wrapKeyForFile(meta.id),
+      );
+      const manifest = await cryptoApi.decryptManifestWithKey(
+        fileKey,
         meta.encrypted_manifest!,
         meta.encrypted_manifest_nonce!,
       );
       const kind = kindOf(manifest.mime);
       if (kind === "video") {
-        return await openVideo(meta, manifest);
+        return await openVideo(meta, manifest, fileKey);
       }
       if (kind === "other") {
         error.value = "Preview is not supported for this file type — use Download.";
@@ -489,13 +498,6 @@ export const useFilesStore = defineStore("files", () => {
         error.value = "File too large to preview — use Download.";
         return;
       }
-      const fileKey = await cryptoApi.unwrap(
-        {
-          ciphertext: fromBase64(meta.encrypted_file_key!),
-          iv: fromBase64(meta.encrypted_file_key_nonce!),
-        },
-        mk,
-      );
       const ivBase = fromBase64(manifest.iv_base);
       const n = meta.chunk_count;
       const parts = new Array<Uint8Array>(n);
@@ -545,6 +547,7 @@ export const useFilesStore = defineStore("files", () => {
     downloading,
     displayNames,
     activeUploads,
+    fileParents,
     refresh,
     upload,
     cancelUpload,

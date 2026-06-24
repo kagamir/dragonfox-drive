@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll } from "vitest";
 
 import { api } from "./crypto.worker";
 import { randomBytes } from "@/crypto/kdf";
+import { fromBase64 } from "@/crypto/file";
 
 describe("crypto worker api", () => {
   beforeAll(async () => {
@@ -61,5 +62,28 @@ describe("crypto worker api", () => {
     const fk = api.newFolderKey();
     const wrapped = await api.wrapFolderKey(fk, mk);
     expect(Array.from(await api.unwrapFolderKey(wrapped, mk))).toEqual(Array.from(fk));
+  });
+
+  it("decryptManifestWithKey decrypts using an already-unwrapped fileKey", async () => {
+    const mk = api.newMasterKey();
+    const pt = new TextEncoder().encode("manifest body");
+    const payload = await api.encryptFile(mk, pt, "a.txt", "text/plain");
+    // Unwrap the file_key with master_key, then decrypt the manifest WITHOUT
+    // re-unwrapping (mirrors the folder-aware download/preview path).
+    const fileKey = await api.unwrap(
+      {
+        ciphertext: fromBase64(payload.encrypted_file_key),
+        iv: fromBase64(payload.encrypted_file_key_nonce),
+      },
+      mk,
+    );
+    const m = await api.decryptManifestWithKey(
+      fileKey,
+      payload.encrypted_manifest,
+      payload.encrypted_manifest_nonce,
+    );
+    expect(m.name).toBe("a.txt");
+    expect(m.mime).toBe("text/plain");
+    expect(m.iv_base).toBeTruthy();
   });
 });

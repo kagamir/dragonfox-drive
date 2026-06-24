@@ -76,6 +76,10 @@ vi.mock("@/workers/crypto", () => ({
       name: "dl.txt", mime: "text/plain", size: 2,
       iv_base: "iv==", chunk_size: 4 * 1024 * 1024,
     }),
+    decryptManifestWithKey: vi.fn().mockResolvedValue({
+      name: "dl.txt", mime: "text/plain", size: 2,
+      iv_base: "iv==", chunk_size: 4 * 1024 * 1024,
+    }),
     unwrap: vi.fn().mockResolvedValue(new Uint8Array(32)),
     decryptChunk: vi.fn().mockResolvedValue(new Uint8Array([9, 9])),
   },
@@ -262,8 +266,8 @@ describe("files store", () => {
     auth.masterKey = new Uint8Array(32) as any;
     vi.stubGlobal("URL", { createObjectURL: vi.fn(), revokeObjectURL: vi.fn() });
     const files = useFilesStore();
-    // decryptManifest mock returns size: 2; force it over the text cap
-    (cryptoApi.decryptManifest as any).mockResolvedValueOnce({
+    // decryptManifestWithKey mock returns size: 2; force it over the text cap
+    (cryptoApi.decryptManifestWithKey as any).mockResolvedValueOnce({
       name: "big.txt", mime: "text/plain", size: 3 * 1024 * 1024,
       iv_base: "iv==", chunk_size: 4 * 1024 * 1024,
     });
@@ -283,7 +287,7 @@ describe("files store", () => {
     const auth = useAuthStore();
     auth.masterKey = new Uint8Array(32) as any;
     vi.stubGlobal("URL", { createObjectURL: vi.fn(), revokeObjectURL: vi.fn() });
-    (cryptoApi.decryptManifest as any).mockResolvedValueOnce({
+    (cryptoApi.decryptManifestWithKey as any).mockResolvedValueOnce({
       name: "doc.pdf", mime: "application/pdf", size: 100,
       iv_base: "iv==", chunk_size: 4 * 1024 * 1024,
     });
@@ -346,7 +350,7 @@ describe("files store", () => {
     const auth = useAuthStore();
     auth.masterKey = new Uint8Array(32) as any;
     ensureStreamSwMock.mockResolvedValue(undefined);
-    (cryptoApi.decryptManifest as any).mockResolvedValue({
+    (cryptoApi.decryptManifestWithKey as any).mockResolvedValue({
       name: "clip.mp4", mime: "video/mp4", size: 5 * 1024 * 1024 * 1024,
       iv_base: "iv==", chunk_size: 4 * 1024 * 1024,
     });
@@ -373,7 +377,7 @@ describe("files store", () => {
     const auth = useAuthStore();
     auth.masterKey = new Uint8Array(32) as any;
     ensureStreamSwMock.mockResolvedValue(undefined);
-    (cryptoApi.decryptManifest as any).mockResolvedValue({
+    (cryptoApi.decryptManifestWithKey as any).mockResolvedValue({
       name: "clip.mp4", mime: "video/mp4", size: 5 * 1024 * 1024 * 1024,
       iv_base: "iv==", chunk_size: 4 * 1024 * 1024,
     });
@@ -414,7 +418,7 @@ describe("files store", () => {
     const auth = useAuthStore();
     auth.masterKey = new Uint8Array(32) as any;
     ensureStreamSwMock.mockResolvedValue(undefined);
-    (cryptoApi.decryptManifest as any).mockResolvedValue({
+    (cryptoApi.decryptManifestWithKey as any).mockResolvedValue({
       name: "clip.mp4", mime: "video/mp4", size: 1000,
       iv_base: "iv==", chunk_size: 4 * 1024 * 1024,
     });
@@ -436,7 +440,7 @@ describe("files store", () => {
     const auth = useAuthStore();
     auth.masterKey = new Uint8Array(32) as any;
     ensureStreamSwMock.mockRejectedValue(new Error("unsupported"));
-    (cryptoApi.decryptManifest as any).mockResolvedValue({
+    (cryptoApi.decryptManifestWithKey as any).mockResolvedValue({
       name: "small.mp4", mime: "video/mp4", size: 1000,
       iv_base: "iv==", chunk_size: 4 * 1024 * 1024,
     });
@@ -511,5 +515,55 @@ describe("files store", () => {
       "f1",
       expect.objectContaining({ encrypted_parent_id: expect.any(String) }),
     );
+    folderKeyOfMock.mockReturnValue(undefined);
+  });
+
+  it("download of a folder-resident file unwraps with the folder key", async () => {
+    const auth = useAuthStore();
+    auth.masterKey = new Uint8Array(32) as any;
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn(() => "blob:x"),
+      revokeObjectURL: vi.fn(),
+    });
+    const folderKey = new Uint8Array(32).fill(7);
+    folderKeyOfMock.mockReturnValue(folderKey);
+    const files = useFilesStore();
+    const meta = {
+      id: "f1", owner_id: "u", status: "ready" as const,
+      total_size: 2, chunk_count: 1,
+      encrypted_manifest: "em", encrypted_manifest_nonce: "emn",
+      encrypted_file_key: "fk", encrypted_file_key_nonce: "fkn",
+      created_at: "", updated_at: "",
+    };
+    files.fileParents = { f1: "fold" };
+    (cryptoApi.unwrap as any).mockClear();
+    await files.download(meta);
+    expect(cryptoApi.unwrap).toHaveBeenCalledWith(
+      expect.any(Object),
+      folderKey,
+    );
+    folderKeyOfMock.mockReturnValue(undefined);
+  });
+
+  it("download of a root file unwraps with masterKey (unchanged behavior)", async () => {
+    const auth = useAuthStore();
+    auth.masterKey = new Uint8Array(32) as any;
+    const mk = auth.masterKey;
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn(() => "blob:x"),
+      revokeObjectURL: vi.fn(),
+    });
+    const files = useFilesStore();
+    const meta = {
+      id: "root1", owner_id: "u", status: "ready" as const,
+      total_size: 2, chunk_count: 1,
+      encrypted_manifest: "em", encrypted_manifest_nonce: "emn",
+      encrypted_file_key: "fk", encrypted_file_key_nonce: "fkn",
+      created_at: "", updated_at: "",
+    };
+    // no fileParents entry → null → masterKey is the wrap key
+    (cryptoApi.unwrap as any).mockClear();
+    await files.download(meta);
+    expect(cryptoApi.unwrap).toHaveBeenCalledWith(expect.any(Object), mk);
   });
 });

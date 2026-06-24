@@ -124,6 +124,22 @@ export async function decryptManifest(
   return JSON.parse(new TextDecoder().decode(plain)) as Manifest;
 }
 
+/** Like decryptManifest, but the file_key has already been unwrapped by the
+ *  caller (e.g. with a folder key rather than master_key). Used so the
+ *  manifest decrypt can be folder-aware without a new unwrap path. */
+export async function decryptManifestWithFileKey(
+  fileKey: RawKey,
+  encryptedManifest: string,
+  encryptedManifestNonce: string,
+): Promise<Manifest> {
+  const plain = await decrypt(
+    fileKey,
+    fromBase64(encryptedManifest),
+    fromBase64(encryptedManifestNonce),
+  );
+  return JSON.parse(new TextDecoder().decode(plain)) as Manifest;
+}
+
 export async function decryptFile(
   masterKey: RawKey,
   encryptedFileKey: string,

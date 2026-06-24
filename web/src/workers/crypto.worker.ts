@@ -28,6 +28,7 @@ import {
 import {
   decryptFile as decryptFilePayload,
   decryptManifest as decryptManifestPayload,
+  decryptManifestWithFileKey as decryptManifestWithFileKeyPayload,
   encryptFile as encryptFilePayload,
   type EncryptedFilePayload,
   type Manifest,
@@ -141,6 +142,16 @@ export const api = {
     return decryptManifestPayload(
       masterKey, encryptedFileKey, encryptedFileKeyNonce,
       encryptedManifest, encryptedManifestNonce,
+    );
+  },
+
+  async decryptManifestWithKey(
+    fileKey: RawKey,
+    encryptedManifest: string,
+    encryptedManifestNonce: string,
+  ): Promise<Manifest> {
+    return decryptManifestWithFileKeyPayload(
+      fileKey, encryptedManifest, encryptedManifestNonce,
     );
   },
 
