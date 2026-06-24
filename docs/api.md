@@ -150,7 +150,143 @@ the expected chunk count.
 
 ### `DELETE /api/files/:id`
 
-Removes the file's metadata and all chunks on disk.
+**Hard** delete: removes the file's metadata row and all of its chunks on
+disk. (Aligned with the folder cascade delete in `DELETE /api/folders/:id` —
+there is no soft-delete / trash.) Returns `404` if the id is unknown or not
+owned by the caller.
+
+## Folders
+
+All `/api/folders*` endpoints require `Authorization: Bearer <access_token>`.
+Folders are zero-knowledge: the server stores only opaque encrypted blobs and
+never sees names or structure. The client downloads every folder row and
+builds the tree locally (see [crypto-design.md](crypto-design.md#folder-tree-p3)).
+
+> All endpoints in this section are owner-scoped: any id the caller does not
+> own returns `404`, never `403` (no information leak). A file's
+> `encrypted_parent_id`/`encrypted_parent_id_nonce` columns (see
+> `GET /api/files`) are `null` for a root file and point at a folder otherwise.
+
+### `GET /api/folders`
+
+Returns **every** folder owned by the caller — the client builds the tree.
+
+Response:
+```json
+{
+  "folders": [
+    {
+      "id": "uuid",
+      "encrypted_parent_id": "<base64 or null>",
+      "encrypted_parent_id_nonce": "<base64 or null>",
+      "encrypted_folder_key": "<base64>",
+      "encrypted_folder_key_nonce": "<base64>",
+      "encrypted_name": "<base64>",
+      "encrypted_name_nonce": "<base64>",
+      "created_at": "2026-06-22T10:00:00Z",
+      "updated_at": "2026-06-22T10:00:00Z"
+    }
+  ]
+}
+```
+
+`encrypted_parent_id` is `null` for a root folder. It is encrypted with
+`master_key` (never the folder's own key); `encrypted_folder_key` is wrapped
+by the parent folder's `folder_key` (or `master_key` for a root folder);
+`encrypted_name` is encrypted with the folder's own `folder_key`.
+
+### `POST /api/folders`
+
+```json
+{
+  "encrypted_folder_key": "<base64>",
+  "encrypted_folder_key_nonce": "<base64>",
+  "encrypted_name": "<base64>",
+  "encrypted_name_nonce": "<base64>",
+  "encrypted_parent_id": "<base64>",
+  "encrypted_parent_id_nonce": "<base64>"
+}
+```
+
+For a root folder, omit `encrypted_parent_id` and `encrypted_parent_id_nonce`
+(or send them as `null`).
+
+Response: `{ "id": "uuid" }`.
+
+### `PATCH /api/folders/:id`
+
+Renames and/or moves a folder. The client supplies the already re-encrypted
+fields; the server does no crypto. Send only the fields you want to change:
+
+```json
+{
+  "encrypted_name": "<base64>",
+  "encrypted_name_nonce": "<base64>",
+  "encrypted_parent_id": "<base64 or null>",
+  "encrypted_parent_id_nonce": "<base64 or null>",
+  "encrypted_folder_key": "<base64>",
+  "encrypted_folder_key_nonce": "<base64>"
+}
+```
+
+- **Rename:** send `encrypted_name` + `encrypted_name_nonce`.
+- **Move:** send the new `encrypted_parent_id`(+`_nonce`). On a move the
+  client must re-wrap the folder's key under the new parent (or `master_key`
+  for a root move), so send `encrypted_folder_key` +
+  `encrypted_folder_key_nonce` too. Move to root by sending
+  `encrypted_parent_id` and `encrypted_parent_id_nonce` as `null`.
+- At least one field besides the implicit `updated_at` must be present, or
+  the server responds `400`.
+- Returns `404` if the id is unknown or not owned by the caller.
+
+Response: `{ "ok": true }`.
+
+### `DELETE /api/folders/:id`
+
+Cascade **hard** delete of a folder and its entire descendant set. The server
+does not know the tree shape, so the client computes the full descendant set
+and lists it in the body:
+
+```json
+{
+  "folder_ids": ["<root of the subtree>", "<child folder>"],
+  "file_ids": ["<descendant file>"]
+}
+```
+
+- The path `:id` (the deletion target) **must** appear in `folder_ids`.
+- Every listed id must be owned by the caller. If any id in `folder_ids` or
+  `file_ids` is not owned, the whole operation is rolled back and the server
+  responds `404` (the affected row counts won't match).
+- Folder rows and file rows are deleted transactionally; chunks for the
+  deleted files are removed from disk afterwards.
+
+Response:
+```json
+{ "ok": true, "deleted_folders": 3, "deleted_files": 5 }
+```
+
+### `PATCH /api/files/:id`
+
+Moves a file to a new parent folder (or to root). The client supplies the
+already re-wrapped `file_key` (under the new parent's `folder_key`, or
+`master_key` for a root file) and the new encrypted parent pointer; the
+server does no crypto.
+
+```json
+{
+  "encrypted_file_key": "<base64>",
+  "encrypted_file_key_nonce": "<base64>",
+  "encrypted_parent_id": "<base64 or null>",
+  "encrypted_parent_id_nonce": "<base64 or null>"
+}
+```
+
+Move to root by sending `encrypted_parent_id` and `encrypted_parent_id_nonce`
+as `null` (or omitting them). Returns `404` if the id is unknown or not owned
+by the caller.
+
+Response: `{ "ok": true }`.
 
 ## Shares
 

@@ -97,6 +97,27 @@ an opaque blob. The server cannot read its contents:
 
 The manifest is encrypted with `file_key` and uploaded alongside the chunks.
 
+## Folder tree (P3)
+
+Folders form a zero-knowledge hierarchy that hides **both** folder names and
+the tree structure from the server.
+
+Each folder has a random 32-byte `folder_key`. A child's key (file_key or
+subfolder's folder_key) is wrapped by its **parent folder's** `folder_key`;
+root-level items are wrapped by `master_key` (so a root file behaves exactly
+as in P1/P2). This makes move operations cheap (one re-wrap of the moved
+item's key) and a future "share folder" feature elegant (re-wrap one key).
+
+The **parent pointer** is always encrypted with `master_key` — never
+`folder_key` — so the client can recover the tree shape before walking the
+key-wrap chain (which would otherwise be circular). Consequence: a future
+share recipient cannot decrypt structure on their own; folder sharing will
+need to re-share the parent pointers of the shared subtree.
+
+The client downloads every folder row, decrypts all parent pointers with
+`master_key`, then BFS-walks the key graph from the roots to decrypt names.
+Orphaned items (parent not present) are surfaced as root.
+
 ## Link sharing
 
 Sharing a file does **not** expose `file_key` directly. Instead, the client
