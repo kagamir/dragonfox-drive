@@ -1,5 +1,4 @@
-import { http } from "./client";
-import { getAuthToken, ApiError, request } from "./client";
+import { http, getAuthToken, ApiError, request } from "./client";
 import type { CreateFileRequest, CreateFileResponse, FileMeta, ChunkIndices } from "./types";
 
 export const filesApi = {
@@ -74,6 +73,9 @@ export const filesApi = {
     }),
 
   finalize: (id: string) => http.post<{ ok: true }>(`/api/files/${id}/finalize`),
+
+  move: (id: string, body: import("./types").PatchFileMoveRequest) =>
+    http.patch<{ ok: true }>(`/api/files/${id}`, body),
 
   remove: (id: string) => http.delete<{ ok: true }>(`/api/files/${id}`),
 };

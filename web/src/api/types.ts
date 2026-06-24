@@ -49,6 +49,8 @@ export interface FileMeta {
   encrypted_manifest_nonce: string | null; // base64
   encrypted_file_key: string | null; // base64
   encrypted_file_key_nonce: string | null; // base64
+  encrypted_parent_id: string | null; // base64; null ≡ root
+  encrypted_parent_id_nonce: string | null; // base64
   created_at: string;
   updated_at: string;
 }
@@ -58,6 +60,8 @@ export interface CreateFileRequest {
   chunk_count: number;
   encrypted_file_key: string; // base64
   encrypted_file_key_nonce: string; // base64
+  encrypted_parent_id?: string | null; // base64; omit/null ≡ root
+  encrypted_parent_id_nonce?: string | null; // base64
 }
 
 export interface CreateFileResponse {
@@ -89,4 +93,59 @@ export interface ChunkIndices {
   indices: number[];
   chunk_count: number;
   status: string;
+}
+
+// ---- Folders (P3) -------------------------------------------------------
+
+export interface FolderInfo {
+  id: string;
+  encrypted_parent_id: string | null; // base64; null ≡ root
+  encrypted_parent_id_nonce: string | null; // base64
+  encrypted_folder_key: string; // base64
+  encrypted_folder_key_nonce: string; // base64
+  encrypted_name: string; // base64
+  encrypted_name_nonce: string; // base64
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateFolderRequest {
+  encrypted_parent_id: string | null;
+  encrypted_parent_id_nonce: string | null;
+  encrypted_folder_key: string;
+  encrypted_folder_key_nonce: string;
+  encrypted_name: string;
+  encrypted_name_nonce: string;
+}
+
+/**
+ * PATCH folder body. Omitted fields are not updated. To move to root, set
+ * encrypted_parent_id + nonce to null AND supply the re-wrapped folder_key.
+ * Use `undefined` (not null) for fields you do not want to change.
+ */
+export interface PatchFolderRequest {
+  encrypted_name?: string;
+  encrypted_name_nonce?: string;
+  encrypted_parent_id?: string | null;
+  encrypted_parent_id_nonce?: string | null;
+  encrypted_folder_key?: string;
+  encrypted_folder_key_nonce?: string;
+}
+
+export interface DeleteFolderRequest {
+  folder_ids: string[];
+  file_ids: string[];
+}
+
+export interface DeleteFolderResponse {
+  ok: true;
+  deleted_folders: number;
+  deleted_files: number;
+}
+
+export interface PatchFileMoveRequest {
+  encrypted_parent_id: string | null;
+  encrypted_parent_id_nonce: string | null;
+  encrypted_file_key: string;
+  encrypted_file_key_nonce: string;
 }
