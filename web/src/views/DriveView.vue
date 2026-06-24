@@ -172,6 +172,8 @@ const showNextPage = computed(() => folders.page < folders.totalPages - 1);
 
       <p v-if="files.error || folders.error" class="error">{{ files.error || folders.error }}</p>
 
+      <p v-if="files.warning" class="warn">{{ files.warning }}</p>
+
       <p class="muted" v-if="!folders.paginatedView.length && !files.loading">
         Nothing here.
       </p>
@@ -257,6 +259,7 @@ nav a.router-link-active { color: var(--df-color-fg); }
 h1, h2 { margin: 0 0 1rem; font-size: 1.4rem; }
 .muted { color: var(--df-color-fg-muted); }
 .error { color: #c0392b; }
+.warn { color: #b8860b; }
 .dropzone {
   border: 2px dashed var(--df-color-border); border-radius: var(--df-radius-sm);
   padding: 2rem; text-align: center; cursor: pointer; color: var(--df-color-fg-muted);

@@ -197,3 +197,18 @@ These are achieved by:
   fallback path applies.
 - Abandoned playback without `closePreview` leaves SW meta + LRU entries
   until the next `stop` or SW restart (bounded by the 256 MiB budget).
+- **Non-faststart MP4 (moov at end).** A non-faststart MP4 has its `moov`
+  (the decode index) after its `mdat`. Browsers must read `moov` before
+  decoding; for a byte-range source they normally seek to the end to fetch
+  it, but Chrome's media stack, served through the Service Worker, does a
+  sequential scan instead — so the whole file is traversed before playback
+  can start (effectively "load everything to play"). Firefox seeks and is
+  unaffected. This is a property of the file, not the SW; the SW cannot fix
+  it. DragonFox detects it at upload (`crypto/videoprobe.ts` parses the
+  ISO-BMFF top-level boxes; `mdat` before `moov` ⇒ non-streamable) and (a)
+  warns the user, (b) blocks the streaming path at open time, offering
+  Download instead. The robust fix — re-muxing to faststart (`-movflags
+  faststart -c copy`) at upload, before encryption — is **deferred**: it
+  requires client-side video parsing/repackaging (ffmpeg.wasm or a hand-
+  rolled qt-faststart). The probe currently covers MP4/QuickTime only;
+  WebM/Matroska are seek-via-Cues and not flagged.

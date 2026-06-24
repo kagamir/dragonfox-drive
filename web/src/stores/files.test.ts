@@ -370,6 +370,30 @@ describe("files store", () => {
     expect(files.preview!.kind).toBe("video");
   });
 
+  it("openPreview blocks streaming for a non-faststart video and surfaces an error", async () => {
+    const auth = useAuthStore();
+    auth.masterKey = new Uint8Array(32) as any;
+    (cryptoApi.decryptManifestWithKey as any).mockResolvedValue({
+      name: "clip.mp4", mime: "video/mp4", size: 5 * 1024 * 1024 * 1024,
+      iv_base: "iv==", chunk_size: 4 * 1024 * 1024, streamable: false,
+    });
+    ensureStreamSwMock.mockClear();
+    postToSwMock.mockClear();
+    const files = useFilesStore();
+    const meta = {
+      id: "vid1", owner_id: "u", status: "ready" as const,
+      total_size: 0, chunk_count: 2,
+      encrypted_manifest: "em", encrypted_manifest_nonce: "emn",
+      encrypted_file_key: "fk", encrypted_file_key_nonce: "fkn",
+      created_at: "", updated_at: "",
+    };
+    await files.openPreview(meta);
+    expect(ensureStreamSwMock).not.toHaveBeenCalled();
+    expect(postToSwMock).not.toHaveBeenCalled();
+    expect(files.preview).toBeNull();
+    expect(files.error).toMatch(/fast-start/i);
+  });
+
   it("needToken SW message refreshes the token and posts it back", async () => {
     const auth = useAuthStore();
     auth.masterKey = new Uint8Array(32) as any;

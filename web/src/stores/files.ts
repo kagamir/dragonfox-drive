@@ -9,6 +9,7 @@ import { useAuthStore } from "./auth";
 import { useFoldersStore } from "./folders";
 import { FILE_CHUNK_SIZE, chunkCount, toBase64, fromBase64, type Manifest } from "@/crypto/file";
 import { kindOf, canPreview, PREVIEW_CAPS, type FileKind } from "@/crypto/preview";
+import { probeStreamable } from "@/crypto/videoprobe";
 import type { WrappedKey } from "@/crypto/keys";
 import { ensureStreamSw, postToSw } from "@/sw/register";
 
@@ -56,6 +57,9 @@ export const useFilesStore = defineStore("files", () => {
   const files = ref<FileMeta[]>([]);
   const loading = ref(false);
   const error = ref<string | null>(null);
+  /** Non-blocking informational warning (e.g. uploaded a non-faststart video).
+   *  Distinct from `error` so it doesn't look like a failure. */
+  const warning = ref<string | null>(null);
   const uploading = ref(false);
   const uploadProgress = ref(0);
   const downloading = ref(false);
@@ -216,6 +220,7 @@ export const useFilesStore = defineStore("files", () => {
     uploading.value = true;
     uploadProgress.value = 0;
     error.value = null;
+    warning.value = null;
     let session: UploadSession | null = null;
     try {
       await ensureCryptoReady();
@@ -223,6 +228,23 @@ export const useFilesStore = defineStore("files", () => {
       const { fileKey, ivBase } = await cryptoApi.newFileKeyMaterial();
       const total = file.size;
       const n = chunkCount(total);
+
+      // Container-level streamability probe (cheap; reads the first bytes only).
+      // Used to warn the user at upload and block the SW streaming path at open
+      // for non-faststart MP4s, which otherwise thrash in Chrome (see videoprobe).
+      const mime = file.type || "application/octet-stream";
+      let streamable: boolean | undefined;
+      if (mime === "video/mp4" || mime === "video/quicktime" || mime === "video/x-m4v") {
+        const header = new Uint8Array(await file.slice(0, 256).arrayBuffer());
+        const probe = probeStreamable(header);
+        if (!probe.streamable) {
+          streamable = false;
+          warning.value =
+            `“${file.name}” is not fast-start (moov at end) — it may not stream ` +
+            `in some browsers (e.g. Chrome). Re-mux with ` +
+            `‘ffmpeg -movflags faststart -c copy’ to fix. Uploading anyway.`;
+        }
+      }
 
       const foldersStore = useFoldersStore();
       const parentId = foldersStore.currentFolderId;
@@ -258,6 +280,7 @@ export const useFilesStore = defineStore("files", () => {
         chunk_size: FILE_CHUNK_SIZE,
         iv_base: toBase64(ivBase),
         created_at: new Date().toISOString(),
+        ...(streamable === false ? { streamable: false } : {}),
       };
       const manifestBytes = new TextEncoder().encode(JSON.stringify(manifestObj));
       const em = await cryptoApi.seal(fileKey, manifestBytes);
@@ -441,6 +464,12 @@ export const useFilesStore = defineStore("files", () => {
   }
 
   async function openVideo(meta: FileMeta, manifest: Manifest, fileKey: Uint8Array): Promise<void> {
+    if (manifest.streamable === false) {
+      error.value =
+        `“${manifest.name}” isn't fast-start (moov at end) and can't be streamed ` +
+        `in this browser. Use Download, or re-mux with ‘ffmpeg -movflags faststart -c copy’.`;
+      return;
+    }
     const ivBase = fromBase64(manifest.iv_base);
     bindSwListener();
     let swOk = true;
@@ -559,6 +588,7 @@ export const useFilesStore = defineStore("files", () => {
     files,
     loading,
     error,
+    warning,
     uploading,
     uploadProgress,
     downloading,

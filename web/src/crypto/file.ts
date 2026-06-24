@@ -32,6 +32,9 @@ export interface Manifest {
   iv_base: string; // base64 of the 12-byte iv_base
   plaintext_sha256?: string; // hex; omitted for multi-chunk P2a uploads
   created_at: string; // RFC-3339
+  /** False when the container is known not to stream (e.g. non-faststart MP4
+   *  with moov after mdat). Undefined = unknown / streamable. See crypto/videoprobe. */
+  streamable?: boolean;
 }
 
 /** Wire-format payload returned by encryptFile (base64 for server columns). */
