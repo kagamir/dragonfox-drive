@@ -24,10 +24,6 @@ const { refreshAuthTokenMock } = vi.hoisted(() => ({
   refreshAuthTokenMock: vi.fn().mockResolvedValue(true),
 }));
 
-const { getTokenMock } = vi.hoisted(() => ({
-  getTokenMock: vi.fn().mockReturnValue("tok"),
-}));
-
 const { currentFolderIdMock, folderKeyOfMock, filesMoveMock } = vi.hoisted(() => ({
   currentFolderIdMock: { value: null as string | null },
   folderKeyOfMock: vi.fn(() => undefined),
@@ -45,7 +41,7 @@ vi.mock("@/stores/folders", () => ({
 
 vi.mock("@/api/client", async (importOriginal) => {
   const mod = await importOriginal<typeof import("@/api/client")>();
-  return { ...mod, refreshAuthToken: refreshAuthTokenMock, getAuthToken: getTokenMock };
+  return { ...mod, refreshAuthToken: refreshAuthTokenMock };
 });
 
 vi.mock("@/workers/crypto", () => ({
