@@ -20,6 +20,7 @@
     "libsodium-wrappers-sumo": "^0.7.15",
     "localforage": "^1.10.0",
     "lodash-es": "^4.17.21",
+    "mp4box": "^0.5.4",
     "naive-ui": "^2.40.1",
     "pinia": "^2.2.6",
     "vue": "^3.5.13",
