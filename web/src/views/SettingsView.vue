@@ -1,12 +1,23 @@
 <script setup lang="ts">
-import { onMounted } from "vue";
+import { onMounted, ref } from "vue";
+import { useRouter } from "vue-router";
 import { useAuthStore } from "@/stores/auth";
 import { useSharesStore } from "@/stores/shares";
 import { useFilesStore } from "@/stores/files";
+import { authApi } from "@/api/auth";
+import { devicesApi } from "@/api/devices";
+import type { DeviceItem } from "@/api/types";
+import { relativeTime } from "@/util/time";
 
 const auth = useAuthStore();
 const shares = useSharesStore();
 const files = useFilesStore();
+const router = useRouter();
+
+const devices = ref<DeviceItem[]>([]);
+const devicesError = ref<string | null>(null);
+const busyId = ref<string | null>(null);
+const busySignOut = ref(false);
 
 function nameOf(fileId: string): string {
   return files.displayNames[fileId] ?? fileId.slice(0, 8);
@@ -19,6 +30,39 @@ function opensOf(s: { download_count: number; download_limit: number | null }): 
 }
 function fileIdOf(id: string): string {
   return shares.all.find((s) => s.id === id)?.file_id ?? "";
+}
+
+async function refreshDevices(): Promise<void> {
+  try {
+    devices.value = await devicesApi.list();
+    devicesError.value = null;
+  } catch {
+    devicesError.value = "Failed to load devices.";
+  }
+}
+
+async function onRevokeDevice(id: string): Promise<void> {
+  if (!confirm("Revoke this device? It will be signed out immediately.")) return;
+  busyId.value = id;
+  try {
+    await devicesApi.revoke(id);
+    await refreshDevices();
+  } catch {
+    alert("Failed to revoke the device.");
+  } finally {
+    busyId.value = null;
+  }
+}
+
+async function onSignOut(): Promise<void> {
+  busySignOut.value = true;
+  try {
+    try { await authApi.logout(); } catch { /* server may already consider us revoked */ }
+    await auth.logout();
+    router.push({ name: "login" });
+  } finally {
+    busySignOut.value = false;
+  }
 }
 
 async function onRevoke(id: string) {
@@ -42,6 +86,7 @@ async function onDelete(id: string) {
 onMounted(async () => {
   await files.refresh();
   await shares.loadAll();
+  await refreshDevices();
 });
 </script>
 
@@ -58,7 +103,30 @@ onMounted(async () => {
       </div>
       <div class="card">
         <h2>Devices</h2>
-        <p class="muted">Device management will be added in P4.</p>
+        <p v-if="devicesError" class="error">{{ devicesError }}</p>
+        <p v-else-if="!devices.length" class="muted">No registered devices.</p>
+        <table v-else class="devices">
+          <tbody>
+            <tr v-for="d in devices" :key="d.id" :class="{ revoked: !!d.revoked_at, current: d.id === auth.deviceId }">
+              <td class="name">
+                <strong>{{ d.name }}</strong>
+                <div class="meta">
+                  <span v-if="d.id === auth.deviceId" class="badge">Current device</span>
+                  <span v-if="d.revoked_at">Revoked · {{ fmt(d.revoked_at) }}</span>
+                  <span v-else>Last seen {{ relativeTime(d.last_seen_at) }}</span>
+                </div>
+              </td>
+              <td class="actions">
+                <button v-if="d.id === auth.deviceId" class="link" :disabled="busySignOut" @click="onSignOut">
+                  {{ busySignOut ? "Signing out..." : "Sign out" }}
+                </button>
+                <button v-else-if="!d.revoked_at" class="link danger" :disabled="busyId === d.id" @click="onRevokeDevice(d.id)">
+                  {{ busyId === d.id ? "Revoking..." : "Revoke" }}
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
       </div>
       <div class="card">
         <h2>Shares</h2>
@@ -106,4 +174,11 @@ h1 { margin: 0 0 1rem; font-size: 1.4rem; }
 .link { background: transparent; border: 0; color: var(--df-color-fg-muted); cursor: pointer; }
 .link:disabled { opacity: 0.4; cursor: default; }
 .danger { color: #c0392b; }
+.devices { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+.devices td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--df-color-border); vertical-align: top; }
+.devices tr.revoked td { opacity: 0.5; }
+.meta { color: var(--df-color-fg-muted); font-size: 0.8rem; margin-top: 0.2rem; }
+.badge { background: var(--df-color-bg); border: 1px solid var(--df-color-border); padding: 0.1rem 0.4rem; border-radius: var(--df-radius-sm); margin-right: 0.4rem; }
+.actions { text-align: right; white-space: nowrap; }
+.error { color: #c0392b; }
 </style>

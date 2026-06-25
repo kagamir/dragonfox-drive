@@ -20,7 +20,13 @@ onMounted(() => {
 </script>
 
 <template>
-  <RouterView />
+  <div v-if="auth.isRestoring" class="app-loading">Loading…</div>
+  <RouterView v-else />
 </template>
 
-<style scoped></style>
+<style scoped>
+.app-loading {
+  position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+  color: var(--df-color-fg-muted); font-size: 0.95rem;
+}
+</style>
