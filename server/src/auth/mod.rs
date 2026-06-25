@@ -13,6 +13,7 @@ use axum::{
 use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
+use std::time::Instant;
 
 use crate::error::ApiError;
 use crate::state::AppState;
@@ -141,9 +142,51 @@ impl FromRequestParts<AppState> for AuthUser {
             .ok_or(ApiError::Unauthorized)?;
 
         let claims = verify_access_token(state, token)?;
+
+        let device_id = claims.dev;
+
+        // Per-request revocation check: the JWT's `dev` claim MUST reference an
+        // active (non-revoked) device owned by `sub`. A missing row means the
+        // device was deleted; a non-null `revoked_at` means it was revoked.
+        // Either way → 401. This is what makes revocation immediate: the very
+        // next request after `UPDATE devices SET revoked_at = ...` is rejected.
+        let revoked: Option<(Option<String>,)> = sqlx::query_as(
+            "SELECT revoked_at FROM devices WHERE id = ? AND user_id = ?",
+        )
+        .bind(&device_id)
+        .bind(&claims.sub)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?;
+
+        match revoked {
+            None => return Err(ApiError::Unauthorized),
+            Some((Some(_revoked_at),)) => return Err(ApiError::Unauthorized),
+            Some((None,)) => {}
+        }
+
+        // Throttled `last_seen_at` write: at most one UPDATE per device per 60s.
+        // The write is fire-and-forget — a failure here MUST NOT fail the
+        // request (last_seen_at is best-effort telemetry, not a security gate).
+        let now = Instant::now();
+        let should_update = {
+            let cache = state.last_seen.read().await;
+            cache
+                .get(&device_id)
+                .map_or(true, |last| now.duration_since(*last).as_secs() >= 60)
+        };
+        if should_update {
+            let _ = sqlx::query("UPDATE devices SET last_seen_at = ? WHERE id = ?")
+                .bind(Utc::now().to_rfc3339())
+                .bind(&device_id)
+                .execute(&state.db)
+                .await;
+            state.last_seen.write().await.insert(device_id.clone(), now);
+        }
+
         Ok(AuthUser {
             user_id: claims.sub,
-            device_id: claims.dev,
+            device_id,
         })
     }
 }
@@ -230,22 +273,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn auth_user_extractor_accepts_a_valid_bearer_token() {
-        let state = test_state().await;
-        let pair = issue_token_pair(&state, "user-x", "dev-x").unwrap();
-        let req = Request::builder()
-            .header("authorization", format!("Bearer {}", pair.access_token))
-            .body::<String>(String::new())
-            .unwrap();
-        let (mut parts, _body) = req.into_parts();
-        let user = AuthUser::from_request_parts(&mut parts, &state)
-            .await
-            .unwrap();
-        assert_eq!(user.user_id, "user-x");
-        assert_eq!(user.device_id, "dev-x");
-    }
-
-    #[tokio::test]
     async fn auth_user_extractor_rejects_missing_header() {
         let state = test_state().await;
         let req = Request::<String>::default();
@@ -323,6 +350,80 @@ mod tests {
         .execute(&state.db)
         .await
         .unwrap();
+    }
+
+    /// Insert a device row (active by default — no revoked_at).
+    async fn seed_device(state: &AppState, device_id: &str, user_id: &str) {
+        sqlx::query("INSERT INTO devices (id, user_id, name) VALUES (?, ?, 'Test')")
+            .bind(device_id)
+            .bind(user_id)
+            .execute(&state.db)
+            .await
+            .unwrap();
+    }
+
+    /// Mark a device as revoked at the current wall-clock time.
+    async fn revoke_device(state: &AppState, device_id: &str) {
+        let now = Utc::now().to_rfc3339();
+        sqlx::query("UPDATE devices SET revoked_at = ? WHERE id = ?")
+            .bind(now)
+            .bind(device_id)
+            .execute(&state.db)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn auth_user_extractor_rejects_a_revoked_device() {
+        let (state, _dir) = test_state_with_db().await;
+        seed_user(&state, "u1").await;
+        seed_device(&state, "dev-1", "u1").await;
+        let pair = issue_token_pair(&state, "u1", "dev-1").unwrap();
+        revoke_device(&state, "dev-1").await;
+
+        let req = Request::builder()
+            .header("authorization", format!("Bearer {}", pair.access_token))
+            .body::<String>(String::new())
+            .unwrap();
+        let (mut parts, _body) = req.into_parts();
+        assert!(matches!(
+            AuthUser::from_request_parts(&mut parts, &state).await,
+            Err(ApiError::Unauthorized)
+        ));
+    }
+
+    #[tokio::test]
+    async fn auth_user_extractor_rejects_an_unknown_device() {
+        let (state, _dir) = test_state_with_db().await;
+        seed_user(&state, "u1").await;
+        // No device row for "ghost-device".
+        let pair = issue_token_pair(&state, "u1", "ghost-device").unwrap();
+        let req = Request::builder()
+            .header("authorization", format!("Bearer {}", pair.access_token))
+            .body::<String>(String::new())
+            .unwrap();
+        let (mut parts, _body) = req.into_parts();
+        assert!(matches!(
+            AuthUser::from_request_parts(&mut parts, &state).await,
+            Err(ApiError::Unauthorized)
+        ));
+    }
+
+    #[tokio::test]
+    async fn auth_user_extractor_accepts_an_active_device() {
+        let (state, _dir) = test_state_with_db().await;
+        seed_user(&state, "u1").await;
+        seed_device(&state, "dev-1", "u1").await;
+        let pair = issue_token_pair(&state, "u1", "dev-1").unwrap();
+
+        let req = Request::builder()
+            .header("authorization", format!("Bearer {}", pair.access_token))
+            .body::<String>(String::new())
+            .unwrap();
+        let (mut parts, _body) = req.into_parts();
+        let user = AuthUser::from_request_parts(&mut parts, &state).await.unwrap();
+        assert_eq!(user.user_id, "u1");
+        assert_eq!(user.device_id, "dev-1");
     }
 
     #[tokio::test]

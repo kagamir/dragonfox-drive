@@ -126,7 +126,27 @@ mod tests {
         (build_router(state.clone()), state)
     }
 
-    fn bearer(state: &AppState, user_id: &str) -> String {
+    /// Mint a Bearer header for `user_id`, first seeding the user + device row
+    /// the per-request revocation check requires. Idempotent (`INSERT OR IGNORE`)
+    /// so tests that call it more than once don't trip a PRIMARY KEY violation.
+    async fn bearer(state: &AppState, user_id: &str) -> String {
+        sqlx::query(
+            "INSERT OR IGNORE INTO users \
+             (id, username, kdf_salt, server_salt, verifier_hash, \
+              encrypted_master_key, encrypted_master_key_nonce) \
+             VALUES (?, ?, 's','s','h','k','n')",
+        )
+        .bind(user_id)
+        .bind(user_id)
+        .execute(&state.db)
+        .await
+        .unwrap();
+        sqlx::query("INSERT OR IGNORE INTO devices (id, user_id, name) VALUES (?, ?, 'Test')")
+            .bind("test-device")
+            .bind(user_id)
+            .execute(&state.db)
+            .await
+            .unwrap();
         let pair = issue_token_pair(state, user_id, "test-device").unwrap();
         format!("Bearer {}", pair.access_token)
     }
@@ -216,13 +236,36 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri("/api/files")
-                    .header("authorization", bearer(&state, "user-1"))
+                    .header("authorization", bearer(&state, "user-1").await)
                     .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn protected_route_rejects_a_revoked_device() {
+        let (app, state) = test_router(104857600).await;
+        let token = bearer(&state, "user-1").await;
+        sqlx::query("UPDATE devices SET revoked_at = ? WHERE id = ?")
+            .bind(chrono::Utc::now().to_rfc3339())
+            .bind("test-device")
+            .execute(&state.db)
+            .await
+            .unwrap();
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/files")
+                    .header("authorization", token)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
