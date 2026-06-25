@@ -3,7 +3,7 @@ name = "dragonfox-drive"
 version = "0.1.0"
 edition = "2021"
 description = "High-performance end-to-end encrypted cloud drive (zero-trust backend)"
-license = "MIT OR Apache-2.0"
+license = "AGPLv3"
 
 [[bin]]
 name = "dragonfox-drive"
