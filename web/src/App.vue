@@ -3,6 +3,7 @@ import { onMounted } from "vue";
 import { useAuthStore } from "@/stores/auth";
 import { useConfigStore } from "@/stores/config";
 import { onSessionLost } from "@/api/client";
+import DfToastContainer from "@/components/ui/DfToastContainer.vue";
 
 const auth = useAuthStore();
 const config = useConfigStore();
@@ -21,7 +22,10 @@ onMounted(() => {
 
 <template>
   <div v-if="auth.isRestoring" class="app-loading">Loading…</div>
-  <RouterView v-else />
+  <template v-else>
+    <RouterView />
+    <DfToastContainer />
+  </template>
 </template>
 
 <style scoped>
