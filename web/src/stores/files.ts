@@ -2,7 +2,7 @@ import { defineStore } from "pinia";
 import { ref } from "vue";
 
 import { filesApi } from "@/api/files";
-import { refreshAuthToken, ApiError, getAuthToken } from "@/api/client";
+import { refreshAuthToken, ApiError } from "@/api/client";
 import type { FileMeta } from "@/api/types";
 import { cryptoApi, ensureCryptoReady } from "@/workers/crypto";
 import { useAuthStore } from "./auth";
@@ -10,7 +10,6 @@ import { useFoldersStore } from "./folders";
 import { FILE_CHUNK_SIZE, chunkCount, toBase64, fromBase64, type Manifest } from "@/crypto/file";
 import { kindOf, canPreview, PREVIEW_CAPS, type FileKind } from "@/crypto/preview";
 import type { WrappedKey } from "@/crypto/keys";
-import { ensureStreamSw, postToSw } from "@/sw/register";
 
 export interface UploadSession {
   fileId: string;
@@ -67,6 +66,7 @@ export const useFilesStore = defineStore("files", () => {
     url: string;
     kind: FileKind;
     name: string;
+    player?: { fileId: string; fileKey: Uint8Array; ivBase: Uint8Array; chunkSize: number; totalSize: number } | null;
   } | null>(null);
 
   function masterKey(): Uint8Array {
@@ -118,21 +118,6 @@ export const useFilesStore = defineStore("files", () => {
       meta.encrypted_manifest_nonce,
     );
     return { fileKey, manifest };
-  }
-
-  let swListenerBound = false;
-  function bindSwListener(): void {
-    if (swListenerBound || typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
-    swListenerBound = true;
-    navigator.serviceWorker.addEventListener("message", (e: MessageEvent) => {
-      const d = e.data;
-      if (d && d.type === "needToken" && d.fileId) {
-        void refreshAuthToken().then((ok) => {
-          const token = ok ? getAuthToken() : null;
-          if (token) postToSw({ type: "token", fileId: d.fileId, token });
-        });
-      }
-    });
   }
 
   async function refresh(): Promise<void> {
@@ -442,37 +427,28 @@ export const useFilesStore = defineStore("files", () => {
 
   async function openVideo(meta: FileMeta, manifest: Manifest, fileKey: Uint8Array): Promise<void> {
     const ivBase = fromBase64(manifest.iv_base);
-    bindSwListener();
-    let swOk = true;
-    try {
-      await ensureStreamSw();
-    } catch {
-      swOk = false;
-    }
-    if (swOk) {
+    const isMp4 = ["video/mp4", "video/quicktime", "video/x-m4v"].includes(manifest.mime);
+
+    if (isMp4 && typeof MediaSource !== "undefined") {
+      // MSE path: the FilePreviewModal renders <Mp4Player> using this payload.
       if (preview.value) closePreview();
-      postToSw({
-        type: "play",
-        meta: {
+      preview.value = {
+        meta,
+        url: "",
+        kind: "video",
+        name: manifest.name,
+        player: {
           fileId: meta.id,
           fileKey,
           ivBase,
-          size: manifest.size,
-          chunkCount: meta.chunk_count,
           chunkSize: FILE_CHUNK_SIZE,
-          token: getAuthToken() ?? "",
-          mime: manifest.mime,
+          totalSize: manifest.size,
         },
-      });
-      preview.value = {
-        meta,
-        url: `/api/stream/${meta.id}`,
-        kind: "video",
-        name: manifest.name,
       };
       return;
     }
-    // Fallback: whole-file blob for small videos; otherwise degrade.
+
+    // Fallback: whole-file blob for non-MP4 / MSE-unsupported small videos.
     if (manifest.size <= PREVIEW_CAPS.video) {
       const n = meta.chunk_count;
       const parts = new Array<Uint8Array>(n);
@@ -492,10 +468,12 @@ export const useFilesStore = defineStore("files", () => {
         url: URL.createObjectURL(blob),
         kind: "video",
         name: manifest.name,
+        player: null,
       };
       return;
     }
-    error.value = "Streaming is unavailable in this browser — use Download.";
+
+    error.value = "This video can't be played in the browser — use Download.";
   }
 
   async function openPreview(meta: FileMeta): Promise<void> {
@@ -543,10 +521,7 @@ export const useFilesStore = defineStore("files", () => {
   function closePreview(): void {
     if (!preview.value) return;
     const p = preview.value;
-    if (p.url.startsWith("blob:")) URL.revokeObjectURL(p.url);
-    if (p.kind === "video" && p.url.startsWith("/api/stream/")) {
-      postToSw({ type: "stop", fileId: p.meta.id });
-    }
+    if (!p.player && p.url.startsWith("blob:")) URL.revokeObjectURL(p.url);
     preview.value = null;
   }
 

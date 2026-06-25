@@ -4,7 +4,6 @@ import { createPinia } from "pinia";
 import App from "./App.vue";
 import { router } from "./router";
 import { initCrypto } from "./crypto";
-import { ensureStreamSw } from "./sw/register";
 
 import "./styles/main.css";
 
@@ -16,10 +15,6 @@ async function bootstrap() {
   app.use(createPinia());
   app.use(router);
   app.mount("#app");
-
-  // Warm up the streaming Service Worker. Unsupported browsers / registration
-  // failures are ignored here; video preview falls back at play time.
-  void ensureStreamSw().catch(() => {});
 }
 
 bootstrap().catch((err) => {

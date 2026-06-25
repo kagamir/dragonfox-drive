@@ -1,9 +1,16 @@
 <script setup lang="ts">
 import { onMounted, onBeforeUnmount, ref } from "vue";
 import type { FileKind } from "@/crypto/preview";
+import type { PlayerPayload } from "@/player/msePlayer";
+import Mp4Player from "./Mp4Player.vue";
 
-const props = defineProps<{ kind: FileKind; url: string; name: string }>();
-const emit = defineEmits<{ close: [] }>();
+const props = defineProps<{
+  kind: FileKind;
+  url: string;
+  name: string;
+  player?: PlayerPayload | null;
+}>();
+const emit = defineEmits<{ close: []; error: [message: string] }>();
 
 const text = ref("");
 
@@ -28,7 +35,15 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
 </script>
 
 <template>
-  <div class="preview-backdrop" @click.self="emit('close')">
+  <!-- MP4 via MSE: the dedicated player owns the <video> + MediaSource. -->
+  <Mp4Player
+    v-if="player"
+    :payload="player"
+    :name="name"
+    @close="emit('close')"
+    @error="(m: string) => emit('error', m)"
+  />
+  <div v-else class="preview-backdrop" @click.self="emit('close')">
     <div class="preview-card">
       <header>
         <span class="name">{{ name }}</span>

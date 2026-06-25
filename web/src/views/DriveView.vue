@@ -223,7 +223,9 @@ const showNextPage = computed(() => folders.page < folders.totalPages - 1);
         :kind="files.preview.kind"
         :url="files.preview.url"
         :name="files.preview.name"
+        :player="files.preview.player"
         @close="files.closePreview()"
+        @error="(m: string) => (files.error = m)"
       />
 
       <MovePickerModal
