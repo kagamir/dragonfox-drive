@@ -63,6 +63,7 @@ const ACTIVE_WHERE: &str = "revoked_at IS NULL \
 
 #[derive(Debug, Serialize)]
 pub struct ShareListItem {
+    pub file_id: String,
     pub id: String,
     pub state: String,
     pub requires_password: bool,
@@ -132,7 +133,7 @@ pub async fn create(
 
 #[derive(Debug, Deserialize)]
 pub struct ListSharesQuery {
-    pub file_id: String,
+    pub file_id: Option<String>,
 }
 
 pub async fn list(
@@ -140,20 +141,34 @@ pub async fn list(
     user: AuthUser,
     Query(q): Query<ListSharesQuery>,
 ) -> ApiResult<Json<Value>> {
-    let rows: Vec<(String, Option<String>, Option<i32>, i32, Option<String>, String, bool)> =
-        sqlx::query_as(
-            "SELECT id, expires_at, download_limit, download_count, revoked_at, created_at, \
-             (password_hash IS NOT NULL) AS has_pw \
-             FROM shares WHERE owner_id = ? AND file_id = ? ORDER BY created_at DESC",
-        )
-        .bind(&user.user_id)
-        .bind(&q.file_id)
-        .fetch_all(&state.db)
-        .await?;
+    let (sql, file_filter): (&str, Option<&str>) = match q.file_id.as_deref() {
+        Some(fid) => (
+            "SELECT s.file_id, s.id, s.expires_at, s.download_limit, s.download_count, \
+             s.revoked_at, s.created_at, (s.password_hash IS NOT NULL) AS has_pw \
+             FROM shares s WHERE s.owner_id = ? AND s.file_id = ? ORDER BY s.created_at DESC",
+            Some(fid),
+        ),
+        None => (
+            "SELECT s.file_id, s.id, s.expires_at, s.download_limit, s.download_count, \
+             s.revoked_at, s.created_at, (s.password_hash IS NOT NULL) AS has_pw \
+             FROM shares s WHERE s.owner_id = ? ORDER BY s.created_at DESC",
+            None,
+        ),
+    };
+    let mut qry = sqlx::query_as::<
+        _,
+        (String, String, Option<String>, Option<i32>, i32, Option<String>, String, bool),
+    >(sql)
+    .bind(&user.user_id);
+    if let Some(fid) = file_filter {
+        qry = qry.bind(fid);
+    }
+    let rows = qry.fetch_all(&state.db).await?;
     let now = chrono::Utc::now();
     let items: Vec<ShareListItem> = rows
         .into_iter()
-        .map(|(id, expires_at, dl, dc, revoked_at, created_at, has_pw)| ShareListItem {
+        .map(|(file_id, id, expires_at, dl, dc, revoked_at, created_at, has_pw)| ShareListItem {
+            file_id,
             id,
             state: active_state(&revoked_at, &expires_at, dl.map(|v| v as i64), dc as i64, now)
                 .into(),
@@ -524,7 +539,7 @@ mod tests {
             State(state.clone()),
             auth("u1"),
             Query(ListSharesQuery {
-                file_id: "f1".into(),
+                file_id: Some("f1".into()),
             }),
         )
         .await
@@ -612,10 +627,36 @@ mod tests {
         )
         .bind(&id).execute(&state.db).await.unwrap();
         let res = list(State(state.clone()), auth("u1"),
-            Query(ListSharesQuery { file_id: "f1".into() })).await.unwrap();
+            Query(ListSharesQuery { file_id: Some("f1".into()) })).await.unwrap();
         let arr = res.0["shares"].as_array().unwrap();
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0]["requires_password"], true);
+    }
+
+    #[tokio::test]
+    async fn list_all_returns_all_shares_with_file_id() {
+        let (state, _g) = shares_state().await;
+        seed_user(&state, "u1").await;
+        seed_ready_file(&state, "f1", "u1").await;
+        seed_ready_file(&state, "f2", "u1").await;
+        create(State(state.clone()), auth("u1"), Json(create_req("f1")))
+            .await
+            .unwrap();
+        create(State(state.clone()), auth("u1"), Json(create_req("f2")))
+            .await
+            .unwrap();
+        let res = list(
+            State(state.clone()),
+            auth("u1"),
+            Query(ListSharesQuery { file_id: None }),
+        )
+        .await
+        .unwrap();
+        let items = res.0["shares"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        let fids: Vec<&str> = items.iter().map(|s| s["file_id"].as_str().unwrap()).collect();
+        assert!(fids.contains(&"f1"));
+        assert!(fids.contains(&"f2"));
     }
 
     async fn seed_chunk(state: &AppState, file_id: &str) {
