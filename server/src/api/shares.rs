@@ -677,6 +677,31 @@ mod tests {
         assert!(fids.contains(&"f2"));
     }
 
+    #[tokio::test]
+    async fn list_all_scopes_to_owner() {
+        let (state, _g) = shares_state().await;
+        seed_user(&state, "u1").await;
+        seed_user(&state, "u2").await;
+        seed_ready_file(&state, "f1", "u1").await;
+        seed_ready_file(&state, "f2", "u2").await;
+        create(State(state.clone()), auth("u1"), Json(create_req("f1")))
+            .await
+            .unwrap();
+        create(State(state.clone()), auth("u2"), Json(create_req("f2")))
+            .await
+            .unwrap();
+        let res = list(
+            State(state.clone()),
+            auth("u1"),
+            Query(ListSharesQuery { file_id: None }),
+        )
+        .await
+        .unwrap();
+        let items = res.0["shares"].as_array().unwrap();
+        assert_eq!(items.len(), 1, "global list must only return the caller's shares");
+        assert_eq!(items[0]["file_id"].as_str().unwrap(), "f1");
+    }
+
     async fn seed_chunk(state: &AppState, file_id: &str) {
         crate::storage::write_chunk(state, file_id, 0, b"cipherbytes").await.unwrap();
     }
