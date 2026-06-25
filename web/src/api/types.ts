@@ -182,3 +182,13 @@ export interface PatchFileMoveRequest {
   encrypted_file_key: string;
   encrypted_file_key_nonce: string;
 }
+
+// ---- Devices (P4) -------------------------------------------------------
+
+export interface DeviceItem {
+  id: string;
+  name: string;
+  last_seen_at: string | null;
+  created_at: string;
+  revoked_at: string | null;
+}

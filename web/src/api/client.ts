@@ -36,6 +36,19 @@ let authToken: string | null = null;
 let refreshToken: string | null = null;
 let inflightRefresh: Promise<boolean> | null = null;
 
+/**
+ * Registered by the auth store (via App.vue) so client.ts can signal a
+ * session-loss event (refresh-token failure) without importing the store
+ * directly (which would create a cycle: stores import client, client must
+ * not import stores).
+ */
+export type SessionLostCallback = () => void | Promise<void>;
+let sessionLostCallback: SessionLostCallback | null = null;
+
+export function onSessionLost(cb: SessionLostCallback): void {
+  sessionLostCallback = cb;
+}
+
 export function setAuthToken(token: string | null): void {
   authToken = token;
 }
@@ -88,6 +101,13 @@ async function refreshAndRetry(): Promise<boolean> {
     } catch {
       clearRefreshToken();
       setAuthToken(null);
+      if (sessionLostCallback) {
+        try {
+          await sessionLostCallback();
+        } catch {
+          /* swallow; auth store owns its own failures */
+        }
+      }
       return false;
     } finally {
       inflightRefresh = null;

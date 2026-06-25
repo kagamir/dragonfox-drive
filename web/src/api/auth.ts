@@ -19,4 +19,7 @@ export const authApi = {
 
   refresh: (refreshToken: string) =>
     http.post<TokenPair>("/api/auth/refresh", { refresh_token: refreshToken }),
+
+  logout: (): Promise<void> =>
+    http.post<{ ok: boolean }>("/api/auth/logout").then(() => undefined),
 };
