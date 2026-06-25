@@ -496,6 +496,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn refresh_rejects_when_device_was_revoked() {
+        let (state, _dir) = test_state_with_db().await;
+        let res = register(State(state.clone()), HeaderMap::new(), Json(req("alice"))).await.unwrap();
+        let rt = res.0.tokens.refresh_token.clone();
+
+        // Simulate "another session revoked this device" — soft-set devices.revoked_at
+        // AND cascade refresh_tokens.revoked_at, exactly like DELETE /api/devices/:id does.
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query("UPDATE devices SET revoked_at = ? WHERE id = ?")
+            .bind(&now)
+            .bind(&res.0.device_id)
+            .execute(&state.db)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE refresh_tokens SET revoked_at = ? WHERE device_id = ? AND revoked_at IS NULL")
+            .bind(&now)
+            .bind(&res.0.device_id)
+            .execute(&state.db)
+            .await
+            .unwrap();
+
+        match refresh(State(state.clone()), Json(RefreshRequest { refresh_token: rt })).await {
+            Err(ApiError::Unauthorized) => {}
+            other => panic!("expected Unauthorized after device revoke, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn login_creates_a_device_row_with_parsed_ua() {
         let (state, _dir) = test_state_with_db().await;
         register(State(state.clone()), HeaderMap::new(), Json(req("alice")))

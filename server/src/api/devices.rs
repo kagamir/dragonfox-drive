@@ -1,7 +1,7 @@
 use axum::extract::{Path, State};
 use axum::Json;
 use chrono::Utc;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::auth::AuthUser;
 use crate::error::{ApiError, ApiResult};
@@ -117,11 +117,19 @@ mod tests {
     #[tokio::test]
     async fn list_returns_all_devices_for_user_ordered_by_created_desc() {
         let (state, _dir) = test_state().await;
-        let (uid, _a, _b) = seed_user_and_devices(&state).await;
-        let res = list(State(state.clone()), auth(&uid, "dev-a")).await.unwrap();
+        let uid = "u1";
+        sqlx::query("INSERT INTO users (id, username, kdf_salt, server_salt, verifier_hash, encrypted_master_key, encrypted_master_key_nonce) VALUES (?, ?, 's','s','h','k','n')")
+            .bind(uid).bind(uid).execute(&state.db).await.unwrap();
+        // Explicit, distinct created_at so DESC ordering is deterministic.
+        sqlx::query("INSERT INTO devices (id, user_id, name, created_at) VALUES ('dev-old', ?, 'Older', '2026-06-01T00:00:00Z')")
+            .bind(uid).execute(&state.db).await.unwrap();
+        sqlx::query("INSERT INTO devices (id, user_id, name, created_at) VALUES ('dev-new', ?, 'Newer', '2026-06-25T00:00:00Z')")
+            .bind(uid).execute(&state.db).await.unwrap();
+
+        let res = list(State(state.clone()), auth(uid, "dev-new")).await.unwrap();
         assert_eq!(res.0.devices.len(), 2);
-        assert!(res.0.devices.iter().any(|d| d.id == "dev-a"));
-        assert!(res.0.devices.iter().any(|d| d.id == "dev-b"));
+        assert_eq!(res.0.devices[0].id, "dev-new", "newest device must come first");
+        assert_eq!(res.0.devices[1].id, "dev-old");
     }
 
     #[tokio::test]
