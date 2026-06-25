@@ -133,7 +133,12 @@ export function playMp4(
         // across seeks. Safe: only removes behind data, never re-fed.
         await evictBehind(sb);
         if (disposed) return;
-        const seg = q.shift()!;
+        // shift() can return undefined if a seek cleared segQueues (same array
+        // reference) during the awaits above — re-evaluate rather than crash on
+        // seg.buffer. The cleared segments belong to a stale seek target and are
+        // intentionally discarded; the new feed's onSegment will restart drain.
+        const seg = q.shift();
+        if (!seg) continue;
         try {
           await appendAndWait(sb, seg.buffer);
         } catch (e) {
