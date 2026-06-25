@@ -47,20 +47,23 @@ material.
 
 ## Wrapping variants for `master_key`
 
-`master_key` is stored on the server wrapped multiple ways so the same user
-can unlock from different paths:
+`master_key` is stored on the server wrapped by `password_key` (so any device
+can unlock with the password). For passwordless re-login, the browser also
+keeps a local-only `device_wrap` in IndexedDB.
 
-| Wrap name        | Key used for AES-GCM       | Purpose                              |
-|------------------|----------------------------|--------------------------------------|
-| `password_wrap`  | `password_key`             | Any-device login with password       |
-| `device_wrap`    | `device_key` (per-browser) | Passwordless re-login on a device    |
+| Wrap name        | Key used for AES-GCM       | Where it lives        | Purpose                              |
+|------------------|----------------------------|-----------------------|--------------------------------------|
+| `password_wrap`  | `password_key`             | Server (users row)    | Any-device login with password       |
+| `device_wrap`    | `device_key` (per-browser) | Browser IndexedDB     | Passwordless re-login on this device |
 
-- `device_key` is a random 32 B stored in IndexedDB (localforage).
-- Adding a new device: log in with password, then create a new `device_wrap`
-  and POST it to `/api/devices`.
-- Revoking a device: server deletes the `devices` row; its `device_wrap` is
-  gone and the browser's IndexedDB copy becomes useless as soon as the JWT
-  expires.
+- `device_key` is a random 32 B stored only in IndexedDB (localforage); the
+  server never sees it and never stores a copy of `device_wrap`.
+- A new device logs in with password (which creates a fresh `device_wrap` in
+  that browser's IndexedDB and a new row in the server's `devices` table).
+- Revoking a device: `DELETE /api/devices/:id` soft-sets `devices.revoked_at`
+  and cascades to `refresh_tokens`. The browser's IndexedDB `device_wrap`
+  becomes useless as soon as the access token expires (or immediately, since
+  the per-request check rejects the next API call).
 
 ## File encryption (per-chunk AES-GCM)
 

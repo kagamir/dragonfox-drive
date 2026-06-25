@@ -88,7 +88,7 @@ variables (e.g. `DRAGONFOX__JWT__SECRET=...`).
 | P1 | Scaffolding, E2EE auth, single-chunk upload/download | ✅ complete |
 | P2 | Chunked upload/download, video streaming | ✅ complete (P2b: streaming via MSE + mp4box.js; the earlier SW-proxy approach was replaced) |
 | P3 | Link sharing, encrypted folder tree | ✅ complete |
-| P4 | Device management & revocation, polish | ⏳ planned |
+| P4 | Device management & revocation, polish | ✅ complete |
 
 ## License
 
