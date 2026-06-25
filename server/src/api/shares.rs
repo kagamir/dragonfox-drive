@@ -203,6 +203,24 @@ pub async fn revoke(
     Ok(Json(json!({ "ok": true })))
 }
 
+/// Hard-delete a share row (owner only). Distinct from `revoke`, which keeps
+/// the row for audit. 404 for non-owner or missing — never leaks existence.
+pub async fn purge(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let res = sqlx::query("DELETE FROM shares WHERE id = ? AND owner_id = ?")
+        .bind(&id)
+        .bind(&user.user_id)
+        .execute(&state.db)
+        .await?;
+    if res.rows_affected() == 0 {
+        return Err(ApiError::NotFound);
+    }
+    Ok(Json(json!({ "ok": true })))
+}
+
 // --- Public endpoints (implemented in Task 3) -------------------------------
 
 pub async fn get(
@@ -777,5 +795,51 @@ mod tests {
         assert!(!ct_eq_hex("ab", "cd"));
         assert!(!ct_eq_hex("ab", "abc"));
         assert!(!ct_eq_hex("zz", "ab")); // non-hex -> false
+    }
+
+    #[tokio::test]
+    async fn purge_removes_row_for_owner() {
+        let (state, _g) = shares_state().await;
+        seed_user(&state, "u1").await;
+        seed_ready_file(&state, "f1", "u1").await;
+        let res = create(State(state.clone()), auth("u1"), Json(create_req("f1")))
+            .await
+            .unwrap();
+        let id = res.0["id"].as_str().unwrap().to_string();
+        purge(State(state.clone()), auth("u1"), Path(id.clone()))
+            .await
+            .unwrap();
+        let (cnt,): (i32,) = sqlx::query_as("SELECT count(*) FROM shares WHERE id = ?")
+            .bind(&id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(cnt, 0);
+    }
+
+    #[tokio::test]
+    async fn purge_404_for_non_owner() {
+        let (state, _g) = shares_state().await;
+        seed_user(&state, "u1").await;
+        seed_user(&state, "u2").await;
+        seed_ready_file(&state, "f1", "u1").await;
+        let res = create(State(state.clone()), auth("u1"), Json(create_req("f1")))
+            .await
+            .unwrap();
+        let id = res.0["id"].as_str().unwrap().to_string();
+        let err = purge(State(state.clone()), auth("u2"), Path(id))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ApiError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn purge_404_for_missing() {
+        let (state, _g) = shares_state().await;
+        seed_user(&state, "u1").await;
+        let err = purge(State(state.clone()), auth("u1"), Path("nope".into()))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ApiError::NotFound));
     }
 }

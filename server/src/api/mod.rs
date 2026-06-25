@@ -46,6 +46,7 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/api/shares", get(shares::list).post(shares::create))
         .route("/api/shares/:id", get(shares::get).delete(shares::revoke))
+        .route("/api/shares/:id/purge", axum::routing::delete(shares::purge))
         .route("/api/shares/:id/verify", post(shares::verify))
         .route("/api/shares/:id/chunks/:idx", get(shares::get_chunk))
 }
