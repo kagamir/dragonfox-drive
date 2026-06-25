@@ -71,11 +71,10 @@ describe("SettingsView Devices card", () => {
     logoutMock.mockReset();
   });
 
-  it("marks the current device; revoked rows have no action button", async () => {
+  it("marks the current device and renders revoke for others", async () => {
     listMock.mockResolvedValueOnce([
-      { id: "cur",   name: "Chrome · macOS",   last_seen_at: null, created_at: "2026-06-25T00:00:00Z", revoked_at: null },
-      { id: "other", name: "Firefox · Windows", last_seen_at: null, created_at: "2026-06-20T00:00:00Z", revoked_at: null },
-      { id: "gone",  name: "Safari · iOS",     last_seen_at: null, created_at: "2026-06-10T00:00:00Z", revoked_at: "2026-06-15T00:00:00Z" },
+      { id: "cur",   name: "Chrome · macOS",   last_seen_at: null, created_at: "2026-06-25T00:00:00Z" },
+      { id: "other", name: "Firefox · Windows", last_seen_at: null, created_at: "2026-06-20T00:00:00Z" },
     ]);
     const w = mountWith("cur");
     await flushPromises();
@@ -84,24 +83,19 @@ describe("SettingsView Devices card", () => {
     expect(text).toContain("Chrome · macOS");
     expect(text).toContain("Current device");
     expect(text).toContain("Firefox · Windows");
-    expect(text).toContain("Safari · iOS");
 
     const labels = w.findAll("button").map((b) => b.text());
     expect(labels).toContain("Sign out");
     expect(labels).toContain("Revoke");
-
-    const revokedRow = w.findAll("tr").find((tr) => tr.text().includes("Safari"));
-    expect(revokedRow?.findAll("button").length).toBe(0);
   });
 
   it("clicking Revoke calls devicesApi.revoke and refetches the list", async () => {
     listMock.mockResolvedValueOnce([
-      { id: "cur",   name: "A", last_seen_at: null, created_at: "t", revoked_at: null },
-      { id: "other", name: "B", last_seen_at: null, created_at: "t", revoked_at: null },
+      { id: "cur",   name: "A", last_seen_at: null, created_at: "t" },
+      { id: "other", name: "B", last_seen_at: null, created_at: "t" },
     ]);
     listMock.mockResolvedValueOnce([
-      { id: "cur",   name: "A", last_seen_at: null, created_at: "t", revoked_at: null },
-      { id: "other", name: "B", last_seen_at: null, created_at: "t", revoked_at: "2026-06-25T00:00:00Z" },
+      { id: "cur", name: "A", last_seen_at: null, created_at: "t" },
     ]);
     revokeMock.mockResolvedValueOnce(undefined);
 

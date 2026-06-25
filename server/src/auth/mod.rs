@@ -145,13 +145,13 @@ impl FromRequestParts<AppState> for AuthUser {
 
         let device_id = claims.dev;
 
-        // Per-request revocation check: the JWT's `dev` claim MUST reference an
-        // active (non-revoked) device owned by `sub`. A missing row means the
-        // device was deleted; a non-null `revoked_at` means it was revoked.
-        // Either way → 401. This is what makes revocation immediate: the very
-        // next request after `UPDATE devices SET revoked_at = ...` is rejected.
-        let revoked: Option<(Option<String>,)> = sqlx::query_as(
-            "SELECT revoked_at FROM devices WHERE id = ? AND user_id = ?",
+        // Per-request revocation check: the JWT's `dev` claim MUST reference a
+        // devices row that still exists and is owned by `sub`. A missing row
+        // means the device was hard-deleted (revoke/logout) → 401. This is
+        // what makes revocation immediate: the very next request after
+        // `DELETE FROM devices` is rejected.
+        let exists: Option<(i32,)> = sqlx::query_as(
+            "SELECT 1 FROM devices WHERE id = ? AND user_id = ?",
         )
         .bind(&device_id)
         .bind(&claims.sub)
@@ -159,10 +159,9 @@ impl FromRequestParts<AppState> for AuthUser {
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?;
 
-        match revoked {
+        match exists {
             None => return Err(ApiError::Unauthorized),
-            Some((Some(_revoked_at),)) => return Err(ApiError::Unauthorized),
-            Some((None,)) => {}
+            Some(_) => {}
         }
 
         // Throttled `last_seen_at` write: at most one UPDATE per device per 60s.
@@ -352,7 +351,7 @@ mod tests {
         .unwrap();
     }
 
-    /// Insert a device row (active by default — no revoked_at).
+    /// Insert a device row.
     async fn seed_device(state: &AppState, device_id: &str, user_id: &str) {
         sqlx::query("INSERT INTO devices (id, user_id, name) VALUES (?, ?, 'Test')")
             .bind(device_id)
@@ -362,11 +361,9 @@ mod tests {
             .unwrap();
     }
 
-    /// Mark a device as revoked at the current wall-clock time.
-    async fn revoke_device(state: &AppState, device_id: &str) {
-        let now = Utc::now().to_rfc3339();
-        sqlx::query("UPDATE devices SET revoked_at = ? WHERE id = ?")
-            .bind(now)
+    /// Hard-delete a device row (cascades to its refresh_tokens via FK).
+    async fn delete_device(state: &AppState, device_id: &str) {
+        sqlx::query("DELETE FROM devices WHERE id = ?")
             .bind(device_id)
             .execute(&state.db)
             .await
@@ -374,12 +371,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn auth_user_extractor_rejects_a_revoked_device() {
+    async fn auth_user_extractor_rejects_a_deleted_device() {
         let (state, _dir) = test_state_with_db().await;
         seed_user(&state, "u1").await;
         seed_device(&state, "dev-1", "u1").await;
         let pair = issue_token_pair(&state, "u1", "dev-1").unwrap();
-        revoke_device(&state, "dev-1").await;
+        delete_device(&state, "dev-1").await;
 
         let req = Request::builder()
             .header("authorization", format!("Bearer {}", pair.access_token))

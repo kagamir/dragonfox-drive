@@ -248,22 +248,12 @@ pub async fn logout(
     State(state): State<AppState>,
     user: AuthUser,
 ) -> ApiResult<Json<serde_json::Value>> {
-    let now = Utc::now().to_rfc3339();
-    sqlx::query(
-        "UPDATE devices SET revoked_at = ? WHERE id = ? AND user_id = ? AND revoked_at IS NULL",
-    )
-    .bind(&now)
-    .bind(&user.device_id)
-    .bind(&user.user_id)
-    .execute(&state.db)
-    .await?;
-    sqlx::query(
-        "UPDATE refresh_tokens SET revoked_at = ? WHERE device_id = ? AND revoked_at IS NULL",
-    )
-    .bind(&now)
-    .bind(&user.device_id)
-    .execute(&state.db)
-    .await?;
+    let _ = sqlx::query("DELETE FROM devices WHERE id = ? AND user_id = ?")
+        .bind(&user.device_id)
+        .bind(&user.user_id)
+        .execute(&state.db)
+        .await?;
+    // refresh_tokens cascade automatically via FK ON DELETE CASCADE
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -496,22 +486,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn refresh_rejects_when_device_was_revoked() {
+    async fn refresh_rejects_when_device_was_deleted() {
         let (state, _dir) = test_state_with_db().await;
         let res = register(State(state.clone()), HeaderMap::new(), Json(req("alice"))).await.unwrap();
         let rt = res.0.tokens.refresh_token.clone();
 
-        // Simulate "another session revoked this device" — soft-set devices.revoked_at
-        // AND cascade refresh_tokens.revoked_at, exactly like DELETE /api/devices/:id does.
-        let now = chrono::Utc::now().to_rfc3339();
-        sqlx::query("UPDATE devices SET revoked_at = ? WHERE id = ?")
-            .bind(&now)
-            .bind(&res.0.device_id)
-            .execute(&state.db)
-            .await
-            .unwrap();
-        sqlx::query("UPDATE refresh_tokens SET revoked_at = ? WHERE device_id = ? AND revoked_at IS NULL")
-            .bind(&now)
+        // Simulate "another session revoked this device" — hard-delete the
+        // devices row, which cascades to refresh_tokens via FK ON DELETE CASCADE
+        // (exactly like DELETE /api/devices/:id does).
+        sqlx::query("DELETE FROM devices WHERE id = ?")
             .bind(&res.0.device_id)
             .execute(&state.db)
             .await
@@ -519,7 +502,7 @@ mod tests {
 
         match refresh(State(state.clone()), Json(RefreshRequest { refresh_token: rt })).await {
             Err(ApiError::Unauthorized) => {}
-            other => panic!("expected Unauthorized after device revoke, got {other:?}"),
+            other => panic!("expected Unauthorized after device delete, got {other:?}"),
         }
     }
 
@@ -575,7 +558,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn logout_soft_revokes_current_device_and_refresh_tokens() {
+    async fn logout_deletes_current_device_and_cascades_refresh_tokens() {
         let (state, _dir) = test_state_with_db().await;
         let res = register(State(state.clone()), HeaderMap::new(), Json(req("alice"))).await.unwrap();
         // Add a refresh token for the registered device so we can verify cascade.
@@ -593,18 +576,18 @@ mod tests {
         };
         logout(State(state.clone()), user).await.unwrap();
 
-        let dev: (Option<String>,) = sqlx::query_as("SELECT revoked_at FROM devices WHERE id = ?")
+        let dev_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM devices WHERE id = ?")
             .bind(&res.0.device_id)
             .fetch_one(&state.db)
             .await
             .unwrap();
-        assert!(dev.0.is_some(), "device must be soft-revoked on logout");
+        assert_eq!(dev_count.0, 0, "device must be hard-deleted on logout");
 
-        let rt: (Option<String>,) = sqlx::query_as("SELECT revoked_at FROM refresh_tokens WHERE id = 'rt-x'")
+        let rt_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM refresh_tokens WHERE id = 'rt-x'")
             .fetch_one(&state.db)
             .await
             .unwrap();
-        assert!(rt.0.is_some(), "refresh tokens must be cascaded");
+        assert_eq!(rt_count.0, 0, "refresh tokens must cascade-delete");
     }
 
     #[tokio::test]

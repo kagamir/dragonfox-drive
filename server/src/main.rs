@@ -246,11 +246,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn protected_route_rejects_a_revoked_device() {
+    async fn protected_route_rejects_a_deleted_device() {
         let (app, state) = test_router(104857600).await;
         let token = bearer(&state, "user-1").await;
-        sqlx::query("UPDATE devices SET revoked_at = ? WHERE id = ?")
-            .bind(chrono::Utc::now().to_rfc3339())
+        sqlx::query("DELETE FROM devices WHERE id = ?")
             .bind("test-device")
             .execute(&state.db)
             .await

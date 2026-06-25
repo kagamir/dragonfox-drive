@@ -60,10 +60,10 @@ keeps a local-only `device_wrap` in IndexedDB.
   server never sees it and never stores a copy of `device_wrap`.
 - A new device logs in with password (which creates a fresh `device_wrap` in
   that browser's IndexedDB and a new row in the server's `devices` table).
-- Revoking a device: `DELETE /api/devices/:id` soft-sets `devices.revoked_at`
-  and cascades to `refresh_tokens`. The browser's IndexedDB `device_wrap`
-  becomes useless as soon as the access token expires (or immediately, since
-  the per-request check rejects the next API call).
+- Revoking a device: `DELETE /api/devices/:id` hard-deletes the `devices` row
+  (cascading to its `refresh_tokens` via the foreign key). The browser's
+  IndexedDB `device_wrap` becomes useless as soon as the access token expires
+  (or immediately, since the per-request check rejects the next API call).
 
 ## File encryption (per-chunk AES-GCM)
 

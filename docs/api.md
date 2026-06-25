@@ -74,21 +74,22 @@ Returns a new `TokenPair`.
 
 ### `POST /api/auth/logout`
 
-Revokes the device associated with the request's access token: soft-sets
-`devices.revoked_at` and `refresh_tokens.revoked_at` for that device. The
-access token itself remains valid until its natural `exp` (≤15 min), so the
-client should also discard tokens locally on success. The current device
-disappears from the active set immediately; a new login creates a new
-device row.
+Hard-deletes the device row associated with the request's access token
+(`DELETE FROM devices`), cascading to that device's `refresh_tokens` via the
+`refresh_tokens.device_id` foreign key (`ON DELETE CASCADE`). The access token
+itself remains valid until its natural `exp` (≤15 min), so the client should
+also discard tokens locally on success. The current device disappears from
+`GET /api/devices` immediately; a new login creates a new device row. No audit
+record is retained.
 
 ### Per-request device revocation check
 
 Every authenticated endpoint (`/api/files*`, `/api/folders*`, `/api/shares*`
 auth scopes, `/api/devices*`, `/api/auth/logout`) verifies the JWT signature
-**and** that the `dev` claim references an active (non-revoked) device owned
-by the `sub` user. A revoked device is rejected with `401` on its very next
-request — there is no grace window beyond the access-token TTL (which is
-already past, since revocation also cascades to `refresh_tokens`).
+**and** that the `dev` claim references a `devices` row that still exists and
+is owned by the `sub` user. A deleted device is rejected with `401` on its
+very next request — there is no grace window beyond the access-token TTL
+(which is already past, since deletion also cascades to `refresh_tokens`).
 
 ## Public configuration
 
@@ -111,10 +112,10 @@ All `/api/devices*` endpoints require `Authorization: Bearer <access_token>`.
 
 ### `GET /api/devices`
 
-Lists every device owned by the caller, ordered by `created_at DESC`,
-including revoked ones (audit). The client identifies the "current" device by
-comparing `id` to the `device_id` returned from its last login/register
-(persisted in IndexedDB).
+Lists every device owned by the caller, ordered by `created_at DESC` (active
+devices only — revoked devices are hard-deleted and never appear). The client
+identifies the "current" device by comparing `id` to the `device_id` returned
+from its last login/register (persisted in IndexedDB).
 
 Response:
 ```json
@@ -124,8 +125,7 @@ Response:
       "id": "uuid",
       "name": "Chrome 120 · macOS",
       "last_seen_at": "2026-06-25T10:00:00Z",
-      "created_at": "2026-06-20T08:00:00Z",
-      "revoked_at": null
+      "created_at": "2026-06-20T08:00:00Z"
     }
   ]
 }
@@ -137,10 +137,12 @@ seconds per device.
 
 ### `DELETE /api/devices/:id`
 
-Soft-revokes a device: sets `devices.revoked_at = now` and cascades to all
-of that device's `refresh_tokens.revoked_at`. Returns `400` if `:id` is the
-caller's current device (`use POST /api/auth/logout` instead). Returns `404`
-if the device does not exist or is not owned by the caller.
+**Hard-deletes** a device: `DELETE FROM devices` and cascades to all of that
+device's `refresh_tokens` via the foreign key (`ON DELETE CASCADE`). The device
+disappears from `GET /api/devices` immediately. No audit record is retained.
+Returns `400` if `:id` is the caller's current device (`use
+POST /api/auth/logout` instead). Returns `404` if the device does not exist or
+is not owned by the caller.
 
 Response: `{ "ok": true }`.
 

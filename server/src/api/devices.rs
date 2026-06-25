@@ -1,6 +1,5 @@
 use axum::extract::{Path, State};
 use axum::Json;
-use chrono::Utc;
 use serde::Serialize;
 
 use crate::auth::AuthUser;
@@ -13,7 +12,6 @@ pub struct DeviceItem {
     pub name: String,
     pub last_seen_at: Option<String>,
     pub created_at: String,
-    pub revoked_at: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -30,8 +28,8 @@ pub async fn list(
     State(state): State<AppState>,
     user: AuthUser,
 ) -> ApiResult<Json<ListDevicesResponse>> {
-    let rows: Vec<(String, String, Option<String>, String, Option<String>)> = sqlx::query_as(
-        "SELECT id, name, last_seen_at, created_at, revoked_at \
+    let rows: Vec<(String, String, Option<String>, String)> = sqlx::query_as(
+        "SELECT id, name, last_seen_at, created_at \
          FROM devices WHERE user_id = ? ORDER BY created_at DESC",
     )
     .bind(&user.user_id)
@@ -40,8 +38,8 @@ pub async fn list(
 
     let devices = rows
         .into_iter()
-        .map(|(id, name, last_seen_at, created_at, revoked_at)| DeviceItem {
-            id, name, last_seen_at, created_at, revoked_at,
+        .map(|(id, name, last_seen_at, created_at)| DeviceItem {
+            id, name, last_seen_at, created_at,
         })
         .collect();
     Ok(Json(ListDevicesResponse { devices }))
@@ -57,25 +55,15 @@ pub async fn revoke(
             "cannot revoke current device; use logout instead".into(),
         ));
     }
-    let now = Utc::now().to_rfc3339();
-    let result = sqlx::query(
-        "UPDATE devices SET revoked_at = ? WHERE id = ? AND user_id = ? AND revoked_at IS NULL",
-    )
-    .bind(&now)
-    .bind(&id)
-    .bind(&user.user_id)
-    .execute(&state.db)
-    .await?;
+    let result = sqlx::query("DELETE FROM devices WHERE id = ? AND user_id = ?")
+        .bind(&id)
+        .bind(&user.user_id)
+        .execute(&state.db)
+        .await?;
     if result.rows_affected() == 0 {
         return Err(ApiError::NotFound);
     }
-    sqlx::query(
-        "UPDATE refresh_tokens SET revoked_at = ? WHERE device_id = ? AND revoked_at IS NULL",
-    )
-    .bind(&now)
-    .bind(&id)
-    .execute(&state.db)
-    .await?;
+    // refresh_tokens cascade automatically via FK ON DELETE CASCADE
     Ok(Json(RevokeResponse { ok: true }))
 }
 
@@ -133,18 +121,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn revoke_soft_sets_revoked_at_and_cascades_refresh_tokens() {
+    async fn revoke_hard_deletes_device_and_cascades_refresh_tokens() {
         let (state, _dir) = test_state().await;
         let (uid, _a, _b) = seed_user_and_devices(&state).await;
         sqlx::query("INSERT INTO refresh_tokens (id, user_id, device_id, token_hash, expires_at) VALUES ('rt-1', ?, 'dev-b', 'hash-1', '2099-01-01T00:00:00Z')")
             .bind(&uid).execute(&state.db).await.unwrap();
         revoke(State(state.clone()), auth(&uid, "dev-a"), Path("dev-b".into())).await.unwrap();
-        let dev: (Option<String>,) = sqlx::query_as("SELECT revoked_at FROM devices WHERE id = 'dev-b'")
+        let dev_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM devices WHERE id = 'dev-b'")
             .fetch_one(&state.db).await.unwrap();
-        assert!(dev.0.is_some());
-        let rt: (Option<String>,) = sqlx::query_as("SELECT revoked_at FROM refresh_tokens WHERE id = 'rt-1'")
+        assert_eq!(dev_count.0, 0, "device row must be hard-deleted");
+        let rt_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM refresh_tokens WHERE id = 'rt-1'")
             .fetch_one(&state.db).await.unwrap();
-        assert!(rt.0.is_some());
+        assert_eq!(rt_count.0, 0, "refresh_tokens row must cascade-delete");
     }
 
     #[tokio::test]
@@ -172,8 +160,8 @@ mod tests {
         let (state, _dir) = test_state().await;
         let (uid, _a, _b) = seed_user_and_devices(&state).await;
         revoke(State(state.clone()), auth(&uid, "dev-a"), Path("dev-b".into())).await.unwrap();
-        let other: (Option<String>,) = sqlx::query_as("SELECT revoked_at FROM devices WHERE id = 'dev-a'")
+        let other: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM devices WHERE id = 'dev-a'")
             .fetch_one(&state.db).await.unwrap();
-        assert!(other.0.is_none(), "revoking dev-b must not affect dev-a");
+        assert_eq!(other.0, 1, "revoking dev-b must not affect dev-a");
     }
 }

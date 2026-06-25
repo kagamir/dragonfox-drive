@@ -25,7 +25,6 @@ describe("devicesApi", () => {
           name: "n",
           last_seen_at: null,
           created_at: "t",
-          revoked_at: null,
         },
       ],
     });

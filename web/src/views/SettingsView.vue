@@ -107,20 +107,19 @@ onMounted(async () => {
         <p v-else-if="!devices.length" class="muted">No registered devices.</p>
         <table v-else class="devices">
           <tbody>
-            <tr v-for="d in devices" :key="d.id" :class="{ revoked: !!d.revoked_at, current: d.id === auth.deviceId }">
+            <tr v-for="d in devices" :key="d.id" :class="{ current: d.id === auth.deviceId }">
               <td class="name">
                 <strong>{{ d.name }}</strong>
                 <div class="meta">
                   <span v-if="d.id === auth.deviceId" class="badge">Current device</span>
-                  <span v-if="d.revoked_at">Revoked · {{ fmt(d.revoked_at) }}</span>
-                  <span v-else>Last seen {{ relativeTime(d.last_seen_at) }}</span>
+                  <span>Last seen {{ relativeTime(d.last_seen_at) }}</span>
                 </div>
               </td>
               <td class="actions">
                 <button v-if="d.id === auth.deviceId" class="link" :disabled="busySignOut" @click="onSignOut">
                   {{ busySignOut ? "Signing out..." : "Sign out" }}
                 </button>
-                <button v-else-if="!d.revoked_at" class="link danger" :disabled="busyId === d.id" @click="onRevokeDevice(d.id)">
+                <button v-else class="link danger" :disabled="busyId === d.id" @click="onRevokeDevice(d.id)">
                   {{ busyId === d.id ? "Revoking..." : "Revoke" }}
                 </button>
               </td>
@@ -176,7 +175,6 @@ h1 { margin: 0 0 1rem; font-size: 1.4rem; }
 .danger { color: #c0392b; }
 .devices { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 .devices td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--df-color-border); vertical-align: top; }
-.devices tr.revoked td { opacity: 0.5; }
 .meta { color: var(--df-color-fg-muted); font-size: 0.8rem; margin-top: 0.2rem; }
 .badge { background: var(--df-color-bg); border: 1px solid var(--df-color-border); padding: 0.1rem 0.4rem; border-radius: var(--df-radius-sm); margin-right: 0.4rem; }
 .actions { text-align: right; white-space: nowrap; }
