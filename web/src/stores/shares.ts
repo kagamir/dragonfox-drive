@@ -13,12 +13,18 @@ export interface CreatedShare {
 
 export const useSharesStore = defineStore("shares", () => {
   const byFile = ref<Record<string, ShareListItem[]>>({});
+  const all = ref<ShareListItem[]>([]);
   const creating = ref(false);
   const error = ref<string | null>(null);
 
   async function load(fileId: string): Promise<void> {
     const res = await sharesApi.listForFile(fileId);
     byFile.value[fileId] = res.shares;
+  }
+
+  async function loadAll(): Promise<void> {
+    const res = await sharesApi.listAll();
+    all.value = res.shares;
   }
 
   /**
@@ -77,7 +83,13 @@ export const useSharesStore = defineStore("shares", () => {
   async function revoke(fileId: string, id: string): Promise<void> {
     await sharesApi.revoke(id);
     await load(fileId);
+    await loadAll();
   }
 
-  return { byFile, creating, error, load, create, revoke };
+  async function purge(id: string): Promise<void> {
+    await sharesApi.purge(id);
+    await loadAll();
+  }
+
+  return { byFile, all, creating, error, load, loadAll, create, revoke, purge };
 });
