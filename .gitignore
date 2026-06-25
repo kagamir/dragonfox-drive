@@ -37,3 +37,7 @@ logs/
 *.dll
 *.so
 *.dylib
+
+# ===== AI =====
+superpowers/
+.superpowers/
