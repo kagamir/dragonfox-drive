@@ -9,6 +9,7 @@ mod error;
 mod models;
 mod state;
 mod storage;
+mod util;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
