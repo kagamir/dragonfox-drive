@@ -28,6 +28,13 @@
   `./libsodium-sumo.mjs`. A custom Vite plugin (`fixLibsodiumImport` in
   `web/vite.config.ts`) rewrites it to the real path inside `libsodium-sumo`.
   Do not remove that plugin or the production build will fail.
+- In the vitest config, `libsodium-wrappers-sumo` is **inlined** (so the
+  `fixLibsodiumImport` plugin rewrites its import) but `libsodium-sumo` (the
+  rewritten leaf) is kept **external**. vitest 3's vite-node intercepts
+  `module.exports` and writes `exports.default`, which clashes with
+  libsodium-sumo's getter-only `default` export
+  (`Cannot set property default of [object Module]`). Loading it natively
+  sidesteps this. Do not move `libsodium-sumo` back into `test.server.deps.inline`.
 - `vue-tsc -b` (project references) conflicts with Vite's ESM loading of
   `vite.config.ts`. The `build` script intentionally runs `vite build` only;
   typecheck is a separate script.

@@ -85,11 +85,18 @@ export default defineConfig({
     include: ["src/**/*.test.ts"],
     server: {
       deps: {
-        // Process libsodium through the Vite plugin pipeline so
-        // fixLibsodiumImport can rewrite the broken relative import.
-        // Without this, vitest's dep optimizer pre-bundles it and bypasses
-        // the plugin, causing the import to fail.
-        inline: ["libsodium-wrappers-sumo", "libsodium-sumo"],
+        // Process libsodium-wrappers-sumo through the Vite plugin pipeline so
+        // fixLibsodiumImport can rewrite the broken `./libsodium-sumo.mjs`
+        // relative import to the real path inside the `libsodium-sumo` package.
+        //
+        // The rewritten leaf (`libsodium-sumo`) is intentionally NOT inlined:
+        // vitest 3's vite-node intercepts `module.exports` and writes
+        // `exports.default`, but libsodium-sumo's ESM module exposes `default`
+        // as a getter-only property, causing "Cannot set property default".
+        // Loading it natively (external) sidesteps the interception while the
+        // resolveId rewrite above still points the import at the right file.
+        inline: ["libsodium-wrappers-sumo"],
+        external: ["libsodium-sumo", /^libsodium-sumo\//],
       },
     },
   },
