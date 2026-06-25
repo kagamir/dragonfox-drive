@@ -4,8 +4,7 @@ import { useToast } from "./useToast";
 describe("useToast", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    const { items } = useToast();
-    items.value.splice(0); // 清空单例
+    useToast().clear(); // 清空单例
   });
 
   it("success pushes a toast", () => {

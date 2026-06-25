@@ -1,4 +1,4 @@
-import { ref, shallowReadonly } from "vue";
+import { ref, readonly } from "vue";
 
 export type ToastType = "success" | "info" | "warning" | "error";
 export interface ToastItem {
@@ -21,13 +21,18 @@ function remove(id: number) {
   list.value = list.value.filter((t) => t.id !== id);
 }
 
+function clear() {
+  list.value = [];
+}
+
 export function useToast() {
   return {
-    items: shallowReadonly(list),
+    items: readonly(list),
     success: (m: string, d?: number) => push("success", m, d),
     info: (m: string, d?: number) => push("info", m, d),
     warning: (m: string, d?: number) => push("warning", m, d),
     error: (m: string, d = 6000) => push("error", m, d),
     remove,
+    clear,
   };
 }
