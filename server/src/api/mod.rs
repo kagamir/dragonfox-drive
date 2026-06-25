@@ -24,6 +24,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/auth/login", post(auth::login))
         .route("/api/auth/prelogin", post(auth::prelogin))
         .route("/api/auth/refresh", post(auth::refresh))
+        .route("/api/auth/logout", post(auth::logout))
         .route("/api/devices", get(devices::list))
         .route("/api/devices/:id", axum::routing::delete(devices::revoke))
         .route("/api/files", get(files::list).post(files::create))

@@ -11,7 +11,7 @@ use axum::Json;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
-use crate::auth::{issue_token_pair, persist_refresh_token, revoke_refresh_token, verify_access_token, TokenPair};
+use crate::auth::{issue_token_pair, persist_refresh_token, revoke_refresh_token, verify_access_token, AuthUser, TokenPair};
 use crate::error::{ApiError, ApiResult};
 use crate::models::User;
 use crate::state::AppState;
@@ -242,6 +242,29 @@ pub async fn refresh(
     let pair = issue_token_pair(&state, &claims.sub, &claims.dev)?;
     persist_refresh_token(&state, &claims.sub, Some(&claims.dev), &pair.refresh_token).await?;
     Ok(Json(pair))
+}
+
+pub async fn logout(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> ApiResult<Json<serde_json::Value>> {
+    let now = Utc::now().to_rfc3339();
+    sqlx::query(
+        "UPDATE devices SET revoked_at = ? WHERE id = ? AND user_id = ? AND revoked_at IS NULL",
+    )
+    .bind(&now)
+    .bind(&user.device_id)
+    .bind(&user.user_id)
+    .execute(&state.db)
+    .await?;
+    sqlx::query(
+        "UPDATE refresh_tokens SET revoked_at = ? WHERE device_id = ? AND revoked_at IS NULL",
+    )
+    .bind(&now)
+    .bind(&user.device_id)
+    .execute(&state.db)
+    .await?;
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 #[cfg(test)]
@@ -521,6 +544,39 @@ mod tests {
             .unwrap();
         let claims = crate::auth::verify_access_token(&state, &res.0.tokens.access_token).unwrap();
         assert_eq!(claims.dev, res.0.device_id);
+    }
+
+    #[tokio::test]
+    async fn logout_soft_revokes_current_device_and_refresh_tokens() {
+        let (state, _dir) = test_state_with_db().await;
+        let res = register(State(state.clone()), HeaderMap::new(), Json(req("alice"))).await.unwrap();
+        // Add a refresh token for the registered device so we can verify cascade.
+        sqlx::query("INSERT INTO refresh_tokens (id, user_id, device_id, token_hash, expires_at) \
+                     VALUES ('rt-x', ?, ?, 'h', '2099-01-01T00:00:00Z')")
+            .bind(&res.0.user_id)
+            .bind(&res.0.device_id)
+            .execute(&state.db)
+            .await
+            .unwrap();
+
+        let user = crate::auth::AuthUser {
+            user_id: res.0.user_id.clone(),
+            device_id: res.0.device_id.clone(),
+        };
+        logout(State(state.clone()), user).await.unwrap();
+
+        let dev: (Option<String>,) = sqlx::query_as("SELECT revoked_at FROM devices WHERE id = ?")
+            .bind(&res.0.device_id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+        assert!(dev.0.is_some(), "device must be soft-revoked on logout");
+
+        let rt: (Option<String>,) = sqlx::query_as("SELECT revoked_at FROM refresh_tokens WHERE id = 'rt-x'")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+        assert!(rt.0.is_some(), "refresh tokens must be cascaded");
     }
 
     #[tokio::test]
