@@ -105,6 +105,7 @@ export interface VerifyShareResponse {
 }
 
 export interface ShareListItem {
+  file_id: string;
   id: string;
   state: string;
   requires_password: boolean;

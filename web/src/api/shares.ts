@@ -14,12 +14,16 @@ export const sharesApi = {
   listForFile: (fileId: string) =>
     http.get<{ shares: ShareListItem[] }>(`/api/shares?file_id=${encodeURIComponent(fileId)}`),
 
+  listAll: () => http.get<{ shares: ShareListItem[] }>(`/api/shares`),
+
   get: (id: string) => http.get<ShareInfo>(`/api/shares/${id}`),
 
   verify: (id: string, body: VerifyShareRequest) =>
     http.post<VerifyShareResponse>(`/api/shares/${id}/verify`, body),
 
   revoke: (id: string) => http.delete<{ ok: true }>(`/api/shares/${id}`),
+
+  purge: (id: string) => http.delete<{ ok: true }>(`/api/shares/${id}/purge`),
 
   /** Fetch a single encrypted chunk (public). */
   getChunk: (id: string, index: number, signal?: AbortSignal) =>
