@@ -2,12 +2,13 @@
  * In-page decrypted byte-range fetcher for the MSE player.
  *
  * Given a byte range [start..end] of the plaintext file, fetches the covering
- * encrypted chunks (`/api/files/:id/chunks/:idx`), decrypts each via the crypto
+ * encrypted chunks (via the injected `fetchChunk`), decrypts each via the crypto
  * worker, caches the plaintext in a 256 MiB LRU, and slices out the requested
- * window. Replaces the SW's decrypting byte-range role.
+ * window. Replaces the SW's decrypting byte-range role. The fetch source is
+ * abstracted so the same buffer serves a file owner (`filesApi.getChunk`) and a
+ * share guest (`sharesApi.getChunk`).
  */
 
-import { filesApi } from "@/api/files";
 import { cryptoApi } from "@/workers/crypto";
 
 export const DEFAULT_CHUNK_SIZE = 4 * 1024 * 1024;
@@ -41,7 +42,7 @@ export function chunkSlice(
   return plaintext.subarray(lo - chunkStart, hi - chunkStart + 1);
 }
 
-/** Bounded byte-budget LRU keyed by string (e.g. `${fileId}:${idx}`). Memory-only. */
+/** Bounded byte-budget LRU keyed by string. Memory-only. */
 export class LruCache {
   private map = new Map<string, Uint8Array>();
   private bytes = 0;
@@ -72,11 +73,12 @@ export class LruCache {
 }
 
 export interface ChunkBufferOptions {
-  fileId: string;
   fileKey: Uint8Array;
   ivBase: Uint8Array;
   chunkSize: number;
   totalSize: number;
+  /** Fetch the encrypted bytes of chunk `idx` (owner or public share source). */
+  fetchChunk: (idx: number) => Promise<Uint8Array>;
 }
 
 export interface ChunkBuffer {
@@ -93,11 +95,10 @@ export function createChunkBuffer(opts: ChunkBufferOptions): ChunkBuffer {
       const out = new Uint8Array(e - start + 1);
       let off = 0;
       for (let idx = firstIdx; idx <= lastIdx; idx++) {
-        const key = `${opts.fileId}:${idx}`;
+        const key = `c:${idx}`;
         let pt = cache.get(key);
         if (!pt) {
-          const resp = await filesApi.getChunk(opts.fileId, idx);
-          const cipher = new Uint8Array(await resp.arrayBuffer());
+          const cipher = await opts.fetchChunk(idx);
           pt = await cryptoApi.decryptChunk(opts.fileKey, opts.ivBase, idx, cipher);
           cache.set(key, pt);
         }

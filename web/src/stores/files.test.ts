@@ -352,7 +352,12 @@ describe("files store", () => {
     await files.openPreview(meta);
     expect(files.preview).not.toBeNull();
     expect(files.preview!.player).not.toBeNull();
-    expect(files.preview!.player!.fileId).toBe("vid1");
+    // The player payload now carries an injected fetchChunk bound to the file
+    // id, instead of a raw fileId field. Verify it wraps filesApi.getChunk and
+    // returns the encrypted chunk bytes.
+    const bytes = await files.preview!.player!.fetchChunk(0);
+    expect(getChunkMock).toHaveBeenCalledWith("vid1", 0);
+    expect(Array.from(bytes)).toEqual([1, 2, 3]);
     expect(files.preview!.url).toBe("");
   });
 

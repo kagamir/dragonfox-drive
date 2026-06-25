@@ -42,6 +42,13 @@ import {
   wrapFolderKey as wrapFolderKeyFn,
   unwrapFolderKey as unwrapFolderKeyFn,
 } from "@/crypto/folder";
+import {
+  newShareMaterial as newShareMaterialFn,
+  deriveShareKey as deriveShareKeyFn,
+  wrapFileKeyForShare as wrapFileKeyForShareFn,
+  unwrapFileKeyForShare as unwrapFileKeyForShareFn,
+  shareVerifier as shareVerifierFn,
+} from "@/crypto/share";
 
 export const api = {
   async init() {
@@ -201,6 +208,28 @@ export const api = {
 
   async unwrapFolderKey(wrapped: WrappedKey, wrapperKey: RawKey) {
     return unwrapFolderKeyFn(wrapped, wrapperKey);
+  },
+
+  // --- Shares (P3) -----------------------------------------------------
+
+  newShareMaterial() {
+    return newShareMaterialFn();
+  },
+
+  async deriveShareKey(sharePassword: RawKey, shareSalt: RawKey): Promise<RawKey> {
+    return deriveShareKeyFn(sharePassword, shareSalt);
+  },
+
+  async wrapFileKeyForShare(fileKey: RawKey, shareKey: RawKey) {
+    return wrapFileKeyForShareFn(fileKey, shareKey);
+  },
+
+  async unwrapFileKeyForShare(wrapped: WrappedKey, shareKey: RawKey) {
+    return unwrapFileKeyForShareFn(wrapped, shareKey);
+  },
+
+  async shareVerifier(shareKey: RawKey) {
+    return shareVerifierFn(shareKey);
   },
 };
 

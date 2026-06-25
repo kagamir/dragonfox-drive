@@ -138,6 +138,16 @@ plays the file exactly like the owner would.
 Optionally, the server stores `argon2(share_key, server_salt)` for
 password-protected shares where the link itself does not contain the key.
 
+**Final construction (implemented):** the server-side verifier is
+`hex(SHA-256(share_key))` (no extra Argon2id pass — brute-forcing the stored
+hash already costs one Argon2id per guess to recompute `share_key`). Two modes:
+(1) link carries the key — `?k=<base64(share_password)>` in the URL fragment,
+`password_hash` null; (2) password mode — no `?k=`, server stores
+`password_hash`, recipient posts `password_verifier = hex(SHA-256(share_key))`
+to `/api/shares/:id/verify`. The chunk endpoint is public and password-less
+(ciphertext is useless without `file_key`); only `expires_at`/`revoked_at`
+hard-block chunks. `download_count` increments once per key disclosure.
+
 ## Threat model
 
 | Adversary                | What they can learn                          |

@@ -66,7 +66,7 @@ export const useFilesStore = defineStore("files", () => {
     url: string;
     kind: FileKind;
     name: string;
-    player?: { fileId: string; fileKey: Uint8Array; ivBase: Uint8Array; chunkSize: number; totalSize: number } | null;
+    player?: { fileKey: Uint8Array; ivBase: Uint8Array; chunkSize: number; totalSize: number; fetchChunk: (idx: number) => Promise<Uint8Array> } | null;
   } | null>(null);
 
   function masterKey(): Uint8Array {
@@ -438,11 +438,14 @@ export const useFilesStore = defineStore("files", () => {
         kind: "video",
         name: manifest.name,
         player: {
-          fileId: meta.id,
           fileKey,
           ivBase,
           chunkSize: FILE_CHUNK_SIZE,
           totalSize: manifest.size,
+          fetchChunk: async (i: number) => {
+            const r = await filesApi.getChunk(meta.id, i);
+            return new Uint8Array(await r.arrayBuffer());
+          },
         },
       };
       return;
@@ -547,6 +550,7 @@ export const useFilesStore = defineStore("files", () => {
     remove,
     filesWithParent,
     moveFile,
+    unlockFile,
     preview,
     openPreview,
     closePreview,

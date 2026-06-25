@@ -17,11 +17,11 @@ onMounted(() => {
   window.addEventListener("keydown", onKey);
   if (!videoEl.value) return;
   const buf = createChunkBuffer({
-    fileId: props.payload.fileId,
     fileKey: props.payload.fileKey,
     ivBase: props.payload.ivBase,
     chunkSize: props.payload.chunkSize,
     totalSize: props.payload.totalSize,
+    fetchChunk: props.payload.fetchChunk,
   });
   handle = playMp4(videoEl.value, buf, props.payload.totalSize, (e) => {
     emit("error", e.message);

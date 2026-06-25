@@ -64,11 +64,11 @@ describe("FilePreviewModal", () => {
       revokeObjectURL: vi.fn(),
     });
     const payload = {
-      fileId: "v1",
       fileKey: new Uint8Array(32),
       ivBase: new Uint8Array(12),
       chunkSize: 4 * 1024 * 1024,
       totalSize: 100,
+      fetchChunk: async () => new Uint8Array(0),
     };
     const w = mount(FilePreviewModal, {
       props: { kind: "video", url: "", name: "clip.mp4", player: payload },

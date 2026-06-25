@@ -295,42 +295,59 @@ Response: `{ "ok": true }`.
 ```json
 {
   "file_id": "uuid",
-  "share_salt": "<hex>",
+  "share_salt": "<base64>",
   "encrypted_file_key": "<base64>",
   "encrypted_file_key_nonce": "<base64>",
-  "password_hash": "<optional hex>",
-  "expires_at": "2026-12-31T00:00:00Z",
-  "download_limit": 10
+  "password_hash": "<optional hex SHA-256(share_key)>",
+  "expires_at": "RFC-3339 | null",
+  "download_limit": <u32 | null>
 }
 ```
+Validates the file is owned, `ready`, and has a manifest; `expires_at` must be
+future; `download_limit >= 1`. Response: `{ "id": "share_uuid" }`.
 
-Response: `{ "id": "share_uuid" }`.
+### `GET /api/shares` (auth required)
+
+Query: `?file_id=<uuid>`. Lists the caller's shares for that file (management
+metadata only — no ciphertext):
+
+```json
+{ "shares": [ { "id": "...", "state": "active|expired|exhausted|revoked",
+  "requires_password": false, "expires_at": null, "download_limit": null,
+  "download_count": 0, "revoked_at": null, "created_at": "..." } ] }
+```
 
 ### `GET /api/shares/:id` (public)
 
-Returns:
-```json
-{
-  "id": "share_uuid",
-  "file_id": "uuid",
-  "share_salt": "<hex>",
-  "encrypted_file_key": "<base64>",
-  "encrypted_file_key_nonce": "<base64>",
-  "requires_password": false,
-  "expires_at": null
-}
-```
+The "open". Not found → `404`. Non-active → `200 { id, state, requires_password }`
+(no key, no manifest, **no count**). Active + no password → `200` with the full
+`{ share_salt, encrypted_file_key(+_nonce), encrypted_manifest(+_nonce),
+requires_password:false, state:"active" }` **and increments `download_count`**.
+Active + password → `200 { id, state:"active", requires_password:true,
+share_salt }` (key withheld, **no count**).
 
-The recipient derives `share_key` from `share_salt` + (URL fragment password
-or entered password), decrypts `file_key`, then proceeds like an owner.
+### `POST /api/shares/:id/verify` (public)
+
+Body: `{ "password_verifier": "<hex SHA-256(share_key)>" }`. Only for
+password-protected shares (`400` otherwise). Non-active → `403`. Wrong verifier
+→ `401` (no count). Match → **increments `download_count`** and returns
+`{ state:"active", encrypted_file_key(+_nonce), encrypted_manifest(+_nonce) }`.
 
 ### `GET /api/shares/:id/chunks/:idx` (public)
 
-Same semantics as the authenticated chunk endpoint.
+Checks the share is **not revoked and not expired** (intentionally NOT
+`exhausted`: exhaustion only blocks new opens, not in-flight streams) and the
+file is `ready`, then returns raw encrypted bytes (Range supported). Does not
+require the password — chunks are opaque ciphertext. Does not increment.
 
 ### `DELETE /api/shares/:id` (auth required)
 
-Revokes a share.
+Sets `revoked_at` (soft). `404` if not the owner.
+
+### Counting rule
+
+`download_count` increments exactly once per **file_key disclosure**: on `GET`
+(no-password) or on successful `verify` (password). Chunks never count.
 
 ## Status codes
 

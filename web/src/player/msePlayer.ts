@@ -293,13 +293,15 @@ export function playMp4(
   };
 }
 
-/** Everything Mp4Player.vue needs to build a ChunkBuffer and start the player. */
+/** Everything Mp4Player.vue needs to build a ChunkBuffer and start the player.
+ *  `fetchChunk` returns the ENCRYPTED bytes of chunk `idx`; the chunk buffer
+ *  handles decryption. Injected so owners and share guests share one pipeline. */
 export interface PlayerPayload {
-  fileId: string;
   fileKey: Uint8Array;
   ivBase: Uint8Array;
   chunkSize: number;
   totalSize: number;
+  fetchChunk: (idx: number) => Promise<Uint8Array>;
 }
 
 // --- minimal mp4box.js type shims (the library ships loose types) ----------

@@ -7,6 +7,7 @@ import { useFoldersStore } from "@/stores/folders";
 import type { FileMeta } from "@/api/types";
 import FilePreviewModal from "@/components/FilePreviewModal.vue";
 import MovePickerModal from "@/components/MovePickerModal.vue";
+import ShareDialog from "@/components/ShareDialog.vue";
 
 const auth = useAuthStore();
 const files = useFilesStore();
@@ -17,6 +18,9 @@ const dragOver = ref(false);
 
 // Move-picker state: kind + id of the item being moved.
 const moveTarget = ref<{ kind: "folder" | "file"; id: string } | null>(null);
+
+// Share-dialog target: the file being shared (null when closed).
+const shareTarget = ref<FileMeta | null>(null);
 
 onMounted(async () => {
   await folders.loadTree();
@@ -80,6 +84,10 @@ function download(f: FileMeta) {
 }
 function remove(f: FileMeta) {
   if (confirm(`Delete "${fileName(f)}"?`)) void files.remove(f.id).then(() => folders.loadTree());
+}
+
+function share(f: FileMeta) {
+  shareTarget.value = f;
 }
 
 // --- folder actions ------------------------------------------------------
@@ -193,6 +201,7 @@ const showNextPage = computed(() => folders.page < folders.totalPages - 1);
             <span class="actions">
               <button class="link" :disabled="!previewable(entry.file)" @click="open(entry.file)">Open</button>
               <button class="link" :disabled="entry.file.status !== 'ready'" @click="download(entry.file)">Download</button>
+              <button class="link" :disabled="entry.file.status !== 'ready'" @click="share(entry.file)">Share</button>
               <button class="link" @click="moveFile(entry.file.id)">Move</button>
               <button class="link" @click="remove(entry.file)">Delete</button>
             </span>
@@ -234,6 +243,8 @@ const showNextPage = computed(() => folders.page < folders.totalPages - 1);
         @pick="onMovePicked"
         @cancel="moveTarget = null"
       />
+
+      <ShareDialog v-if="shareTarget" :file="shareTarget" @close="shareTarget = null" />
     </section>
   </main>
 </template>

@@ -71,10 +71,13 @@ export interface CreateFileResponse {
 
 export interface ShareInfo {
   id: string;
-  file_id: string;
-  share_salt: string; // hex
+  file_id?: string;
+  state?: string; // "active" | "expired" | "exhausted" | "revoked"
+  share_salt: string; // base64
   encrypted_file_key: string; // base64
   encrypted_file_key_nonce: string; // base64
+  encrypted_manifest?: string; // base64
+  encrypted_manifest_nonce?: string; // base64
   requires_password: boolean;
   expires_at: string | null;
 }
@@ -87,6 +90,29 @@ export interface CreateShareRequest {
   password_hash?: string;
   expires_at?: string;
   download_limit?: number;
+}
+
+export interface VerifyShareRequest {
+  password_verifier: string; // hex
+}
+
+export interface VerifyShareResponse {
+  state: string;
+  encrypted_file_key: string; // base64
+  encrypted_file_key_nonce: string; // base64
+  encrypted_manifest: string; // base64
+  encrypted_manifest_nonce: string; // base64
+}
+
+export interface ShareListItem {
+  id: string;
+  state: string;
+  requires_password: boolean;
+  expires_at: string | null;
+  download_limit: number | null;
+  download_count: number;
+  revoked_at: string | null;
+  created_at: string;
 }
 
 export interface ChunkIndices {
