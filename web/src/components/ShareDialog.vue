@@ -10,8 +10,9 @@ const shares = useSharesStore();
 
 const password = ref("");
 const usePassword = ref(false);
-const expiry = ref<"none" | "1d" | "7d" | "30d">("none");
-const limitChoice = ref<"none" | "10" | "100">("none");
+const expiryValue = ref<number | null>(null);
+const expiryUnit = ref<"minutes" | "hours" | "days">("days");
+const limitInput = ref<number | null>(null);
 const createdUrl = ref<string | null>(null);
 const copied = ref(false);
 
@@ -25,13 +26,14 @@ onMounted(() => {
 });
 
 function expiryTs(): string | null {
-  if (expiry.value === "none") return null;
-  const days = { "1d": 1, "7d": 7, "30d": 30 }[expiry.value];
-  return new Date(Date.now() + days * 86400_000).toISOString();
+  const n = expiryValue.value;
+  if (!n || n <= 0) return null;
+  const ms = { minutes: 60_000, hours: 3_600_000, days: 86_400_000 }[expiryUnit.value];
+  return new Date(Date.now() + n * ms).toISOString();
 }
 function limitVal(): number | null {
-  if (limitChoice.value === "none") return null;
-  return Number(limitChoice.value);
+  const n = limitInput.value;
+  return n && n > 0 ? n : null;
 }
 
 async function onCreate() {
@@ -62,6 +64,16 @@ async function onRevoke(id: string) {
     alert("Failed to revoke the share. Please try again.");
   }
 }
+
+async function onDelete(id: string) {
+  if (!confirm("Permanently delete this share record? This cannot be undone.")) return;
+  try {
+    await shares.purge(id);
+    await shares.load(props.file.id);
+  } catch {
+    alert("Failed to delete the share. Please try again.");
+  }
+}
 </script>
 
 <template>
@@ -77,19 +89,17 @@ async function onRevoke(id: string) {
         <input v-if="usePassword" v-model="password" type="text" placeholder="password" class="input" />
 
         <label class="row">Expiry</label>
-        <select v-model="expiry" class="input">
-          <option value="none">Never</option>
-          <option value="1d">1 day</option>
-          <option value="7d">7 days</option>
-          <option value="30d">30 days</option>
-        </select>
+        <div class="pair">
+          <input v-model.number="expiryValue" type="number" min="1" placeholder="Never" class="input" />
+          <select v-model="expiryUnit" class="input unit">
+            <option value="minutes">minutes</option>
+            <option value="hours">hours</option>
+            <option value="days">days</option>
+          </select>
+        </div>
 
         <label class="row">Max opens</label>
-        <select v-model="limitChoice" class="input">
-          <option value="none">Unlimited</option>
-          <option value="10">10</option>
-          <option value="100">100</option>
-        </select>
+        <input v-model.number="limitInput" type="number" min="1" placeholder="Unlimited" class="input" />
 
         <button class="primary" :disabled="!canCreate" @click="onCreate">
           {{ shares.creating ? "Creating…" : "Create share link" }}
@@ -110,7 +120,10 @@ async function onRevoke(id: string) {
         <ul class="list">
           <li v-for="s in existing" :key="s.id">
             <span class="meta">{{ s.state }} · opens {{ s.download_count }}{{ s.download_limit ? "/" + s.download_limit : "" }}{{ s.requires_password ? " · password" : "" }}</span>
-            <button class="link" :disabled="s.state === 'revoked'" @click="onRevoke(s.id)">Revoke</button>
+            <span class="btns">
+              <button class="link" :disabled="s.state === 'revoked'" @click="onRevoke(s.id)">Revoke</button>
+              <button class="link danger" @click="onDelete(s.id)">Delete</button>
+            </span>
           </li>
         </ul>
       </section>
@@ -135,4 +148,8 @@ header { display: flex; justify-content: space-between; align-items: center; }
 .list li { display: flex; justify-content: space-between; align-items: center; padding: 0.3rem 0; border-bottom: 1px solid var(--df-color-border); }
 .meta { color: var(--df-color-fg-muted); font-size: 0.85rem; }
 h3 { margin: 0.5rem 0 0; font-size: 1rem; }
+.pair { display: flex; gap: 0.5rem; }
+.pair .unit { flex: 0 0 7rem; }
+.btns { display: flex; gap: 0.75rem; }
+.danger { color: #c0392b; }
 </style>
