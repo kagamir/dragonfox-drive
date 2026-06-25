@@ -5,6 +5,7 @@ pub mod auth;
 pub mod files;
 pub mod folders;
 pub mod health;
+pub mod public;
 pub mod shares;
 
 use axum::{
@@ -17,6 +18,7 @@ use crate::state::AppState;
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/health", get(health::health))
+        .route("/api/config", get(public::public_config))
         .route("/api/auth/register", post(auth::register))
         .route("/api/auth/login", post(auth::login))
         .route("/api/auth/prelogin", post(auth::prelogin))

@@ -13,9 +13,9 @@ services:
       - dragonfox-data:/app/data
     environment:
       RUST_LOG: info,dragonfox_drive=debug
-      # IMPORTANT: override the JWT secret in production!
-      DRAGONFOX__JWT__SECRET: change-me-to-a-long-random-secret
-      # Optional tweaks:
+      # Allow new users to self-register via /register. Set to false to lock the
+      # instance down after the operator account exists.
+      DRAGONFOX__SECURITY__ALLOW_REGISTRATION: "true"
       # DRAGONFOX__LIMITS__MAX_CHUNK_BYTES: 8388608
       # DRAGONFOX__LIMITS__RATE_LIMIT_PER_MINUTE: 600
 

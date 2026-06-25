@@ -2,8 +2,10 @@
 import { ref } from "vue";
 import { useRouter } from "vue-router";
 import { useAuthStore } from "@/stores/auth";
+import { useConfigStore } from "@/stores/config";
 
 const auth = useAuthStore();
+const config = useConfigStore();
 const router = useRouter();
 
 const username = ref("");
@@ -62,7 +64,7 @@ async function submit() {
         <p v-if="error" class="error">{{ error }}</p>
       </form>
 
-      <p class="muted">
+      <p v-if="config.allowRegistration" class="muted">
         No account?
         <RouterLink :to="{ name: 'register' }">Create one</RouterLink>
       </p>

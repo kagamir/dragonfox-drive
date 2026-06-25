@@ -14,6 +14,7 @@ pub struct Settings {
     pub database: DatabaseSettings,
     pub jwt: JwtSettings,
     pub limits: LimitSettings,
+    pub security: SecuritySettings,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -51,6 +52,15 @@ pub struct LimitSettings {
     pub rate_limit_per_minute: u32,
 }
 
+/// Policy flags controlling who may use the API.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct SecuritySettings {
+    /// Whether `POST /api/auth/register` accepts new accounts. Set to `false`
+    /// to lock the instance down after the operator has created their account.
+    pub allow_registration: bool,
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -59,6 +69,7 @@ impl Default for Settings {
             database: DatabaseSettings::default(),
             jwt: JwtSettings::default(),
             limits: LimitSettings::default(),
+            security: SecuritySettings::default(),
         }
     }
 }
@@ -91,11 +102,31 @@ impl Default for DatabaseSettings {
 impl Default for JwtSettings {
     fn default() -> Self {
         Self {
-            secret: "change-me-to-a-long-random-secret-in-production".into(),
+            // Overwritten by `Settings::load()` with a freshly generated random
+            // value; `Default` only seeds tests, which set their own secret.
+            secret: String::new(),
             access_ttl_seconds: 900,
             refresh_ttl_seconds: 2_592_000,
         }
     }
+}
+
+impl Default for SecuritySettings {
+    fn default() -> Self {
+        Self {
+            allow_registration: true,
+        }
+    }
+}
+
+/// Generate a 256-bit JWT signing secret as hex. The secret is not configurable
+/// — it is regenerated on every startup, which invalidates all previously issued
+/// access/refresh tokens (every user must sign in again after a restart).
+fn generate_jwt_secret() -> String {
+    use rand::RngCore;
+    let mut bytes = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    hex::encode(bytes)
 }
 
 impl Default for LimitSettings {
@@ -126,10 +157,17 @@ impl Settings {
             .map_err(|e| map_config_err(e))
             .context("building configuration")?;
 
-        settings
+        let mut settings = settings
             .try_deserialize::<Settings>()
             .map_err(|e| map_config_err(e))
-            .context("deserializing configuration")
+            .context("deserializing configuration")?;
+
+        // The JWT secret is never read from config/env: always overwrite it with
+        // a freshly generated random value so the signing key is unguessable and
+        // rotates on every process start.
+        settings.jwt.secret = generate_jwt_secret();
+
+        Ok(settings)
     }
 }
 
@@ -153,14 +191,16 @@ mod tests {
         assert_eq!(s.limits.max_file_bytes, 100 * 1024 * 1024 * 1024);
         assert_eq!(s.limits.max_chunk_bytes, 8 * 1024 * 1024);
         assert_eq!(s.limits.rate_limit_per_minute, 600);
+        assert!(
+            s.security.allow_registration,
+            "registration must be open by default"
+        );
     }
 
     #[test]
-    fn jwt_default_secret_is_the_documented_placeholder() {
-        assert_eq!(
-            Settings::default().jwt.secret,
-            "change-me-to-a-long-random-secret-in-production",
-        );
+    fn jwt_secret_is_not_configurable_and_starts_empty_in_default() {
+        // `Default` seeds an empty secret; only `Settings::load()` generates one.
+        assert!(Settings::default().jwt.secret.is_empty());
     }
 
     /// WARNING: mutates process CWD and env. Run the suite with --test-threads=1.
@@ -222,5 +262,68 @@ mod tests {
         let settings = Settings::load().unwrap();
         assert_eq!(settings.limits.max_file_bytes, 42);
         assert_eq!(settings.limits.max_chunk_bytes, 7);
+    }
+
+    /// The JWT secret is auto-generated at load time (not read from config) and
+    /// must change on every call. WARNING: mutates CWD — run with
+    /// --test-threads=1.
+    #[test]
+    fn load_generates_a_fresh_non_empty_jwt_secret_each_call() {
+        let dir = tempfile::tempdir().unwrap();
+        let original_cwd = std::env::current_dir().unwrap();
+        struct Restore(PathBuf);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                let _ = std::env::set_current_dir(&self.0);
+            }
+        }
+        let _guard = Restore(original_cwd);
+        std::env::set_current_dir(dir.path()).unwrap();
+
+        // A `[jwt] secret = ...` in config MUST be ignored (overwritten).
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[jwt]\nsecret = \"operator-provided\"\naccess_ttl_seconds = 900\n",
+        )
+        .unwrap();
+
+        let first = Settings::load().unwrap();
+        let second = Settings::load().unwrap();
+
+        assert!(!first.jwt.secret.is_empty(), "secret must be generated");
+        assert_ne!(
+            first.jwt.secret, "operator-provided",
+            "a config-provided secret must be ignored"
+        );
+        assert_ne!(
+            first.jwt.secret, second.jwt.secret,
+            "secret must be regenerated on each load"
+        );
+    }
+
+    /// `[security] allow_registration = false` in config.toml MUST override the
+    /// open-by-default code value. WARNING: mutates CWD — run with
+    /// --test-threads=1.
+    #[test]
+    fn load_lets_toml_close_registration() {
+        let dir = tempfile::tempdir().unwrap();
+        let original_cwd = std::env::current_dir().unwrap();
+        struct Restore(PathBuf);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                let _ = std::env::set_current_dir(&self.0);
+            }
+        }
+        let _guard = Restore(original_cwd);
+
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[security]\nallow_registration = false\n",
+        )
+        .unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+
+        let settings = Settings::load().unwrap();
+        assert!(!settings.security.allow_registration);
     }
 }

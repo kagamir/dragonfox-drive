@@ -38,6 +38,9 @@ Response `200`:
 }
 ```
 
+Returns `403` when `[security] allow_registration = false` in `config.toml`
+(the instance is locked down; login still works for existing users).
+
 ### `POST /api/auth/login`
 
 ```json
@@ -67,6 +70,21 @@ derive `auth_verifier` before calling `/login`.
 ```
 
 Returns a new `TokenPair`.
+
+## Public configuration
+
+### `GET /api/config`
+
+No auth required. Surfaces non-secret runtime flags so the browser can adapt
+its pre-auth UI (e.g. hide the registration form on a locked-down instance).
+
+Response `200`:
+```json
+{ "allow_registration": true }
+```
+
+`allow_registration` mirrors `[security] allow_registration` in `config.toml`
+(defaults to `true`).
 
 ## Files
 

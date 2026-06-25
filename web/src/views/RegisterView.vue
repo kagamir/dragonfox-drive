@@ -2,8 +2,10 @@
 import { ref } from "vue";
 import { useRouter } from "vue-router";
 import { useAuthStore } from "@/stores/auth";
+import { useConfigStore } from "@/stores/config";
 
 const auth = useAuthStore();
+const config = useConfigStore();
 const router = useRouter();
 
 const username = ref("");
@@ -33,45 +35,57 @@ async function submit() {
 <template>
   <main class="page">
     <div class="card">
-      <h1>Create account</h1>
-      <p class="muted">
-        We derive a master encryption key from your password in the browser.
-        Lose the password and your data is unrecoverable - there is no reset.
-      </p>
+      <template v-if="config.loaded && !config.allowRegistration">
+        <h1>Registration disabled</h1>
+        <p class="muted">
+          This instance is not accepting new accounts. Ask the operator to
+          create one for you, or sign in if you already have one.
+        </p>
+        <p class="muted">
+          <RouterLink :to="{ name: 'login' }">Sign in</RouterLink>
+        </p>
+      </template>
+      <template v-else>
+        <h1>Create account</h1>
+        <p class="muted">
+          We derive a master encryption key from your password in the browser.
+          Lose the password and your data is unrecoverable - there is no reset.
+        </p>
 
-      <form @submit.prevent="submit">
-        <label>
-          Username
-          <input
-            v-model="username"
-            type="text"
-            autocomplete="username"
-            pattern="[a-z0-9_-]{3,32}"
-            title="3-32 chars: lowercase letters, digits, underscore, hyphen"
-            required
-            :disabled="loading"
-          />
-        </label>
-        <label>
-          Password
-          <input v-model="password" type="password" autocomplete="new-password" required :disabled="loading" />
-        </label>
-        <label>
-          Confirm password
-          <input v-model="confirm" type="password" autocomplete="new-password" required :disabled="loading" />
-        </label>
+        <form @submit.prevent="submit">
+          <label>
+            Username
+            <input
+              v-model="username"
+              type="text"
+              autocomplete="username"
+              pattern="[a-z0-9_-]{3,32}"
+              title="3-32 chars: lowercase letters, digits, underscore, hyphen"
+              required
+              :disabled="loading"
+            />
+          </label>
+          <label>
+            Password
+            <input v-model="password" type="password" autocomplete="new-password" required :disabled="loading" />
+          </label>
+          <label>
+            Confirm password
+            <input v-model="confirm" type="password" autocomplete="new-password" required :disabled="loading" />
+          </label>
 
-        <button type="submit" :disabled="loading">
-          {{ loading ? "Creating..." : "Create account" }}
-        </button>
+          <button type="submit" :disabled="loading">
+            {{ loading ? "Creating..." : "Create account" }}
+          </button>
 
-        <p v-if="error" class="error">{{ error }}</p>
-      </form>
+          <p v-if="error" class="error">{{ error }}</p>
+        </form>
 
-      <p class="muted">
-        Already registered?
-        <RouterLink :to="{ name: 'login' }">Sign in</RouterLink>
-      </p>
+        <p class="muted">
+          Already registered?
+          <RouterLink :to="{ name: 'login' }">Sign in</RouterLink>
+        </p>
+      </template>
     </div>
   </main>
 </template>

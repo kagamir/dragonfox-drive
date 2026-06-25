@@ -1,6 +1,7 @@
 import { createRouter, createWebHashHistory, type RouteRecordRaw } from "vue-router";
 
 import { useAuthStore } from "@/stores/auth";
+import { useConfigStore } from "@/stores/config";
 
 const routes: RouteRecordRaw[] = [
   {
@@ -59,6 +60,15 @@ router.beforeEach((to) => {
   }
   if (to.meta.public && auth.isAuthenticated && to.name !== "share") {
     return { name: "drive" };
+  }
+  // Hide the register page once the server reports registration is closed. We
+  // only redirect when the flag has actually loaded, so an in-flight fetch on
+  // first paint doesn't bounce the user away.
+  if (to.name === "register") {
+    const config = useConfigStore();
+    if (config.loaded && !config.allowRegistration) {
+      return { name: "login" };
+    }
   }
   return true;
 });

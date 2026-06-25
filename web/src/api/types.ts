@@ -39,6 +39,11 @@ export interface PreloginResponse {
   server_salt: string; // hex
 }
 
+/** Public runtime config surfaced by `GET /api/config` (no auth required). */
+export interface PublicConfig {
+  allow_registration: boolean;
+}
+
 export interface FileMeta {
   id: string;
   owner_id: string;

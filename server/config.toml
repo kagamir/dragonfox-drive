@@ -14,11 +14,19 @@ data_dir = "./data"
 [database]
 url = "sqlite://./data/dragonfox.db?mode=rwc"
 
-# JWT signing secret. CHANGE THIS in production. Use `openssl rand -hex 32`.
+# JWT signing TTLs. The signing secret itself is NOT configurable: the server
+# generates a fresh random secret on every startup, which invalidates all
+# previously issued tokens (every user must sign in again after a restart).
 [jwt]
-secret = "change-me-to-a-long-random-secret-in-production"
 access_ttl_seconds = 900         # 15 minutes
 refresh_ttl_seconds = 2592000    # 30 days
+
+# Access policy.
+[security]
+# Whether new accounts may self-register via POST /api/auth/register (and the
+# /register page). Defaults to true. Set to false once the operator account
+# exists to lock the instance down.
+allow_registration = true
 
 # Sizing knobs.
 [limits]

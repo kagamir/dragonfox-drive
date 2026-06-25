@@ -81,6 +81,9 @@ pub async fn register(
     State(state): State<AppState>,
     Json(req): Json<RegisterRequest>,
 ) -> ApiResult<Json<AuthResponse>> {
+    if !state.settings.security.allow_registration {
+        return Err(ApiError::Forbidden);
+    }
     let username = normalise_username(&req.username);
     if !is_valid_username(&username) {
         return Err(ApiError::BadRequest(
@@ -270,6 +273,21 @@ mod tests {
                 Err(ApiError::BadRequest(_)) => {}
                 other => panic!("username {bad:?}: expected BadRequest, got {other:?}"),
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn register_is_forbidden_when_registration_disabled() {
+        let (mut state, _dir) = test_state_with_db().await;
+        // `Arc::get_mut` is sound here: nothing else has cloned this state yet.
+        Arc::get_mut(&mut state.settings)
+            .expect("settings Arc uniquely held in test")
+            .security
+            .allow_registration = false;
+
+        match register(State(state.clone()), Json(req("alice"))).await {
+            Err(ApiError::Forbidden) => {}
+            other => panic!("expected Forbidden (403) when registration is closed, got {other:?}"),
         }
     }
 
