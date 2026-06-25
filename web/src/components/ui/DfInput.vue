@@ -8,6 +8,7 @@ const props = defineProps<{
   type?: string;
   autocomplete?: string;
   disabled?: boolean;
+  autofocus?: boolean;
 }>();
 defineEmits<{ "update:modelValue": [string] }>();
 </script>
@@ -24,6 +25,7 @@ defineEmits<{ "update:modelValue": [string] }>();
         :placeholder="placeholder"
         :autocomplete="autocomplete"
         :disabled="disabled"
+        :autofocus="autofocus"
         class="w-full bg-transparent text-fg placeholder:text-fg-muted/70 outline-none disabled:opacity-60"
         :class="error ? 'border-danger' : 'border-border'"
         @input="$emit('update:modelValue', ($event.target as HTMLInputElement).value)"
