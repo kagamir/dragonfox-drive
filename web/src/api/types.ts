@@ -13,6 +13,7 @@ export interface TokenPair {
 export interface AuthResponse {
   user_id: string;
   username: string;
+  device_id: string;
   encrypted_master_key: string; // base64
   encrypted_master_key_nonce: string; // base64
   kdf_salt: string; // hex

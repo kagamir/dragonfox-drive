@@ -18,8 +18,11 @@ vi.mock("@/crypto/keys", () => ({
   unwrapMasterKey: vi.fn(async () => new Uint8Array(32)),
   getOrCreateDeviceKey: vi.fn(async () => new Uint8Array(32)),
   persistDeviceWrap: vi.fn(async () => {}),
+  persistDeviceId: vi.fn(async () => {}),
   loadDeviceWrap: vi.fn(async () => null),
+  loadDeviceId: vi.fn(async () => null),
   clearDeviceWrap: vi.fn(async () => {}),
+  clearDeviceId: vi.fn(async () => {}),
 }));
 vi.mock("@/workers/crypto", () => ({ ensureCryptoReady: vi.fn(async () => {}) }));
 
@@ -55,6 +58,7 @@ describe("login", () => {
           JSON.stringify({
             user_id: "u1",
             username: "alice",
+            device_id: "dev-1",
             encrypted_master_key: "eA==",
             encrypted_master_key_nonce: "bm9uY2U=",
             kdf_salt: "ab",

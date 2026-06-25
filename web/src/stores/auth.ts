@@ -27,7 +27,9 @@ import {
   clearDeviceWrap,
   generateMasterKey,
   getOrCreateDeviceKey,
+  loadDeviceId,
   loadDeviceWrap,
+  persistDeviceId,
   persistDeviceWrap,
   unwrapMasterKey,
   wrapMasterKey,
@@ -39,6 +41,7 @@ export const useAuthStore = defineStore("auth", () => {
   const userId = ref<string | null>(null);
   const username = ref<string | null>(null);
   const masterKey = ref<RawKey | null>(null);
+  const deviceId = ref<string | null>(null);
   const isRestoring = ref(true);
 
   function setSession(
@@ -65,6 +68,7 @@ export const useAuthStore = defineStore("auth", () => {
         const deviceKey = await getOrCreateDeviceKey();
         masterKey.value = await unwrapMasterKey(stored.wrap, deviceKey);
         userId.value = stored.userId;
+        deviceId.value = await loadDeviceId();
       }
 
       // Obtain a fresh access token via the refresh endpoint.
@@ -110,6 +114,8 @@ export const useAuthStore = defineStore("auth", () => {
     });
 
     await persistDeviceWrap(res.user_id, deviceWrap);
+    await persistDeviceId(res.user_id, res.device_id);
+    deviceId.value = res.device_id;
     setSession(res, master, res.tokens);
   }
 
@@ -137,6 +143,8 @@ export const useAuthStore = defineStore("auth", () => {
     const deviceKey = await getOrCreateDeviceKey();
     const deviceWrap = await wrapMasterKey(master, deviceKey);
     await persistDeviceWrap(res.user_id, deviceWrap);
+    await persistDeviceId(res.user_id, res.device_id);
+    deviceId.value = res.device_id;
 
     setSession(res, master, res.tokens);
   }
@@ -149,6 +157,7 @@ export const useAuthStore = defineStore("auth", () => {
     username.value = null;
     masterKey.value = null;
     await clearDeviceWrap();
+    deviceId.value = null;
   }
 
   return {
@@ -156,6 +165,7 @@ export const useAuthStore = defineStore("auth", () => {
     userId,
     username,
     masterKey,
+    deviceId,
     isRestoring,
     tryRestoreSession,
     register,

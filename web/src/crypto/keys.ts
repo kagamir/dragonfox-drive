@@ -33,6 +33,7 @@ const STORE_KEYS = localforage.createInstance({
 const KEY_DEVICE = "device_key";
 const KEY_DEVICE_WRAP = "device_wrap"; // master_key wrapped by device_key
 const KEY_USER_ID = "user_id";
+const KEY_DEVICE_ID = "device_id";
 
 export interface WrappedKey {
   ciphertext: Uint8Array;
@@ -123,4 +124,24 @@ export async function loadDeviceWrap(): Promise<{
 export async function clearDeviceWrap(): Promise<void> {
   await STORE_KEYS.removeItem(KEY_DEVICE_WRAP);
   await STORE_KEYS.removeItem(KEY_USER_ID);
+  await STORE_KEYS.removeItem(KEY_DEVICE_ID);
+}
+
+/** Persist the server-assigned `device_id` alongside the user id. */
+export async function persistDeviceId(
+  userId: string,
+  deviceId: string,
+): Promise<void> {
+  await STORE_KEYS.setItem(KEY_USER_ID, userId);
+  await STORE_KEYS.setItem(KEY_DEVICE_ID, deviceId);
+}
+
+/** Read persisted `device_id` (if any) for the current device. */
+export async function loadDeviceId(): Promise<string | null> {
+  return await STORE_KEYS.getItem<string>(KEY_DEVICE_ID);
+}
+
+/** Forget only the `device_id` entry. */
+export async function clearDeviceId(): Promise<void> {
+  await STORE_KEYS.removeItem(KEY_DEVICE_ID);
 }
