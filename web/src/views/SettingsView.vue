@@ -15,7 +15,7 @@ function fmt(ts: string | null): string {
   return ts ? new Date(ts).toLocaleString() : "—";
 }
 function opensOf(s: { download_count: number; download_limit: number | null }): string {
-  return s.download_limit ? `${s.download_count}/${s.download_limit}` : `${s.download_count}`;
+  return s.download_limit ? `${s.download_count}/${s.download_limit}` : `${s.download_count}/∞`;
 }
 function fileIdOf(id: string): string {
   return shares.all.find((s) => s.id === id)?.file_id ?? "";
