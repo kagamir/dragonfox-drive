@@ -226,4 +226,3 @@ h1 { margin: 0 0 1rem; }
 .primary:disabled { opacity: 0.5; cursor: default; }
 .error { color: #c0392b; }
 </style>
-</content>
