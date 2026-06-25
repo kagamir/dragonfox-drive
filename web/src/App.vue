@@ -4,6 +4,7 @@ import { useAuthStore } from "@/stores/auth";
 import { useConfigStore } from "@/stores/config";
 import { onSessionLost } from "@/api/client";
 import DfToastContainer from "@/components/ui/DfToastContainer.vue";
+import DfConfirmDialog from "@/components/ui/DfConfirmDialog.vue";
 
 const auth = useAuthStore();
 const config = useConfigStore();
@@ -25,6 +26,7 @@ onMounted(() => {
   <template v-else>
     <RouterView />
     <DfToastContainer />
+    <DfConfirmDialog />
   </template>
 </template>
 
