@@ -255,7 +255,7 @@ mod tests {
     }
 
     fn auth(uid: &str) -> AuthUser {
-        AuthUser { user_id: uid.into(), device_id: None }
+        AuthUser { user_id: uid.into(), device_id: "test-device".into() }
     }
 
     fn create_body(parent: Option<&str>) -> Value {

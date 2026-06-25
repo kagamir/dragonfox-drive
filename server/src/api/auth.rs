@@ -6,6 +6,7 @@
 //! or file keys.
 
 use axum::extract::State;
+use axum::http::HeaderMap;
 use axum::Json;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -14,6 +15,7 @@ use crate::auth::{issue_token_pair, persist_refresh_token, revoke_refresh_token,
 use crate::error::{ApiError, ApiResult};
 use crate::models::User;
 use crate::state::AppState;
+use crate::util::ua::parse_user_agent;
 
 /// `^[a-z0-9_-]{3,32}$`
 fn is_valid_username(s: &str) -> bool {
@@ -71,6 +73,7 @@ pub struct PreloginResponse {
 pub struct AuthResponse {
     pub user_id: String,
     pub username: String,
+    pub device_id: String,
     pub encrypted_master_key: String,
     pub encrypted_master_key_nonce: String,
     pub kdf_salt: String,
@@ -79,6 +82,7 @@ pub struct AuthResponse {
 
 pub async fn register(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<RegisterRequest>,
 ) -> ApiResult<Json<AuthResponse>> {
     if !state.settings.security.allow_registration {
@@ -119,12 +123,26 @@ pub async fn register(
         Err(e) => return Err(e.into()),
     }
 
-    let pair = issue_token_pair(&state, &id, None)?;
-    persist_refresh_token(&state, &id, None, &pair.refresh_token).await?;
+    let device_id = uuid::Uuid::new_v4().to_string();
+    let device_name = parse_user_agent(
+        headers
+            .get(axum::http::header::USER_AGENT)
+            .and_then(|v| v.to_str().ok()),
+    );
+    sqlx::query("INSERT INTO devices (id, user_id, name) VALUES (?, ?, ?)")
+        .bind(&device_id)
+        .bind(&id)
+        .bind(&device_name)
+        .execute(&state.db)
+        .await?;
+
+    let pair = issue_token_pair(&state, &id, &device_id)?;
+    persist_refresh_token(&state, &id, Some(&device_id), &pair.refresh_token).await?;
 
     Ok(Json(AuthResponse {
         user_id: id,
         username,
+        device_id,
         encrypted_master_key: req.encrypted_master_key,
         encrypted_master_key_nonce: req.encrypted_master_key_nonce,
         kdf_salt: req.kdf_salt,
@@ -151,6 +169,7 @@ pub async fn prelogin(
 
 pub async fn login(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<LoginRequest>,
 ) -> ApiResult<Json<AuthResponse>> {
     let username = normalise_username(&req.username);
@@ -173,12 +192,26 @@ pub async fn login(
         return Err(ApiError::Unauthorized);
     }
 
-    let pair = issue_token_pair(&state, &user.id, None)?;
-    persist_refresh_token(&state, &user.id, None, &pair.refresh_token).await?;
+    let device_id = uuid::Uuid::new_v4().to_string();
+    let device_name = parse_user_agent(
+        headers
+            .get(axum::http::header::USER_AGENT)
+            .and_then(|v| v.to_str().ok()),
+    );
+    sqlx::query("INSERT INTO devices (id, user_id, name) VALUES (?, ?, ?)")
+        .bind(&device_id)
+        .bind(&user.id)
+        .bind(&device_name)
+        .execute(&state.db)
+        .await?;
+
+    let pair = issue_token_pair(&state, &user.id, &device_id)?;
+    persist_refresh_token(&state, &user.id, Some(&device_id), &pair.refresh_token).await?;
 
     Ok(Json(AuthResponse {
         user_id: user.id,
         username: user.username,
+        device_id,
         encrypted_master_key: user.encrypted_master_key,
         encrypted_master_key_nonce: user.encrypted_master_key_nonce,
         kdf_salt: user.kdf_salt,
@@ -206,9 +239,8 @@ pub async fn refresh(
     }
 
     revoke_refresh_token(&state, &hash).await?;
-    let pair = issue_token_pair(&state, &claims.sub, claims.dev.as_deref())?;
-    persist_refresh_token(&state, &claims.sub, claims.dev.as_deref(), &pair.refresh_token)
-        .await?;
+    let pair = issue_token_pair(&state, &claims.sub, &claims.dev)?;
+    persist_refresh_token(&state, &claims.sub, Some(&claims.dev), &pair.refresh_token).await?;
     Ok(Json(pair))
 }
 
@@ -218,6 +250,7 @@ mod tests {
     use crate::config::Settings;
     use crate::db;
     use crate::state::AppState;
+    use axum::http::HeaderMap;
     use std::sync::Arc;
 
     async fn test_state_with_db() -> (AppState, tempfile::TempDir) {
@@ -249,7 +282,9 @@ mod tests {
     #[tokio::test]
     async fn register_returns_tokens_and_username() {
         let (state, _dir) = test_state_with_db().await;
-        let res = register(State(state.clone()), Json(req("alice"))).await.unwrap();
+        let res = register(State(state.clone()), HeaderMap::new(), Json(req("alice")))
+            .await
+            .unwrap();
         assert_eq!(res.0.username, "alice");
         assert!(!res.0.tokens.access_token.is_empty());
         assert!(!res.0.tokens.refresh_token.is_empty());
@@ -258,8 +293,10 @@ mod tests {
     #[tokio::test]
     async fn register_rejects_duplicate_username() {
         let (state, _dir) = test_state_with_db().await;
-        register(State(state.clone()), Json(req("alice"))).await.unwrap();
-        match register(State(state.clone()), Json(req("Alice"))).await {
+        register(State(state.clone()), HeaderMap::new(), Json(req("alice")))
+            .await
+            .unwrap();
+        match register(State(state.clone()), HeaderMap::new(), Json(req("Alice"))).await {
             Err(ApiError::Conflict(_)) => {}
             other => panic!("expected Conflict (409), got {other:?}"),
         }
@@ -269,7 +306,7 @@ mod tests {
     async fn register_rejects_invalid_username() {
         let (state, _dir) = test_state_with_db().await;
         for bad in ["ab", "a".repeat(33).as_str(), "With Space", "bad!"] {
-            match register(State(state.clone()), Json(req(bad))).await {
+            match register(State(state.clone()), HeaderMap::new(), Json(req(bad))).await {
                 Err(ApiError::BadRequest(_)) => {}
                 other => panic!("username {bad:?}: expected BadRequest, got {other:?}"),
             }
@@ -285,7 +322,7 @@ mod tests {
             .security
             .allow_registration = false;
 
-        match register(State(state.clone()), Json(req("alice"))).await {
+        match register(State(state.clone()), HeaderMap::new(), Json(req("alice"))).await {
             Err(ApiError::Forbidden) => {}
             other => panic!("expected Forbidden (403) when registration is closed, got {other:?}"),
         }
@@ -294,7 +331,9 @@ mod tests {
     #[tokio::test]
     async fn prelogin_returns_salts_for_a_known_user() {
         let (state, _dir) = test_state_with_db().await;
-        register(State(state.clone()), Json(req("alice"))).await.unwrap();
+        register(State(state.clone()), HeaderMap::new(), Json(req("alice")))
+            .await
+            .unwrap();
         let res = prelogin(
             State(state.clone()),
             Json(PreloginRequest { username: "ALICE ".into() }),
@@ -330,9 +369,12 @@ mod tests {
     #[tokio::test]
     async fn login_succeeds_with_the_registered_verifier() {
         let (state, _dir) = test_state_with_db().await;
-        register(State(state.clone()), Json(req("alice"))).await.unwrap();
+        register(State(state.clone()), HeaderMap::new(), Json(req("alice")))
+            .await
+            .unwrap();
         let res = login(
             State(state.clone()),
+            HeaderMap::new(),
             Json(login_req("alice", &"ab".repeat(32))),
         )
         .await
@@ -344,9 +386,12 @@ mod tests {
     #[tokio::test]
     async fn login_rejects_a_wrong_verifier() {
         let (state, _dir) = test_state_with_db().await;
-        register(State(state.clone()), Json(req("alice"))).await.unwrap();
+        register(State(state.clone()), HeaderMap::new(), Json(req("alice")))
+            .await
+            .unwrap();
         match login(
             State(state.clone()),
+            HeaderMap::new(),
             Json(login_req("alice", &"00".repeat(32))),
         )
         .await
@@ -362,6 +407,7 @@ mod tests {
         assert!(matches!(
             login(
                 State(state.clone()),
+                HeaderMap::new(),
                 Json(login_req("ghost", &"ab".repeat(32))),
             )
             .await,
@@ -370,7 +416,9 @@ mod tests {
     }
 
     async fn register_tokens(state: &AppState, username: &str) -> TokenPair {
-        let res = register(State(state.clone()), Json(req(username))).await.unwrap();
+        let res = register(State(state.clone()), HeaderMap::new(), Json(req(username)))
+            .await
+            .unwrap();
         res.0.tokens
     }
 
@@ -422,5 +470,85 @@ mod tests {
             .await,
             Err(ApiError::Unauthorized)
         ));
+    }
+
+    #[tokio::test]
+    async fn login_creates_a_device_row_with_parsed_ua() {
+        let (state, _dir) = test_state_with_db().await;
+        register(State(state.clone()), HeaderMap::new(), Json(req("alice")))
+            .await
+            .unwrap();
+
+        let res = login(
+            State(state.clone()),
+            HeaderMap::new(), // no UA → "Unknown browser · Unknown OS"
+            Json(login_req("alice", &"ab".repeat(32))),
+        )
+        .await
+        .unwrap();
+
+        let row: (String, String) =
+            sqlx::query_as("SELECT id, name FROM devices WHERE id = ?")
+                .bind(&res.0.device_id)
+                .fetch_one(&state.db)
+                .await
+                .unwrap();
+        assert_eq!(row.0, res.0.device_id);
+        assert_eq!(row.1, "Unknown browser · Unknown OS");
+    }
+
+    #[tokio::test]
+    async fn register_also_creates_a_device_row() {
+        let (state, _dir) = test_state_with_db().await;
+        let res = register(State(state.clone()), HeaderMap::new(), Json(req("alice")))
+            .await
+            .unwrap();
+        let count: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM devices WHERE user_id = ? AND id = ?")
+                .bind(&res.0.user_id)
+                .bind(&res.0.device_id)
+                .fetch_one(&state.db)
+                .await
+                .unwrap();
+        assert_eq!(count.0, 1);
+    }
+
+    #[tokio::test]
+    async fn access_token_carries_dev_claim_matching_device_id() {
+        let (state, _dir) = test_state_with_db().await;
+        let res = register(State(state.clone()), HeaderMap::new(), Json(req("alice")))
+            .await
+            .unwrap();
+        let claims = crate::auth::verify_access_token(&state, &res.0.tokens.access_token).unwrap();
+        assert_eq!(claims.dev, res.0.device_id);
+    }
+
+    #[tokio::test]
+    async fn login_records_device_name_from_user_agent() {
+        let (state, _dir) = test_state_with_db().await;
+        register(State(state.clone()), HeaderMap::new(), Json(req("alice")))
+            .await
+            .unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::USER_AGENT,
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 \
+             (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                .parse()
+                .unwrap(),
+        );
+        let res = login(
+            State(state.clone()),
+            headers,
+            Json(login_req("alice", &"ab".repeat(32))),
+        )
+        .await
+        .unwrap();
+        let row: (String,) = sqlx::query_as("SELECT name FROM devices WHERE id = ?")
+            .bind(&res.0.device_id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(row.0, "Chrome 120 · macOS");
     }
 }

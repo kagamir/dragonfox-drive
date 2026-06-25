@@ -127,7 +127,7 @@ mod tests {
     }
 
     fn bearer(state: &AppState, user_id: &str) -> String {
-        let pair = issue_token_pair(state, user_id, None).unwrap();
+        let pair = issue_token_pair(state, user_id, "test-device").unwrap();
         format!("Bearer {}", pair.access_token)
     }
 

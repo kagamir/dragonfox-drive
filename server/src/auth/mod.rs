@@ -20,7 +20,7 @@ use crate::state::AppState;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccessClaims {
     pub sub: String,        // user id
-    pub dev: Option<String>, // device id
+    pub dev: String,        // device id (required post-P4)
     pub exp: i64,
     /// JWT ID (RFC 7519 §4.1.7). Unique per issued token so that two refresh
     /// tokens minted for the same user/device in the same second still hash to
@@ -40,7 +40,7 @@ pub type AuthResult<T> = Result<T, ApiError>;
 pub fn issue_token_pair(
     state: &AppState,
     user_id: &str,
-    device_id: Option<&str>,
+    device_id: &str,
 ) -> AuthResult<TokenPair> {
     let now = Utc::now();
     let access_exp = now + Duration::seconds(state.settings.jwt.access_ttl_seconds);
@@ -48,13 +48,13 @@ pub fn issue_token_pair(
 
     let access_claims = AccessClaims {
         sub: user_id.to_string(),
-        dev: device_id.map(str::to_string),
+        dev: device_id.to_string(),
         exp: access_exp.timestamp(),
         jti: uuid::Uuid::new_v4().to_string(),
     };
     let refresh_claims = AccessClaims {
         sub: user_id.to_string(),
-        dev: device_id.map(str::to_string),
+        dev: device_id.to_string(),
         exp: refresh_exp.timestamp(),
         jti: uuid::Uuid::new_v4().to_string(),
     };
@@ -119,7 +119,7 @@ pub async fn revoke_refresh_token(state: &AppState, token_hash: &str) -> AuthRes
 #[derive(Debug, Clone)]
 pub struct AuthUser {
     pub user_id: String,
-    pub device_id: Option<String>,
+    pub device_id: String,
 }
 
 #[async_trait]
@@ -172,16 +172,16 @@ mod tests {
     #[tokio::test]
     async fn issue_and_verify_round_trip() {
         let state = test_state().await;
-        let pair = issue_token_pair(&state, "user-1", Some("dev-1")).unwrap();
+        let pair = issue_token_pair(&state, "user-1", "dev-1").unwrap();
         let claims = verify_access_token(&state, &pair.access_token).unwrap();
         assert_eq!(claims.sub, "user-1");
-        assert_eq!(claims.dev.as_deref(), Some("dev-1"));
+        assert_eq!(claims.dev, "dev-1");
     }
 
     #[tokio::test]
     async fn refresh_token_has_later_expiry_than_access() {
         let state = test_state().await;
-        let pair = issue_token_pair(&state, "u", None).unwrap();
+        let pair = issue_token_pair(&state, "u", "dev").unwrap();
         assert_ne!(pair.access_token, pair.refresh_token);
         let access = verify_access_token(&state, &pair.access_token).unwrap();
         let refresh = verify_access_token(&state, &pair.refresh_token).unwrap();
@@ -191,7 +191,7 @@ mod tests {
     #[tokio::test]
     async fn verify_rejects_token_signed_with_a_different_secret() {
         let state = test_state().await;
-        let pair = issue_token_pair(&state, "u", None).unwrap();
+        let pair = issue_token_pair(&state, "u", "dev").unwrap();
         let mut other_state = test_state().await;
         Arc::get_mut(&mut other_state.settings)
             .unwrap()
@@ -217,7 +217,7 @@ mod tests {
         let state = test_state().await;
         let expired = AccessClaims {
             sub: "u".into(),
-            dev: None,
+            dev: "dev".into(),
             exp: (Utc::now() - Duration::seconds(300)).timestamp(),
             jti: "expired-jti".into(),
         };
@@ -232,7 +232,7 @@ mod tests {
     #[tokio::test]
     async fn auth_user_extractor_accepts_a_valid_bearer_token() {
         let state = test_state().await;
-        let pair = issue_token_pair(&state, "user-x", Some("dev-x")).unwrap();
+        let pair = issue_token_pair(&state, "user-x", "dev-x").unwrap();
         let req = Request::builder()
             .header("authorization", format!("Bearer {}", pair.access_token))
             .body::<String>(String::new())
@@ -242,7 +242,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(user.user_id, "user-x");
-        assert_eq!(user.device_id.as_deref(), Some("dev-x"));
+        assert_eq!(user.device_id, "dev-x");
     }
 
     #[tokio::test]
@@ -261,6 +261,30 @@ mod tests {
         let state = test_state().await;
         let req = Request::builder()
             .header("authorization", "Basic dXNlcjpwdw==")
+            .body::<String>(String::new())
+            .unwrap();
+        let (mut parts, _body) = req.into_parts();
+        assert!(matches!(
+            AuthUser::from_request_parts(&mut parts, &state).await,
+            Err(ApiError::Unauthorized)
+        ));
+    }
+
+    #[tokio::test]
+    async fn auth_user_extractor_rejects_a_token_with_no_dev_claim() {
+        // A token minted by an old binary (pre-P4) has no `dev` claim. The new
+        // extractor must reject it rather than fall back to None — otherwise the
+        // per-request device-revocation check would have nothing to look up.
+        let state = test_state().await;
+        let claims = serde_json::json!({
+            "sub": "user-x",
+            "exp": (Utc::now() + Duration::seconds(300)).timestamp(),
+            "jti": "no-dev-jti",
+        });
+        let encoding = EncodingKey::from_secret(b"test-secret");
+        let token = encode(&Header::default(), &claims, &encoding).unwrap();
+        let req = Request::builder()
+            .header("authorization", format!("Bearer {token}"))
             .body::<String>(String::new())
             .unwrap();
         let (mut parts, _body) = req.into_parts();
