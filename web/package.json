@@ -15,6 +15,7 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
+    "@tailwindcss/vite": "^4.3.1",
     "@vueuse/core": "^11.3.0",
     "comlink": "^4.4.1",
     "libsodium-wrappers-sumo": "^0.7.15",
@@ -23,6 +24,7 @@
     "mp4box": "^0.5.4",
     "naive-ui": "^2.40.1",
     "pinia": "^2.2.6",
+    "tailwindcss": "^4.3.1",
     "vue": "^3.5.13",
     "vue-router": "^4.4.5",
     "vue-virtual-scroller": "^2.0.0-beta.8"

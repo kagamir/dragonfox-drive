@@ -2,6 +2,7 @@
 import { fileURLToPath, URL } from "node:url";
 import { defineConfig, type Plugin } from "vite";
 import vue from "@vitejs/plugin-vue";
+import tailwindcss from "@tailwindcss/vite";
 
 /**
  * libsodium.js ships a broken ESM import: `libsodium-wrappers-sumo` imports
@@ -33,6 +34,7 @@ function fixLibsodiumImport(): Plugin {
 export default defineConfig({
   plugins: [
     fixLibsodiumImport(),
+    tailwindcss(),
     vue(),
   ],
   resolve: {
