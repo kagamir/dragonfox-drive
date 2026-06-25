@@ -308,11 +308,14 @@ future; `download_limit >= 1`. Response: `{ "id": "share_uuid" }`.
 
 ### `GET /api/shares` (auth required)
 
-Query: `?file_id=<uuid>`. Lists the caller's shares for that file (management
-metadata only — no ciphertext):
+Query: `?file_id=<uuid>` (optional). With `file_id`, lists the caller's shares
+for that file (per-file management view). Without it, lists **all** of the
+caller's shares across files (settings management page). Items include
+`file_id` so the client can resolve the (E2EE) file name locally; ordered by
+`created_at` DESC. Metadata only — no ciphertext:
 
 ```json
-{ "shares": [ { "id": "...", "state": "active|expired|exhausted|revoked",
+{ "shares": [ { "file_id": "...", "id": "...", "state": "active|expired|exhausted|revoked",
   "requires_password": false, "expires_at": null, "download_limit": null,
   "download_count": 0, "revoked_at": null, "created_at": "..." } ] }
 ```
@@ -343,6 +346,12 @@ require the password — chunks are opaque ciphertext. Does not increment.
 ### `DELETE /api/shares/:id` (auth required)
 
 Sets `revoked_at` (soft). `404` if not the owner.
+
+### `DELETE /api/shares/:id/purge` (auth required)
+
+Hard-deletes the share row (distinct from the soft revoke above, which keeps
+the row for audit). `404` if not the owner or missing. The link stops working
+immediately (public endpoints then 404).
 
 ### Counting rule
 
