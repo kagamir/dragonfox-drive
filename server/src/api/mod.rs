@@ -2,6 +2,7 @@
 
 pub mod assets;
 pub mod auth;
+pub mod devices;
 pub mod files;
 pub mod folders;
 pub mod health;
@@ -23,6 +24,8 @@ pub fn routes() -> Router<AppState> {
         .route("/api/auth/login", post(auth::login))
         .route("/api/auth/prelogin", post(auth::prelogin))
         .route("/api/auth/refresh", post(auth::refresh))
+        .route("/api/devices", get(devices::list))
+        .route("/api/devices/:id", axum::routing::delete(devices::revoke))
         .route("/api/files", get(files::list).post(files::create))
         .route(
             "/api/files/:id/manifest",
