@@ -54,8 +54,6 @@ pub struct PreloginRequest {
 pub struct LoginRequest {
     pub username: String,
     pub auth_verifier: String,
-    /// Optional: name of the new device requesting login (unused in P1).
-    pub device_name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -177,8 +175,8 @@ pub async fn login(
 
     // Don't distinguish "no such user" from "wrong password" in the response.
     let user: User = sqlx::query_as::<_, User>(
-        "SELECT id, username, kdf_salt, server_salt, verifier_hash, \
-         encrypted_master_key, encrypted_master_key_nonce, created_at, updated_at \
+        "SELECT id, username, kdf_salt, verifier_hash, \
+         encrypted_master_key, encrypted_master_key_nonce \
          FROM users WHERE username = ?",
     )
     .bind(&username)
@@ -375,7 +373,6 @@ mod tests {
         LoginRequest {
             username: username.into(),
             auth_verifier: verifier_hex.into(),
-            device_name: None,
         }
     }
 

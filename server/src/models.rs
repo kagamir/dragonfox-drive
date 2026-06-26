@@ -5,12 +5,9 @@ pub struct User {
     pub id: String,
     pub username: String,
     pub kdf_salt: String,
-    pub server_salt: String,
     pub verifier_hash: String,
     pub encrypted_master_key: String,
     pub encrypted_master_key_nonce: String,
-    pub created_at: String,
-    pub updated_at: String,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -33,7 +30,6 @@ pub struct FileRow {
 #[derive(Debug, sqlx::FromRow)]
 pub struct FolderRow {
     pub id: String,
-    pub owner_id: String,
     pub encrypted_parent_id: Option<String>,
     pub encrypted_parent_id_nonce: Option<String>,
     pub encrypted_folder_key: String,

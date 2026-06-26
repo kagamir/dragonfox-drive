@@ -50,7 +50,7 @@ pub async fn list(
     user: AuthUser,
 ) -> ApiResult<Json<Value>> {
     let rows: Vec<FolderRow> = sqlx::query_as(
-        "SELECT id, owner_id, encrypted_parent_id, encrypted_parent_id_nonce, \
+        "SELECT id, encrypted_parent_id, encrypted_parent_id_nonce, \
          encrypted_folder_key, encrypted_folder_key_nonce, \
          encrypted_name, encrypted_name_nonce, created_at, updated_at \
          FROM folders WHERE owner_id = ? ORDER BY created_at ASC",

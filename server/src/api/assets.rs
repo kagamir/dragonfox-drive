@@ -7,14 +7,18 @@
 //! not need to exist.
 
 use axum::{
-    body::Body,
-    http::{header, HeaderValue, StatusCode, Uri},
+    http::{StatusCode, Uri},
     response::{IntoResponse, Response},
 };
 
 // Embedding is only compiled in for release builds. This keeps `cargo run`
 // (debug) working without a prior `npm run build` in `web/`, matching the
 // README's dev workflow.
+#[cfg(not(debug_assertions))]
+use axum::{
+    body::Body,
+    http::{header, HeaderValue},
+};
 #[cfg(not(debug_assertions))]
 use rust_embed::{EmbeddedFile, RustEmbed};
 
