@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
+import { i18n } from "@/locales";
 
 const createMock = vi.fn();
 const loadMock = vi.fn();
@@ -28,6 +29,8 @@ const file = { id: "f1" } as unknown as FileMeta;
 // DfModal wraps Headless UI Dialog, which teleports its panel to document.body.
 // Wrapper-level find()/text() can't see teleported content, so we drive inputs
 // and buttons through document.body and flushPromises after every async step.
+// All lookups go through data-testid so the test is locale-agnostic (the dialog
+// copy is fully i18n'd; we must not lock to a translated literal).
 function queryBody(selector: string): HTMLElement {
   const el = document.body.querySelector<HTMLElement>(selector);
   if (!el) throw new Error(`no element for ${selector}`);
@@ -38,12 +41,10 @@ function setInputValue(el: HTMLInputElement | HTMLSelectElement, value: string) 
   el.dispatchEvent(new Event("input", { bubbles: true }));
   el.dispatchEvent(new Event("change", { bubbles: true }));
 }
-function clickByText(text: string): void {
-  const btn = [...document.body.querySelectorAll("button")].find(
-    (b) => b.textContent?.trim() === text,
-  );
-  if (!btn) throw new Error(`no button with text ${text}`);
-  btn.click();
+function clickByTestId(testid: string): void {
+  const el = document.body.querySelector<HTMLElement>(`[data-testid="${testid}"]`);
+  if (!el) throw new Error(`no element with data-testid=${testid}`);
+  (el.closest("button") ?? el as HTMLElement).click();
 }
 
 describe("ShareDialog", () => {
@@ -55,14 +56,14 @@ describe("ShareDialog", () => {
   });
 
   it("creates a share using numeric expiry (hours) and a numeric limit", async () => {
-    const w = mount(ShareDialog, { props: { file }, attachTo: document.body });
+    const w = mount(ShareDialog, { props: { file }, attachTo: document.body, global: { plugins: [i18n] } });
     await flushPromises();
 
-    setInputValue(queryBody('input[placeholder="永不"]') as HTMLInputElement, "2");
-    setInputValue(queryBody("select") as HTMLSelectElement, "hours");
-    setInputValue(queryBody('input[placeholder="不限"]') as HTMLInputElement, "5");
+    setInputValue(queryBody('[data-testid="expiry-value"] input') as HTMLInputElement, "2");
+    setInputValue(queryBody('[data-testid="expiry-unit"]') as HTMLSelectElement, "hours");
+    setInputValue(queryBody('[data-testid="max-opens"] input') as HTMLInputElement, "5");
 
-    clickByText("创建分享链接");
+    clickByTestId("create-share-btn");
     await vi.waitFor(() => expect(createMock).toHaveBeenCalled());
     await flushPromises();
 
@@ -80,10 +81,10 @@ describe("ShareDialog", () => {
   });
 
   it("omits expiresAt and downloadLimit when left blank", async () => {
-    const w = mount(ShareDialog, { props: { file }, attachTo: document.body });
+    const w = mount(ShareDialog, { props: { file }, attachTo: document.body, global: { plugins: [i18n] } });
     await flushPromises();
 
-    clickByText("创建分享链接");
+    clickByTestId("create-share-btn");
     await vi.waitFor(() => expect(createMock).toHaveBeenCalled());
     await flushPromises();
 
@@ -97,15 +98,15 @@ describe("ShareDialog", () => {
   });
 
   it("shows the created URL after a successful create", async () => {
-    const w = mount(ShareDialog, { props: { file }, attachTo: document.body });
+    const w = mount(ShareDialog, { props: { file }, attachTo: document.body, global: { plugins: [i18n] } });
     await flushPromises();
 
-    clickByText("创建分享链接");
+    clickByTestId("create-share-btn");
     await vi.waitFor(() => expect(createMock).toHaveBeenCalled());
     await flushPromises();
 
     expect(document.body.querySelector("code")?.textContent).toBe("https://x/#/s/s1?k=k");
-    clickByText("复制链接");
+    clickByTestId("copy-link-btn");
     await flushPromises();
     w.unmount();
   });
