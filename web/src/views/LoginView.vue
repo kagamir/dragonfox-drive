@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { useRouter } from "vue-router";
+import { useI18n } from "vue-i18n";
 import { useAuthStore } from "@/stores/auth";
 import { useConfigStore } from "@/stores/config";
 import { useTheme } from "@/composables/useTheme";
@@ -8,6 +9,7 @@ import { Sun, Moon, Monitor, Lock } from "lucide-vue-next";
 import DfInput from "@/components/ui/DfInput.vue";
 import DfButton from "@/components/ui/DfButton.vue";
 
+const { t } = useI18n();
 const auth = useAuthStore();
 const config = useConfigStore();
 const router = useRouter();
@@ -41,22 +43,22 @@ function cycleTheme() {
 
 <template>
   <main class="relative flex min-h-screen items-center justify-center bg-gradient-to-b from-brand-soft to-bg p-4 dark:from-brand/10">
-    <button class="absolute right-4 top-4 rounded-lg p-2 text-fg-muted hover:bg-bg hover:text-fg" @click="cycleTheme">
+    <button class="absolute right-4 top-4 rounded-lg p-2 text-fg-muted hover:bg-bg hover:text-fg" data-testid="theme-cycle-btn" :aria-label="t('theme.toggle', { mode: t('theme.' + (themeStore as string)) })" @click="cycleTheme">
       <component :is="themeIcon[themeStore as keyof typeof themeIcon]" class="h-5 w-5" />
     </button>
     <div class="w-full max-w-sm rounded-2xl border border-border bg-surface p-8 shadow-md">
-      <h1 class="mb-1 text-2xl font-extrabold text-brand">🦊 DragonFox Drive</h1>
+      <h1 class="mb-1 text-2xl font-extrabold text-brand">🦊 {{ t("common.appName") }}</h1>
       <p class="mb-6 flex items-center gap-1.5 text-sm text-fg-muted">
-        <Lock class="h-3.5 w-3.5" /> 端到端加密 · 密码永不离开本机
+        <Lock class="h-3.5 w-3.5" /> {{ t("auth.tagline") }}
       </p>
       <form class="flex flex-col gap-3" @submit.prevent="submit">
-        <DfInput v-model="username" label="用户名" autocomplete="username" :disabled="loading" />
-        <DfInput v-model="password" label="密码" type="password" autocomplete="current-password" :disabled="loading" />
-        <DfButton type="submit" :loading="loading" :disabled="loading">{{ loading ? "登录中…" : "登录" }}</DfButton>
+        <DfInput v-model="username" :label="t('auth.username')" autocomplete="username" :disabled="loading" />
+        <DfInput v-model="password" :label="t('auth.password')" type="password" autocomplete="current-password" :disabled="loading" />
+        <DfButton type="submit" data-testid="login-submit" :loading="loading" :disabled="loading">{{ loading ? t("auth.signingIn") : t("auth.signIn") }}</DfButton>
         <p v-if="error" class="text-sm text-danger">{{ error }}</p>
       </form>
       <p v-if="config.allowRegistration" class="mt-5 text-center text-sm text-fg-muted">
-        没有账号？<RouterLink :to="{ name: 'register' }" class="font-medium text-brand">创建一个</RouterLink>
+        {{ t("auth.noAccount") }}<RouterLink :to="{ name: 'register' }" class="font-medium text-brand">{{ t("auth.createOne") }}</RouterLink>
       </p>
     </div>
   </main>

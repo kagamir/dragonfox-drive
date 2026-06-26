@@ -4,7 +4,7 @@ export default {
     appName: "DragonFox Drive",
     cancel: "取消", confirm: "确认", delete: "删除", close: "关闭",
     copy: "复制", copied: "已复制", save: "保存", loading: "正在加载…",
-    back: "返回", search: "搜索",
+    back: "返回", search: "搜索", me: "我",
   },
   auth: {
     signIn: "登录", signingIn: "登录中…", createAccount: "创建账号",
@@ -30,6 +30,7 @@ export default {
     folderName: "文件夹名称", rename: "重命名",
     deleteFolder: "删除“{name}”及其所有内容？此操作无法撤销。",
     deleteFile: "删除“{name}”？",
+    deleteBulk: "删除选中的 {n} 项？此操作无法撤销。",
     createFolderTitle: "新建文件夹", renameTitle: "重命名", create: "创建",
   },
   share: {
@@ -58,12 +59,16 @@ export default {
     signedInAs: "登录身份", signOut: "退出登录",
     revokeDeviceConfirm: "吊销此设备？它将立即被登出。",
     revokeDevice: "吊销", deviceRevoked: "已吊销", revokeFailed: "吊销失败。",
+    devicesLoadFailed: "加载设备列表失败。",
     noDevices: "没有已注册设备。", currentDevice: "当前设备",
     lastSeen: "最后在线", noShares: "暂无分享。",
+    created: "创建", expires: "到期", opens: "打开",
   },
   toast: {
     uploaded: "上传完成", deleted: "已删除", moved: "已移动",
     renamed: "已重命名", created: "已创建", moveFailed: "移动失败，请重试",
+    deleteFailed: "删除失败，请重试",
+    deletedSome: "已删除 {ok} 项，{fail} 项失败", movedSome: "已移动 {ok} 项，{fail} 项失败",
     linkCopied: "链接已复制", copyFailed: "复制失败",
   },
   dialog: { confirmTitle: "请确认", confirm: "确认", cancel: "取消" },

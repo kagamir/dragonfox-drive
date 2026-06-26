@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
+import { useI18n } from "vue-i18n";
 import { sharesApi } from "@/api/shares";
 import { ApiError } from "@/api/client";
 import { cryptoApi, ensureCryptoReady } from "@/workers/crypto";
@@ -12,6 +13,7 @@ import DfInput from "@/components/ui/DfInput.vue";
 import FileTypeIcon from "@/components/FileTypeIcon.vue";
 import type { ShareInfo } from "@/api/types";
 
+const { t } = useI18n();
 const route = useRoute();
 const shareId = route.params.shareId as string;
 
@@ -178,31 +180,31 @@ onMounted(load);
 <template>
   <main class="flex min-h-screen items-center justify-center bg-gradient-to-b from-brand-soft to-bg p-4 dark:from-brand/10">
     <div class="w-full max-w-md rounded-2xl border border-border bg-surface p-8 text-center shadow-md">
-      <h1 class="mb-4 text-xl font-extrabold text-brand">🦊 DragonFox Drive</h1>
+      <h1 class="mb-4 text-xl font-extrabold text-brand">🦊 {{ t("common.appName") }}</h1>
 
       <p v-if="phase === 'loading'" class="flex items-center justify-center gap-2 text-sm text-fg-muted">
-        <span class="h-4 w-4 animate-spin rounded-full border-2 border-brand border-t-transparent" /> 正在打开…
+        <span class="h-4 w-4 animate-spin rounded-full border-2 border-brand border-t-transparent" /> {{ t("share.opening") }}
       </p>
 
       <section v-else-if="phase === 'password'" class="flex flex-col gap-3">
-        <p class="text-sm text-fg">此分享受密码保护。</p>
-        <DfInput v-model="passwordInput" type="password" placeholder="密码" @keyup.enter="submitPassword" />
-        <DfButton :loading="false" @click="submitPassword">解锁</DfButton>
+        <p class="text-sm text-fg">{{ t("share.protected") }}</p>
+        <DfInput v-model="passwordInput" type="password" :placeholder="t('share.password')" data-testid="share-password-input" @keyup.enter="submitPassword" />
+        <DfButton data-testid="share-unlock-btn" :loading="false" @click="submitPassword">{{ t("share.unlock") }}</DfButton>
         <p v-if="message" class="text-sm text-danger">{{ message }}</p>
       </section>
 
       <section v-else-if="phase === 'ready'" class="flex flex-col items-center gap-4">
         <FileTypeIcon :name="manifest?.name ?? 'file'" />
-        <p class="break-all text-sm font-semibold text-fg">{{ manifest?.name ?? "文件" }}</p>
+        <p class="break-all text-sm font-semibold text-fg">{{ manifest?.name ?? t("common.appName") }}</p>
         <div class="flex gap-2">
-          <DfButton @click="openPreview">预览</DfButton>
-          <DfButton variant="ghost" :loading="downloading" @click="download">{{ downloading ? "下载中…" : "下载" }}</DfButton>
+          <DfButton data-testid="share-preview-btn" @click="openPreview">{{ t("share.preview") }}</DfButton>
+          <DfButton variant="ghost" data-testid="share-download-btn" :loading="downloading" @click="download">{{ downloading ? t("share.downloading") : t("share.download") }}</DfButton>
         </div>
         <p v-if="message" class="text-sm text-danger">{{ message }}</p>
       </section>
 
       <section v-else>
-        <p class="text-sm text-danger">{{ message ?? "分享不可用。" }}</p>
+        <p class="text-sm text-danger">{{ message ?? t("share.unavailable") }}</p>
       </section>
 
       <FilePreviewModal

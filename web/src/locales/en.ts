@@ -4,7 +4,7 @@ export default {
     appName: "DragonFox Drive",
     cancel: "Cancel", confirm: "Confirm", delete: "Delete", close: "Close",
     copy: "Copy", copied: "Copied", save: "Save", loading: "Loading…",
-    back: "Back", search: "Search",
+    back: "Back", search: "Search", me: "Me",
   },
   auth: {
     signIn: "Sign in", signingIn: "Signing in…", createAccount: "Create account",
@@ -30,6 +30,7 @@ export default {
     folderName: "Folder name", rename: "Rename",
     deleteFolder: "Delete \"{name}\" and everything inside it? This cannot be undone.",
     deleteFile: "Delete \"{name}\"?",
+    deleteBulk: "Delete {n} selected items? This cannot be undone.",
     createFolderTitle: "New folder", renameTitle: "Rename", create: "Create",
   },
   share: {
@@ -58,12 +59,16 @@ export default {
     signedInAs: "Signed in as", signOut: "Sign out",
     revokeDeviceConfirm: "Revoke this device? It will be signed out immediately.",
     revokeDevice: "Revoke", deviceRevoked: "Revoked", revokeFailed: "Failed to revoke.",
+    devicesLoadFailed: "Failed to load device list.",
     noDevices: "No registered devices.", currentDevice: "Current device",
     lastSeen: "Last seen", noShares: "You have no shares.",
+    created: "Created", expires: "Expires", opens: "Opens",
   },
   toast: {
     uploaded: "Upload complete", deleted: "Deleted", moved: "Moved",
     renamed: "Renamed", created: "Created", moveFailed: "Move failed, please retry",
+    deleteFailed: "Delete failed, please retry",
+    deletedSome: "Deleted {ok}, {fail} failed", movedSome: "Moved {ok}, {fail} failed",
     linkCopied: "Link copied", copyFailed: "Copy failed",
   },
   dialog: { confirmTitle: "Please confirm", confirm: "Confirm", cancel: "Cancel" },

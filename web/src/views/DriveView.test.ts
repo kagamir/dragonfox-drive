@@ -73,8 +73,9 @@ describe("DriveView", () => {
     const w = mount(DriveView, { global: { stubs, plugins: [i18n] } });
     await flushPromises();
     expect(w.text()).toMatch(/DragonFox/);
-    expect(w.text()).toMatch(/Drive/);
-    expect(w.findAll("button").some((b) => b.text().includes("新建文件夹"))).toBe(true);
+    // Breadcrumb root label is i18n-driven (drive.myFiles); assert by data-testid
+    // rather than locking to a translated literal so the test is locale-agnostic.
+    expect(w.find('[data-testid="new-folder-btn"]').exists()).toBe(true);
   });
 
   describe("bulk delete", () => {
@@ -93,18 +94,16 @@ describe("DriveView", () => {
       await boxes[1].trigger("click");
       await flushPromises();
       // bulk action bar is visible while there is a selection
-      expect(w.text()).toMatch(/已选/);
+      expect(w.find('[data-testid="bulk-action-bar"]').exists()).toBe(true);
 
-      const delBtn = w.findAll("button").find((b) => b.text().trim() === "删除");
-      expect(delBtn).toBeTruthy();
-      await delBtn!.trigger("click");
+      await w.find('[data-testid="bulk-delete-btn"]').trigger("click");
 
       useConfirm()._resolve(true);
       await flushPromises();
 
       expect(STUB.remove).toHaveBeenCalledTimes(2);
       // selection cleared → bulk bar hidden
-      expect(w.text()).not.toMatch(/已选/);
+      expect(w.find('[data-testid="bulk-action-bar"]').exists()).toBe(false);
     });
 
     it("deletes nothing when the confirm dialog is cancelled", async () => {
@@ -121,15 +120,14 @@ describe("DriveView", () => {
       await boxes[1].trigger("click");
       await flushPromises();
 
-      const delBtn = w.findAll("button").find((b) => b.text().trim() === "删除");
-      await delBtn!.trigger("click");
+      await w.find('[data-testid="bulk-delete-btn"]').trigger("click");
 
       useConfirm()._resolve(false);
       await flushPromises();
 
       expect(STUB.remove).not.toHaveBeenCalled();
       // selection preserved on cancel → bulk bar still visible
-      expect(w.text()).toMatch(/已选/);
+      expect(w.find('[data-testid="bulk-action-bar"]').exists()).toBe(true);
     });
   });
 });

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref, computed } from "vue";
+import { useI18n } from "vue-i18n";
 import { useAuthStore } from "@/stores/auth";
 import { useFilesStore } from "@/stores/files";
 import { useFoldersStore } from "@/stores/folders";
@@ -22,6 +23,7 @@ import MovePickerModal from "@/components/MovePickerModal.vue";
 import ShareDialog from "@/components/ShareDialog.vue";
 import { List, LayoutGrid, FolderPlus, Search } from "lucide-vue-next";
 
+const { t } = useI18n();
 const auth = useAuthStore();
 const files = useFilesStore();
 const folders = useFoldersStore();
@@ -52,26 +54,26 @@ async function onFilesChosen(list: File[]) {
   await folders.loadTree();
 }
 async function onFileChosen(e: Event) {
-  const t = e.target as HTMLInputElement;
-  if (t.files?.length) await onFilesChosen(Array.from(t.files));
-  t.value = "";
+  const target = e.target as HTMLInputElement;
+  if (target.files?.length) await onFilesChosen(Array.from(target.files));
+  target.value = "";
 }
 
 function openFile(f: FileMeta) { void files.openPreview(f).catch(() => {}); }
 function download(f: FileMeta) { void files.download(f).catch(() => {}); }
 function share(f: FileMeta) { shareTarget.value = f; }
 async function removeFile(f: FileMeta) {
-  if (await confirm.confirm({ message: `删除 “${files.displayNames[f.id] ?? f.id}”？`, danger: true, confirmText: "删除" })) {
-    await files.remove(f.id); await folders.loadTree(); toast.success("已删除");
+  if (await confirm.confirm({ message: t("drive.deleteFile", { name: files.displayNames[f.id] ?? f.id }), danger: true, confirmText: t("common.delete") })) {
+    await files.remove(f.id); await folders.loadTree(); toast.success(t("toast.deleted"));
   }
 }
 async function newFolder() {
-  const name = await prompt.prompt({ message: "文件夹名称", title: "新建文件夹", placeholder: "新建文件夹", confirmText: "创建" });
-  if (name) { await folders.createFolder(name); toast.success("已创建"); }
+  const name = await prompt.prompt({ message: t("drive.folderName"), title: t("drive.createFolderTitle"), placeholder: t("drive.newFolder"), confirmText: t("drive.create") });
+  if (name) { await folders.createFolder(name); toast.success(t("toast.created")); }
 }
 async function renameFolder(id: string, current: string) {
-  const name = await prompt.prompt({ message: "文件夹名称", title: "重命名", initial: current, confirmText: "保存" });
-  if (name && name !== current) { await folders.renameFolder(id, name); toast.success("已重命名"); }
+  const name = await prompt.prompt({ message: t("drive.folderName"), title: t("drive.renameTitle"), initial: current, confirmText: t("common.save") });
+  if (name && name !== current) { await folders.renameFolder(id, name); toast.success(t("toast.renamed")); }
 }
 function moveFolder(id: string) { moveTarget.value = { kind: "folder", id }; }
 function moveFile(id: string) { moveTarget.value = { kind: "file", id }; }
@@ -89,7 +91,7 @@ const moveExcludeIds = computed<string[]>(() => {
 });
 async function bulkDelete() {
   if (!selection.value.length) return;
-  if (await confirm.confirm({ message: `删除选中的 ${selection.value.length} 项？此操作无法撤销。`, danger: true, confirmText: "删除" })) {
+  if (await confirm.confirm({ message: t("drive.deleteBulk", { n: selection.value.length }), danger: true, confirmText: t("common.delete") })) {
     let ok = 0, fail = 0;
     for (const key of [...selection.value]) {
       try {
@@ -100,9 +102,9 @@ async function bulkDelete() {
       } catch { fail++; }
     }
     selection.value = [];
-    if (fail === 0) toast.success("已删除");
-    else if (ok === 0) toast.error("删除失败，请重试");
-    else toast.error(`已删除 ${ok} 项，${fail} 项失败`);
+    if (fail === 0) toast.success(t("toast.deleted"));
+    else if (ok === 0) toast.error(t("toast.deleteFailed"));
+    else toast.error(t("toast.deletedSome", { ok, fail }));
     await folders.loadTree();
   }
 }
@@ -121,18 +123,18 @@ async function onMovePicked(dest: string | null) {
       } catch { fail++; }
     }
     selection.value = [];
-    if (fail === 0) toast.success("已移动");
-    else if (ok === 0) toast.error("移动失败，请重试");
-    else toast.error(`已移动 ${ok} 项，${fail} 项失败`);
+    if (fail === 0) toast.success(t("toast.moved"));
+    else if (ok === 0) toast.error(t("toast.moveFailed"));
+    else toast.error(t("toast.movedSome", { ok, fail }));
     return;
   }
-  const t = moveTarget.value; moveTarget.value = null;
-  if (!t) return;
+  const tgt = moveTarget.value; moveTarget.value = null;
+  if (!tgt) return;
   try {
-    if (t.kind === "folder") await folders.moveFolder(t.id, dest);
-    else await files.moveFile(t.id, dest);
-    toast.success("已移动");
-  } catch { toast.error("移动失败，请重试"); }
+    if (tgt.kind === "folder") await folders.moveFolder(tgt.id, dest);
+    else await files.moveFile(tgt.id, dest);
+    toast.success(t("toast.moved"));
+  } catch { toast.error(t("toast.moveFailed")); }
 }
 function cancelMove() {
   moveTarget.value = null;
@@ -144,8 +146,8 @@ function onCtx(e: MouseEvent, entry: Entry) {
   ctxMenu.value?.show(e);
 }
 async function deleteFolder(id: string, name: string) {
-  if (await confirm.confirm({ message: `删除 “${name}” 及其所有内容？此操作无法撤销。`, danger: true, confirmText: "删除" })) {
-    await folders.deleteFolder(id); toast.success("已删除");
+  if (await confirm.confirm({ message: t("drive.deleteFolder", { name }), danger: true, confirmText: t("common.delete") })) {
+    await folders.deleteFolder(id); toast.success(t("toast.deleted"));
   }
 }
 const menuHandlers: MenuHandlers = {
@@ -162,7 +164,7 @@ const menuHandlers: MenuHandlers = {
 const ctxItems = computed(() => (ctxTarget.value ? menuFor(ctxTarget.value, menuHandlers) : []));
 
 const crumbs = computed(() => [
-  { id: null as string | null, label: "Drive" },
+  { id: null as string | null, label: t("drive.myFiles") },
   ...folders.breadcrumbs.map((b: { id: string; name: string }) => ({ id: b.id as string | null, label: b.name })),
 ]);
 const showPrev = computed(() => folders.page > 0);
@@ -174,16 +176,16 @@ const queueUploads = computed(() =>
 
 <template>
   <div class="min-h-screen bg-bg">
-    <AppHeader :username="auth.username ?? '我'" active="drive" :show-upload="true" @upload="pickFile" />
+    <AppHeader :username="auth.username ?? t('common.me')" active="drive" :show-upload="true" @upload="pickFile" />
     <UploadDropzone class="mx-auto w-full max-w-7xl px-4 py-6 md:px-6" @files="onFilesChosen">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <DfBreadcrumbs :items="crumbs" @navigate="(id) => folders.navigateTo(id)" />
-        <DfInput v-model="search" class="min-w-[14rem] flex-1 sm:max-w-xs" placeholder="搜索当前文件夹…">
+        <DfInput v-model="search" class="min-w-[14rem] flex-1 sm:max-w-xs" :placeholder="t('drive.searchHere')">
           <template #prefix><Search class="h-4 w-4 text-fg-muted" /></template>
         </DfInput>
         <div class="flex items-center gap-2">
-          <DfButton variant="ghost" size="sm" @click="newFolder">
-            <template #icon><FolderPlus class="h-4 w-4" /></template>新建文件夹
+          <DfButton variant="ghost" size="sm" data-testid="new-folder-btn" @click="newFolder">
+            <template #icon><FolderPlus class="h-4 w-4" /></template>{{ t("drive.newFolder") }}
           </DfButton>
           <DfSegmented v-model="view" :options="[{ value: 'list', icon: List }, { value: 'grid', icon: LayoutGrid }]" />
         </div>
@@ -218,16 +220,16 @@ const queueUploads = computed(() =>
         />
       </div>
 
-      <div v-if="selection.length" class="sticky bottom-4 z-10 mx-auto mt-4 flex w-fit items-center gap-2 rounded-full border border-border bg-surface px-4 py-2 shadow-lg">
-        <span class="text-sm text-fg-muted">已选 {{ selection.length }} 项</span>
-        <DfButton variant="ghost" size="sm" @click="bulkMove">移动</DfButton>
-        <DfButton variant="danger" size="sm" @click="bulkDelete">删除</DfButton>
+      <div v-if="selection.length" data-testid="bulk-action-bar" class="sticky bottom-4 z-10 mx-auto mt-4 flex w-fit items-center gap-2 rounded-full border border-border bg-surface px-4 py-2 shadow-lg">
+        <span class="text-sm text-fg-muted">{{ t("drive.selected", { n: selection.length }) }}</span>
+        <DfButton variant="ghost" size="sm" data-testid="bulk-move-btn" @click="bulkMove">{{ t("drive.move") }}</DfButton>
+        <DfButton variant="danger" size="sm" data-testid="bulk-delete-btn" @click="bulkDelete">{{ t("common.delete") }}</DfButton>
       </div>
 
       <nav v-if="folders.totalPages > 1" class="mt-6 flex items-center gap-3">
-        <DfButton variant="ghost" size="sm" :disabled="!showPrev" @click="folders.setPage(folders.page - 1)">上一页</DfButton>
-        <span class="text-sm text-fg-muted">第 {{ folders.page + 1 }} / {{ folders.totalPages }} 页</span>
-        <DfButton variant="ghost" size="sm" :disabled="!showNext" @click="folders.setPage(folders.page + 1)">下一页</DfButton>
+        <DfButton variant="ghost" size="sm" data-testid="page-prev" :disabled="!showPrev" @click="folders.setPage(folders.page - 1)">{{ t("drive.prev") }}</DfButton>
+        <span class="text-sm text-fg-muted">{{ t("drive.page", { cur: folders.page + 1, total: folders.totalPages }) }}</span>
+        <DfButton variant="ghost" size="sm" data-testid="page-next" :disabled="!showNext" @click="folders.setPage(folders.page + 1)">{{ t("drive.next") }}</DfButton>
       </nav>
 
       <input ref="fileInput" type="file" multiple class="hidden" @change="onFileChosen" />

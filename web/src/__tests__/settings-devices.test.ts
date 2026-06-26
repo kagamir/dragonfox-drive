@@ -78,10 +78,11 @@ function mountWith(currentId: string) {
   return mount(SettingsView, { global: { plugins: [i18n] } });
 }
 
-// The redesign hides devices behind the "设备" segmented tab; switch to it
-// before assertions so the devices card is rendered.
+// The redesigned SettingsView hides devices behind the devices segmented tab;
+// switch to it before assertions so the devices card is rendered. Drive by the
+// i18n-translated label so the test follows whichever locale is active.
 async function switchToDevices(w: ReturnType<typeof mount>) {
-  const tabBtn = w.findAll("button").find((b) => b.text() === "设备");
+  const tabBtn = w.findAll("button").find((b) => b.text() === i18n.global.t("settings.devices"));
   await tabBtn?.trigger("click");
   await flushPromises();
 }
@@ -108,15 +109,16 @@ describe("SettingsView Devices card", () => {
 
     const text = w.text();
     expect(text).toContain("Chrome · macOS");
-    expect(text).toContain("当前设备");
+    expect(text).toContain(i18n.global.t("settings.currentDevice"));
     expect(text).toContain("Firefox · Windows");
 
-    const labels = w.findAll("button").map((b) => b.text());
-    expect(labels).toContain("退出登录");
-    expect(labels).toContain("吊销");
+    // Locale-agnostic: assert presence of the sign-out / revoke buttons by
+    // data-testid rather than the translated button label.
+    expect(w.find('[data-testid="sign-out-btn"]').exists()).toBe(true);
+    expect(w.find('[data-testid="revoke-device-btn"]').exists()).toBe(true);
   });
 
-  it("clicking 吊销 calls devicesApi.revoke, refetches, and toasts success", async () => {
+  it("clicking revoke calls devicesApi.revoke, refetches, and toasts success", async () => {
     listMock.mockResolvedValueOnce([
       { id: "cur",   name: "A", last_seen_at: null, created_at: "t" },
       { id: "other", name: "B", last_seen_at: null, created_at: "t" },
@@ -130,14 +132,13 @@ describe("SettingsView Devices card", () => {
     await flushPromises();
     await switchToDevices(w);
 
-    const revokeBtn = w.findAll("button").find((b) => b.text() === "吊销");
-    await revokeBtn?.trigger("click");
+    await w.find('[data-testid="revoke-device-btn"]').trigger("click");
     await flushPromises();
 
-    expect(confirmMock).toHaveBeenCalledWith(expect.objectContaining({ danger: true, confirmText: "吊销" }));
+    expect(confirmMock).toHaveBeenCalledWith(expect.objectContaining({ danger: true, confirmText: i18n.global.t("settings.revokeDevice") }));
     expect(revokeMock).toHaveBeenCalledWith("other");
     expect(listMock).toHaveBeenCalledTimes(2);
-    expect(toastSuccess).toHaveBeenCalledWith("已吊销");
+    expect(toastSuccess).toHaveBeenCalledWith(i18n.global.t("settings.deviceRevoked"));
   });
 
   it("canceling the confirm dialog leaves the device list untouched", async () => {
@@ -151,8 +152,7 @@ describe("SettingsView Devices card", () => {
     await flushPromises();
     await switchToDevices(w);
 
-    const revokeBtn = w.findAll("button").find((b) => b.text() === "吊销");
-    await revokeBtn?.trigger("click");
+    await w.find('[data-testid="revoke-device-btn"]').trigger("click");
     await flushPromises();
 
     expect(revokeMock).not.toHaveBeenCalled();
