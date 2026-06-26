@@ -39,5 +39,5 @@ logs/
 *.dylib
 
 # ===== AI =====
-/superpowers/
+superpowers/
 .superpowers/
