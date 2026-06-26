@@ -17,6 +17,7 @@ export interface MenuHandlers {
   download: (f: FileMeta) => void;
   share: (f: FileMeta) => void;
   renameFolder: (id: string, name: string) => void;
+  renameFile: (f: FileMeta) => void;
   moveFolder: (id: string) => void;
   moveFile: (id: string) => void;
   deleteFolder: (id: string, name: string) => void;
@@ -44,6 +45,7 @@ export function menuFor(e: Entry, h: MenuHandlers): DropdownItem[] {
   const f = e.file;
   return [
     { label: t("drive.open"), icon: FolderOpen, onClick: () => h.openFile(f), disabled: f.status !== "ready" },
+    { label: t("drive.rename"), icon: Pencil, onClick: () => h.renameFile(f), disabled: f.status !== "ready" },
     { label: t("share.download"), icon: Download, onClick: () => h.download(f), disabled: f.status !== "ready" },
     { label: t("share.share"), icon: Share2, onClick: () => h.share(f), disabled: f.status !== "ready" },
     { label: t("drive.move"), icon: FolderInput, onClick: () => h.moveFile(f.id) },

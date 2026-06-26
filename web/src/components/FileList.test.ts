@@ -99,6 +99,25 @@ describe("FileList", () => {
     expect(ev![0][0]).toEqual(e.file);
   });
 
+  it("⋯ menu rename item emits renameFile for a ready file", async () => {
+    const e = fileEntry(makeFile({ id: "f1", status: "ready" }));
+    const w = mount(FileList, {
+      props: { entries: [e], displayNames: {}, search: "", view: "list", selection: [] },
+      global,
+    });
+    const trigger = w.findAll("button").find((b) => b.classes().includes("opacity-0"));
+    expect(trigger).toBeTruthy();
+    await trigger!.trigger("click");
+    await flushPromises();
+    const rename = w.findAll("button").find((b) => b.text().trim() === "Rename");
+    expect(rename).toBeTruthy();
+    await rename!.trigger("click");
+    await flushPromises();
+    const ev = w.emitted("renameFile");
+    expect(ev).toBeTruthy();
+    expect(ev![0][0]).toEqual(e.file);
+  });
+
   it("checkbox toggle emits update:selection with the entry key", async () => {
     const e = fileEntry(makeFile({ id: "f1" }));
     const w = mount(FileList, {

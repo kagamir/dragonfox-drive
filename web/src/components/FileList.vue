@@ -30,6 +30,7 @@ const emit = defineEmits<{
   download: [FileMeta];
   share: [FileMeta];
   renameFolder: [string, string];
+  renameFile: [FileMeta];
   moveFolder: [string];
   moveFile: [string];
   deleteFolder: [string, string];
@@ -97,6 +98,7 @@ const handlers: MenuHandlers = {
   download: (f) => emit("download", f),
   share: (f) => emit("share", f),
   renameFolder: (id, name) => emit("renameFolder", id, name),
+  renameFile: (f) => emit("renameFile", f),
   moveFolder: (id) => emit("moveFolder", id),
   moveFile: (id) => emit("moveFile", id),
   deleteFolder: (id, name) => emit("deleteFolder", id, name),
