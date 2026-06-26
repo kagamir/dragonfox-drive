@@ -7,6 +7,9 @@ import { cryptoApi, ensureCryptoReady } from "@/workers/crypto";
 import { fromBase64, FILE_CHUNK_SIZE, type Manifest } from "@/crypto/file";
 import { kindOf, canPreview, type FileKind } from "@/crypto/preview";
 import FilePreviewModal from "@/components/FilePreviewModal.vue";
+import DfButton from "@/components/ui/DfButton.vue";
+import DfInput from "@/components/ui/DfInput.vue";
+import FileTypeIcon from "@/components/FileTypeIcon.vue";
 import type { ShareInfo } from "@/api/types";
 
 const route = useRoute();
@@ -173,56 +176,40 @@ onMounted(load);
 </script>
 
 <template>
-  <main class="page">
-    <div class="card">
-      <h1>Shared file</h1>
+  <main class="flex min-h-screen items-center justify-center bg-gradient-to-b from-brand-soft to-bg p-4 dark:from-brand/10">
+    <div class="w-full max-w-md rounded-2xl border border-border bg-surface p-8 text-center shadow-md">
+      <h1 class="mb-4 text-xl font-extrabold text-brand">🦊 DragonFox Drive</h1>
 
-      <p v-if="phase === 'loading'" class="muted">Opening…</p>
+      <p v-if="phase === 'loading'" class="flex items-center justify-center gap-2 text-sm text-fg-muted">
+        <span class="h-4 w-4 animate-spin rounded-full border-2 border-brand border-t-transparent" /> 正在打开…
+      </p>
 
-      <section v-else-if="phase === 'password'">
-        <p>This share is password-protected.</p>
-        <input v-model="passwordInput" type="password" placeholder="password" class="input" @keyup.enter="submitPassword" />
-        <button class="primary" @click="submitPassword">Unlock</button>
-        <p v-if="message" class="error">{{ message }}</p>
+      <section v-else-if="phase === 'password'" class="flex flex-col gap-3">
+        <p class="text-sm text-fg">此分享受密码保护。</p>
+        <DfInput v-model="passwordInput" type="password" placeholder="密码" @keyup.enter="submitPassword" />
+        <DfButton :loading="false" @click="submitPassword">解锁</DfButton>
+        <p v-if="message" class="text-sm text-danger">{{ message }}</p>
       </section>
 
-      <section v-else-if="phase === 'ready'">
-        <p class="name">{{ manifest?.name ?? "file" }}</p>
-        <div class="actions">
-          <button class="primary" @click="openPreview">Preview</button>
-          <button class="primary" :disabled="downloading" @click="download">
-            {{ downloading ? "…" : "Download" }}
-          </button>
+      <section v-else-if="phase === 'ready'" class="flex flex-col items-center gap-4">
+        <FileTypeIcon :name="manifest?.name ?? 'file'" />
+        <p class="break-all text-sm font-semibold text-fg">{{ manifest?.name ?? "文件" }}</p>
+        <div class="flex gap-2">
+          <DfButton @click="openPreview">预览</DfButton>
+          <DfButton variant="ghost" :loading="downloading" @click="download">{{ downloading ? "下载中…" : "下载" }}</DfButton>
         </div>
-        <p v-if="message" class="error">{{ message }}</p>
+        <p v-if="message" class="text-sm text-danger">{{ message }}</p>
       </section>
 
       <section v-else>
-        <p class="error">{{ message ?? "Share unavailable." }}</p>
+        <p class="text-sm text-danger">{{ message ?? "分享不可用。" }}</p>
       </section>
 
       <FilePreviewModal
         v-if="preview"
-        :kind="preview.kind"
-        :url="preview.url"
-        :name="preview.name"
-        :player="preview.player"
-        @close="closePreview"
-        @error="(m: string) => (message = m)"
+        :kind="preview.kind" :url="preview.url" :name="preview.name" :player="preview.player"
+        @close="closePreview" @error="(m: string) => (message = m)"
       />
     </div>
   </main>
 </template>
-
-<style scoped>
-.page { display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 1rem; }
-.card { background: var(--df-color-bg-elevated); border: 1px solid var(--df-color-border); border-radius: var(--df-radius-md); padding: 2rem; width: 100%; max-width: 480px; text-align: center; }
-h1 { margin: 0 0 1rem; }
-.muted { color: var(--df-color-fg-muted); }
-.name { font-weight: 700; word-break: break-all; }
-.actions { display: flex; gap: 0.5rem; justify-content: center; margin-top: 1rem; }
-.input { width: 100%; padding: 0.5rem; background: var(--df-color-bg); border: 1px solid var(--df-color-border); border-radius: var(--df-radius-sm); color: inherit; margin-bottom: 0.5rem; }
-.primary { padding: 0.5rem 1rem; background: var(--df-color-accent, #406); color: #fff; border: 0; border-radius: var(--df-radius-sm); cursor: pointer; }
-.primary:disabled { opacity: 0.5; cursor: default; }
-.error { color: #c0392b; }
-</style>
