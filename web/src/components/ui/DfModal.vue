@@ -4,8 +4,10 @@ import {
   TransitionRoot, TransitionChild,
 } from "@headlessui/vue";
 import { X } from "lucide-vue-next";
+import { useI18n } from "vue-i18n";
 withDefaults(defineProps<{ open: boolean; title?: string; size?: "sm" | "md" | "lg" }>(), { size: "md" });
 defineEmits<{ close: [] }>();
+const { t } = useI18n();
 const maxW = { sm: "max-w-sm", md: "max-w-md", lg: "max-w-2xl" };
 </script>
 
@@ -24,7 +26,7 @@ const maxW = { sm: "max-w-sm", md: "max-w-md", lg: "max-w-2xl" };
           <DialogPanel :class="['w-full max-h-[90vh] overflow-y-auto rounded-xl border border-border bg-surface p-6 shadow-lg', maxW[size]]">
             <div class="mb-2 flex items-start justify-between gap-4">
               <DialogTitle v-if="title" class="text-lg font-semibold text-fg">{{ title }}</DialogTitle>
-              <button type="button" class="ml-auto text-fg-muted hover:text-fg" aria-label="关闭" @click="$emit('close')">
+              <button type="button" class="ml-auto text-fg-muted hover:text-fg" :aria-label="t('common.close')" @click="$emit('close')">
                 <X class="h-5 w-5" />
               </button>
             </div>

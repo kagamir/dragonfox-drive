@@ -1,10 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { mount } from "@vue/test-utils";
+import { i18n } from "@/locales";
 import UploadQueueDrawer from "./UploadQueueDrawer.vue";
 
 describe("UploadQueueDrawer", () => {
   it("renders nothing when no uploads", () => {
-    const w = mount(UploadQueueDrawer, { props: { uploads: [] }, attachTo: document.body });
+    const w = mount(UploadQueueDrawer, { props: { uploads: [] }, global: { plugins: [i18n] }, attachTo: document.body });
     // Panel is v-if-gated, so nothing teleports to body when empty.
     expect(document.body.textContent).toBe("");
     w.unmount();
@@ -12,6 +13,7 @@ describe("UploadQueueDrawer", () => {
   it("lists uploads with progress and cancel emits id", async () => {
     const w = mount(UploadQueueDrawer, {
       props: { uploads: [{ fileId: "f1", name: "a.mp4", progress: 0.4, phase: "uploading" }] },
+      global: { plugins: [i18n] },
       attachTo: document.body,
     });
     // Content is teleported to body, so query document.body (cf. DfContextMenu test).

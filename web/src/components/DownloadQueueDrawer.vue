@@ -17,7 +17,7 @@ const { t } = useI18n();
               <div class="h-full rounded-full bg-brand transition-all" :style="{ width: Math.round(d.progress * 100) + '%' }" />
             </div>
           </div>
-          <span class="text-[10px] text-fg-muted">{{ d.phase }}</span>
+          <span class="text-[10px] text-fg-muted">{{ t("downloadPhase." + d.phase) }}</span>
           <button class="text-fg-muted hover:text-danger" @click="$emit('cancel', d.fileId)"><X class="h-4 w-4" /></button>
         </li>
       </ul>

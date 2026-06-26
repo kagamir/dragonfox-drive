@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
+import { i18n } from "@/locales";
 import FilePreviewModal from "./FilePreviewModal.vue";
 import Mp4Player from "./Mp4Player.vue";
 
@@ -16,7 +17,7 @@ vi.mock("@/workers/crypto", () => ({
 // branch asserts against document.body. The player branch (Mp4Player owns its
 // own <video>, no DfModal) still uses wrapper queries.
 function mountAttached(props: Record<string, unknown>) {
-  return mount(FilePreviewModal, { props, attachTo: document.body });
+  return mount(FilePreviewModal, { props, global: { plugins: [i18n] }, attachTo: document.body });
 }
 
 describe("FilePreviewModal", () => {
@@ -55,7 +56,7 @@ describe("FilePreviewModal", () => {
   it("emits close when the DfModal close button is clicked", async () => {
     const w = mountAttached({ kind: "image", url: "blob:i", name: "a.png" });
     await flushPromises();
-    (document.body.querySelector('button[aria-label="关闭"]') as HTMLButtonElement).click();
+    (document.body.querySelector('button[aria-label="Close"]') as HTMLButtonElement).click();
     await w.vm.$nextTick();
     expect(w.emitted("close")).toBeTruthy();
     w.unmount();
@@ -84,6 +85,7 @@ describe("FilePreviewModal", () => {
     };
     const w = mount(FilePreviewModal, {
       props: { kind: "video", url: "", name: "clip.mp4", player: payload },
+      global: { plugins: [i18n] },
     });
     await flushPromises();
     // The `player` branch mounts <Mp4Player> (which owns the <video> element);

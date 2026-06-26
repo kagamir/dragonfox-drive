@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted } from "vue";
+import { useI18n } from "vue-i18n";
 import { useAuthStore } from "@/stores/auth";
 import { useConfigStore } from "@/stores/config";
 import { onSessionLost } from "@/api/client";
@@ -7,6 +8,7 @@ import DfToastContainer from "@/components/ui/DfToastContainer.vue";
 import DfConfirmDialog from "@/components/ui/DfConfirmDialog.vue";
 import DfPromptDialog from "@/components/ui/DfPromptDialog.vue";
 
+const { t } = useI18n();
 const auth = useAuthStore();
 const config = useConfigStore();
 
@@ -26,7 +28,7 @@ onMounted(() => {
   <div v-if="auth.isRestoring" class="fixed inset-0 flex items-center justify-center bg-bg">
     <div class="flex flex-col items-center gap-3 text-fg-muted">
       <span class="h-8 w-8 animate-spin rounded-full border-2 border-brand border-t-transparent" />
-      <span class="text-sm">正在加载…</span>
+      <span class="text-sm">{{ t("common.loading") }}</span>
     </div>
   </div>
   <template v-else>
