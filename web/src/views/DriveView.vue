@@ -11,6 +11,7 @@ import type { FileMeta } from "@/api/types";
 import AppHeader from "@/components/AppHeader.vue";
 import UploadDropzone from "@/components/UploadDropzone.vue";
 import UploadQueueDrawer from "@/components/UploadQueueDrawer.vue";
+import DownloadQueueDrawer from "@/components/DownloadQueueDrawer.vue";
 import FileList from "@/components/FileList.vue";
 import { menuFor, parseKey, type Entry, type MenuHandlers, type SortKey } from "@/components/fileMenu";
 import DfBreadcrumbs from "@/components/ui/DfBreadcrumbs.vue";
@@ -236,6 +237,7 @@ const queueUploads = computed(() =>
     </UploadDropzone>
 
     <UploadQueueDrawer :uploads="queueUploads" @cancel="(id) => files.cancelUpload(id)" />
+    <DownloadQueueDrawer :downloads="files.activeDownloads" @cancel="(id) => files.cancelDownload(id)" />
 
     <FilePreviewModal
       v-if="files.preview"

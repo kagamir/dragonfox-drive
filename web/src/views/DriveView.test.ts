@@ -24,9 +24,11 @@ vi.mock("@/stores/files", () => ({
   useFilesStore: () => ({
     files: [], loading: false, error: null, uploading: false, uploadProgress: 0,
     downloading: false, displayNames: {} as Record<string, string>, activeUploads: [],
+    activeDownloads: [] as { fileId: string; name: string; progress: number; phase: string }[],
     fileParents: {}, preview: null,
     refresh: STUB.refresh, upload: vi.fn().mockResolvedValue(undefined),
-    cancelUpload: vi.fn(), download: vi.fn().mockResolvedValue(undefined),
+    cancelUpload: vi.fn(), cancelDownload: vi.fn().mockResolvedValue(undefined),
+    download: vi.fn().mockResolvedValue(undefined),
     remove: STUB.remove, filesWithParent: () => [], moveFile: vi.fn().mockResolvedValue(undefined),
     unlockFile: vi.fn(), openPreview: vi.fn().mockResolvedValue(undefined), closePreview: vi.fn(),
   }),
