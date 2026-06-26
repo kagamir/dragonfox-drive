@@ -76,6 +76,19 @@ async function renameFolder(id: string, current: string) {
   const name = await prompt.prompt({ message: t("drive.folderName"), title: t("drive.renameTitle"), initial: current, confirmText: t("common.save") });
   if (name && name !== current) { await folders.renameFolder(id, name); toast.success(t("toast.renamed")); }
 }
+async function renameFile(f: FileMeta) {
+  const current = files.displayNames[f.id] ?? f.id;
+  const name = await prompt.prompt({
+    message: t("drive.fileName"),
+    title: t("drive.renameTitle"),
+    initial: current,
+    confirmText: t("common.save"),
+  });
+  if (name && name !== current) {
+    await files.renameFile(f.id, name);
+    toast.success(t("toast.renamed"));
+  }
+}
 function moveFolder(id: string) { moveTarget.value = { kind: "folder", id }; }
 function moveFile(id: string) { moveTarget.value = { kind: "file", id }; }
 function bulkMove() {
@@ -157,6 +170,7 @@ const menuHandlers: MenuHandlers = {
   download,
   share,
   renameFolder,
+  renameFile,
   moveFolder,
   moveFile,
   deleteFolder,
@@ -210,6 +224,7 @@ const queueUploads = computed(() =>
           @download="download"
           @share="share"
           @rename-folder="renameFolder"
+          @rename-file="renameFile"
           @move-folder="moveFolder"
           @move-file="moveFile"
           @delete-folder="deleteFolder"

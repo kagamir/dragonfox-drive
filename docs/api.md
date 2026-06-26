@@ -192,6 +192,10 @@ responds `413`.
 }
 ```
 
+Overwrites the stored manifest blob. The server treats it as opaque; clients
+also use this endpoint to rename a file (the filename lives encrypted inside
+the manifest, so renaming is a full manifest rewrite).
+
 ### `GET /api/files/:id/manifest`
 
 Returns the stored (still-encrypted) manifest blob + nonce.

@@ -27,7 +27,7 @@ export default {
     folder: "文件夹", selected: "已选 {n} 项", move: "移动", moveTo: "移动到…",
     open: "打开",
     root: "根目录", noOtherFolders: "没有其他文件夹。",
-    folderName: "文件夹名称", rename: "重命名",
+    folderName: "文件夹名称", fileName: "文件名", rename: "重命名",
     deleteFolder: "删除“{name}”及其所有内容？此操作无法撤销。",
     deleteFile: "删除“{name}”？",
     deleteBulk: "删除选中的 {n} 项？此操作无法撤销。",

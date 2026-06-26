@@ -27,7 +27,7 @@ export default {
     folder: "Folder", selected: "{n} selected", move: "Move", moveTo: "Move to…",
     open: "Open",
     root: "Root", noOtherFolders: "No other folders.",
-    folderName: "Folder name", rename: "Rename",
+    folderName: "Folder name", fileName: "File name", rename: "Rename",
     deleteFolder: "Delete \"{name}\" and everything inside it? This cannot be undone.",
     deleteFile: "Delete \"{name}\"?",
     deleteBulk: "Delete {n} selected items? This cannot be undone.",
