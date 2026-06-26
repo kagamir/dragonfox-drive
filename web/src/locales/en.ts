@@ -4,7 +4,7 @@ export default {
     appName: "DragonFox Drive",
     cancel: "Cancel", confirm: "Confirm", delete: "Delete", close: "Close",
     copy: "Copy", copied: "Copied", save: "Save", loading: "Loading…",
-    back: "Back", search: "Search", me: "Me",
+    back: "Back", search: "Search", me: "Me", language: "Language",
   },
   auth: {
     signIn: "Sign in", signingIn: "Signing in…", createAccount: "Create account",
@@ -61,8 +61,7 @@ export default {
     revokeDevice: "Revoke", deviceRevoked: "Revoked", revokeFailed: "Failed to revoke.",
     devicesLoadFailed: "Failed to load device list.",
     noDevices: "No registered devices.", currentDevice: "Current device",
-    lastSeen: "Last seen", noShares: "You have no shares.",
-    created: "Created", expires: "Expires", opens: "Opens",
+    lastSeen: "Last seen",
   },
   toast: {
     uploaded: "Upload complete", deleted: "Deleted", moved: "Moved",

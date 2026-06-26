@@ -57,7 +57,7 @@ const menu: DropdownItem[] = [
     </DfButton>
     <DfDropdown :items="langItems" align="right">
       <template #trigger>
-        <button class="rounded-lg p-2 text-fg-muted hover:bg-bg hover:text-fg" :aria-label="t('theme.toggle', { mode: i18n.global.locale.value })">
+        <button class="rounded-lg p-2 text-fg-muted hover:bg-bg hover:text-fg" :aria-label="t('common.language')">
           <Languages class="h-5 w-5" />
         </button>
       </template>

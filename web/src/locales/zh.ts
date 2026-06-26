@@ -4,7 +4,7 @@ export default {
     appName: "DragonFox Drive",
     cancel: "取消", confirm: "确认", delete: "删除", close: "关闭",
     copy: "复制", copied: "已复制", save: "保存", loading: "正在加载…",
-    back: "返回", search: "搜索", me: "我",
+    back: "返回", search: "搜索", me: "我", language: "语言",
   },
   auth: {
     signIn: "登录", signingIn: "登录中…", createAccount: "创建账号",
@@ -61,8 +61,7 @@ export default {
     revokeDevice: "吊销", deviceRevoked: "已吊销", revokeFailed: "吊销失败。",
     devicesLoadFailed: "加载设备列表失败。",
     noDevices: "没有已注册设备。", currentDevice: "当前设备",
-    lastSeen: "最后在线", noShares: "暂无分享。",
-    created: "创建", expires: "到期", opens: "打开",
+    lastSeen: "最后在线",
   },
   toast: {
     uploaded: "上传完成", deleted: "已删除", moved: "已移动",
