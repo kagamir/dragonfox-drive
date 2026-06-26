@@ -3,11 +3,16 @@ import { ref } from "vue";
 import { useRouter } from "vue-router";
 import { useAuthStore } from "@/stores/auth";
 import { useConfigStore } from "@/stores/config";
+import { useTheme } from "@/composables/useTheme";
+import { Sun, Moon, Monitor, Lock } from "lucide-vue-next";
+import DfInput from "@/components/ui/DfInput.vue";
+import DfButton from "@/components/ui/DfButton.vue";
 
 const auth = useAuthStore();
 const config = useConfigStore();
 const router = useRouter();
-
+const theme = useTheme();
+const themeStore = theme.store;
 const username = ref("");
 const password = ref("");
 const error = ref<string | null>(null);
@@ -25,113 +30,34 @@ async function submit() {
     loading.value = false;
   }
 }
+
+const themeIcon = { light: Sun, dark: Moon, auto: Monitor } as const;
+function cycleTheme() {
+  const order = ["light", "dark", "auto"] as const;
+  const cur = themeStore.value as (typeof order)[number];
+  themeStore.value = order[(order.indexOf(cur) + 1) % order.length];
+}
 </script>
 
 <template>
-  <main class="page">
-    <div class="card">
-      <h1>Sign in</h1>
-      <p class="muted">
-        Your password is encrypted in the browser before it leaves this device.
+  <main class="relative flex min-h-screen items-center justify-center bg-gradient-to-b from-brand-soft to-bg p-4 dark:from-brand/10">
+    <button class="absolute right-4 top-4 rounded-lg p-2 text-fg-muted hover:bg-bg hover:text-fg" @click="cycleTheme">
+      <component :is="themeIcon[themeStore as keyof typeof themeIcon]" class="h-5 w-5" />
+    </button>
+    <div class="w-full max-w-sm rounded-2xl border border-border bg-surface p-8 shadow-md">
+      <h1 class="mb-1 text-2xl font-extrabold text-brand">🦊 DragonFox Drive</h1>
+      <p class="mb-6 flex items-center gap-1.5 text-sm text-fg-muted">
+        <Lock class="h-3.5 w-3.5" /> 端到端加密 · 密码永不离开本机
       </p>
-
-      <form @submit.prevent="submit">
-        <label>
-          Username
-          <input
-            v-model="username"
-            type="text"
-            autocomplete="username"
-            required
-            :disabled="loading"
-          />
-        </label>
-        <label>
-          Password
-          <input
-            v-model="password"
-            type="password"
-            autocomplete="current-password"
-            required
-            :disabled="loading"
-          />
-        </label>
-
-        <button type="submit" :disabled="loading">
-          {{ loading ? "Signing in..." : "Sign in" }}
-        </button>
-
-        <p v-if="error" class="error">{{ error }}</p>
+      <form class="flex flex-col gap-3" @submit.prevent="submit">
+        <DfInput v-model="username" label="用户名" autocomplete="username" :disabled="loading" />
+        <DfInput v-model="password" label="密码" type="password" autocomplete="current-password" :disabled="loading" />
+        <DfButton type="submit" :loading="loading" :disabled="loading">{{ loading ? "登录中…" : "登录" }}</DfButton>
+        <p v-if="error" class="text-sm text-danger">{{ error }}</p>
       </form>
-
-      <p v-if="config.allowRegistration" class="muted">
-        No account?
-        <RouterLink :to="{ name: 'register' }">Create one</RouterLink>
+      <p v-if="config.allowRegistration" class="mt-5 text-center text-sm text-fg-muted">
+        没有账号？<RouterLink :to="{ name: 'register' }" class="font-medium text-brand">创建一个</RouterLink>
       </p>
     </div>
   </main>
 </template>
-
-<style scoped>
-.page {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 100vh;
-  padding: 1rem;
-}
-.card {
-  background: var(--df-color-bg-elevated);
-  border: 1px solid var(--df-color-border);
-  border-radius: var(--df-radius-md);
-  padding: 2rem;
-  width: 100%;
-  max-width: 380px;
-}
-h1 {
-  margin: 0 0 0.5rem;
-  font-size: 1.5rem;
-}
-.muted {
-  color: var(--df-color-fg-muted);
-  font-size: 0.85rem;
-}
-form {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  margin: 1.5rem 0;
-}
-label {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  font-size: 0.85rem;
-}
-input {
-  padding: 0.5rem 0.6rem;
-  border-radius: var(--df-radius-sm);
-  border: 1px solid var(--df-color-border);
-  background: var(--df-color-bg);
-  color: var(--df-color-fg);
-  font-size: 0.95rem;
-}
-button {
-  padding: 0.6rem 0.8rem;
-  background: var(--df-color-accent);
-  color: var(--df-color-accent-fg);
-  border: 0;
-  border-radius: var(--df-radius-sm);
-  cursor: pointer;
-  font-weight: 600;
-}
-button:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-.error {
-  color: #ff6b6b;
-  font-size: 0.85rem;
-  margin: 0;
-}
-</style>

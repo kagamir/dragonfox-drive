@@ -1,23 +1,28 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, computed } from "vue";
 import { useRouter } from "vue-router";
 import { useAuthStore } from "@/stores/auth";
 import { useConfigStore } from "@/stores/config";
+import { AlertTriangle } from "lucide-vue-next";
+import DfInput from "@/components/ui/DfInput.vue";
+import DfButton from "@/components/ui/DfButton.vue";
+import DfBadge from "@/components/ui/DfBadge.vue";
 
 const auth = useAuthStore();
 const config = useConfigStore();
 const router = useRouter();
-
 const username = ref("");
 const password = ref("");
-const confirm = ref("");
+const confirmPwd = ref("");
 const error = ref<string | null>(null);
 const loading = ref(false);
 
+const mismatch = computed(() => confirmPwd.value.length > 0 && password.value !== confirmPwd.value);
+
 async function submit() {
   error.value = null;
-  if (password.value !== confirm.value) {
-    error.value = "Passwords do not match.";
+  if (password.value !== confirmPwd.value) {
+    error.value = "两次密码不一致。";
     return;
   }
   loading.value = true;
@@ -33,123 +38,30 @@ async function submit() {
 </script>
 
 <template>
-  <main class="page">
-    <div class="card">
+  <main class="flex min-h-screen items-center justify-center bg-gradient-to-b from-brand-soft to-bg p-4 dark:from-brand/10">
+    <div class="w-full max-w-sm rounded-2xl border border-border bg-surface p-8 shadow-md">
       <template v-if="config.loaded && !config.allowRegistration">
-        <h1>Registration disabled</h1>
-        <p class="muted">
-          This instance is not accepting new accounts. Ask the operator to
-          create one for you, or sign in if you already have one.
-        </p>
-        <p class="muted">
-          <RouterLink :to="{ name: 'login' }">Sign in</RouterLink>
-        </p>
+        <h1 class="mb-2 text-xl font-bold text-fg">注册已关闭</h1>
+        <p class="mb-4 text-sm text-fg-muted">此实例不接受新账号注册。请联系管理员，或直接登录。</p>
+        <DfButton variant="ghost" @click="router.push({ name: 'login' })">返回登录</DfButton>
       </template>
       <template v-else>
-        <h1>Create account</h1>
-        <p class="muted">
-          We derive a master encryption key from your password in the browser.
-          Lose the password and your data is unrecoverable - there is no reset.
+        <h1 class="mb-1 text-2xl font-extrabold text-brand">创建账号</h1>
+        <p class="mb-3 flex items-center gap-1.5">
+          <DfBadge variant="warn"><AlertTriangle class="mr-1 inline h-3 w-3" />重要</DfBadge>
         </p>
-
-        <form @submit.prevent="submit">
-          <label>
-            Username
-            <input
-              v-model="username"
-              type="text"
-              autocomplete="username"
-              pattern="[a-z0-9_-]{3,32}"
-              title="3-32 chars: lowercase letters, digits, underscore, hyphen"
-              required
-              :disabled="loading"
-            />
-          </label>
-          <label>
-            Password
-            <input v-model="password" type="password" autocomplete="new-password" required :disabled="loading" />
-          </label>
-          <label>
-            Confirm password
-            <input v-model="confirm" type="password" autocomplete="new-password" required :disabled="loading" />
-          </label>
-
-          <button type="submit" :disabled="loading">
-            {{ loading ? "Creating..." : "Create account" }}
-          </button>
-
-          <p v-if="error" class="error">{{ error }}</p>
+        <p class="mb-5 text-sm text-fg-muted">密码在浏览器内派生主加密密钥。忘记密码则数据<b>不可恢复</b>。</p>
+        <form class="flex flex-col gap-3" @submit.prevent="submit">
+          <DfInput v-model="username" label="用户名" autocomplete="username" placeholder="3-32 字符：小写字母/数字/_/-" :disabled="loading" />
+          <DfInput v-model="password" label="密码" type="password" autocomplete="new-password" :disabled="loading" />
+          <DfInput v-model="confirmPwd" label="确认密码" type="password" autocomplete="new-password" :error="mismatch ? '两次密码不一致' : undefined" :disabled="loading" />
+          <DfButton type="submit" :loading="loading" :disabled="loading">{{ loading ? "创建中…" : "创建账号" }}</DfButton>
+          <p v-if="error" class="text-sm text-danger">{{ error }}</p>
         </form>
-
-        <p class="muted">
-          Already registered?
-          <RouterLink :to="{ name: 'login' }">Sign in</RouterLink>
+        <p class="mt-5 text-center text-sm text-fg-muted">
+          已有账号？<RouterLink :to="{ name: 'login' }" class="font-medium text-brand">登录</RouterLink>
         </p>
       </template>
     </div>
   </main>
 </template>
-
-<style scoped>
-.page {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 100vh;
-  padding: 1rem;
-}
-.card {
-  background: var(--df-color-bg-elevated);
-  border: 1px solid var(--df-color-border);
-  border-radius: var(--df-radius-md);
-  padding: 2rem;
-  width: 100%;
-  max-width: 420px;
-}
-h1 {
-  margin: 0 0 0.5rem;
-  font-size: 1.5rem;
-}
-.muted {
-  color: var(--df-color-fg-muted);
-  font-size: 0.85rem;
-}
-form {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  margin: 1.5rem 0;
-}
-label {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  font-size: 0.85rem;
-}
-input {
-  padding: 0.5rem 0.6rem;
-  border-radius: var(--df-radius-sm);
-  border: 1px solid var(--df-color-border);
-  background: var(--df-color-bg);
-  color: var(--df-color-fg);
-  font-size: 0.95rem;
-}
-button {
-  padding: 0.6rem 0.8rem;
-  background: var(--df-color-accent);
-  color: var(--df-color-accent-fg);
-  border: 0;
-  border-radius: var(--df-radius-sm);
-  cursor: pointer;
-  font-weight: 600;
-}
-button:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-.error {
-  color: #ff6b6b;
-  font-size: 0.85rem;
-  margin: 0;
-}
-</style>

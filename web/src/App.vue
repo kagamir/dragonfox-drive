@@ -23,7 +23,12 @@ onMounted(() => {
 </script>
 
 <template>
-  <div v-if="auth.isRestoring" class="app-loading">Loading…</div>
+  <div v-if="auth.isRestoring" class="fixed inset-0 flex items-center justify-center bg-bg">
+    <div class="flex flex-col items-center gap-3 text-fg-muted">
+      <span class="h-8 w-8 animate-spin rounded-full border-2 border-brand border-t-transparent" />
+      <span class="text-sm">正在加载…</span>
+    </div>
+  </div>
   <template v-else>
     <RouterView />
     <DfToastContainer />
@@ -31,10 +36,3 @@ onMounted(() => {
     <DfPromptDialog />
   </template>
 </template>
-
-<style scoped>
-.app-loading {
-  position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
-  color: var(--df-color-fg-muted); font-size: 0.95rem;
-}
-</style>
