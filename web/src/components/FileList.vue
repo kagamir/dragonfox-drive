@@ -153,7 +153,7 @@ function onContextmenu(ev: MouseEvent, e: Entry) {
     </div>
 
     <template v-else>
-      <div class="grid grid-cols-[auto_1fr_auto_auto] gap-3 border-b border-border px-3 pb-2 text-xs font-medium text-fg-muted">
+      <div class="grid grid-cols-[auto_1fr_auto_auto_auto] gap-3 border-b border-border px-3 pb-2 text-xs font-medium text-fg-muted">
         <span class="w-4" />
         <button class="flex items-center gap-1 hover:text-fg" @click="onSort('name')">
           {{ t("drive.name") }}
@@ -163,17 +163,18 @@ function onContextmenu(ev: MouseEvent, e: Entry) {
           {{ t("drive.size") }}
           <span v-if="sortKey === 'size'">{{ sortDir === "asc" ? "▲" : "▼" }}</span>
         </button>
-        <button class="flex items-center gap-1 hover:text-fg" @click="onSort('status')">
+        <button class="flex items-center gap-1 justify-self-end hover:text-fg" @click="onSort('status')">
           {{ t("drive.status") }}
           <span v-if="sortKey === 'status'">{{ sortDir === "asc" ? "▲" : "▼" }}</span>
         </button>
+        <span class="w-8" />
       </div>
 
       <ul class="flex flex-col gap-1">
         <li
           v-for="e in sorted"
           :key="keyOf(e)"
-          class="group grid grid-cols-[auto_1fr_auto_auto] items-center gap-3 rounded-lg border border-transparent px-3 py-2 transition-colors hover:border-border hover:bg-surface"
+          class="group grid grid-cols-[auto_1fr_auto_auto_auto] items-center gap-3 rounded-lg border border-transparent px-3 py-2 transition-colors hover:border-border hover:bg-surface"
           @contextmenu="onContextmenu($event, e)"
         >
           <input type="checkbox" class="accent-brand"
@@ -188,17 +189,17 @@ function onContextmenu(ev: MouseEvent, e: Entry) {
           </div>
           <span v-if="e.kind === 'file'" class="hidden text-xs text-fg-muted sm:block">{{ fmtSize(e.file.total_size) }}</span>
           <span v-else class="hidden text-xs text-fg-muted sm:block"></span>
-          <div class="flex items-center gap-3">
+          <div class="flex items-center justify-end">
             <DfBadge v-if="e.kind === 'file'" :variant="statusVariant(e.file.status)">{{ statusLabel(e.file.status) }}</DfBadge>
             <span v-else class="text-xs text-fg-muted">{{ t("drive.folder") }}</span>
-            <DfDropdown :items="itemsFor(e)" align="right">
-              <template #trigger>
-                <button class="rounded-md p-1 text-fg-muted opacity-0 transition-opacity hover:bg-bg hover:text-fg group-hover:opacity-100">
-                  <MoreHorizontal class="h-4 w-4" />
-                </button>
-              </template>
-            </DfDropdown>
           </div>
+          <DfDropdown :items="itemsFor(e)" align="right">
+            <template #trigger>
+              <button class="rounded-md p-1 text-fg-muted opacity-0 transition-opacity hover:bg-bg hover:text-fg group-hover:opacity-100">
+                <MoreHorizontal class="h-4 w-4" />
+              </button>
+            </template>
+          </DfDropdown>
         </li>
       </ul>
     </template>

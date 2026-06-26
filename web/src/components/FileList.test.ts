@@ -211,9 +211,9 @@ describe("FileList", () => {
       global,
     });
     const li = w.find("li");
-    expect(li.classes().some((c) => c.includes("grid-cols-[auto_1fr_auto_auto]"))).toBe(true);
+    expect(li.classes().some((c) => c.includes("grid-cols-[auto_1fr_auto_auto_auto]"))).toBe(true);
     const kids = li.element.children;
-    expect(kids.length).toBe(4);
+    expect(kids.length).toBe(5);
     expect(kids[2].tagName).toBe("SPAN");
     expect(kids[2].textContent).toMatch(/2\.0 KB/);
     expect(kids[3].tagName).toBe("DIV");
