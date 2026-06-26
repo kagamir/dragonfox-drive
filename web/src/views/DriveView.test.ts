@@ -3,25 +3,18 @@ import { mount, flushPromises } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import DriveView from "./DriveView.vue";
 
-vi.mock("@/workers/crypto", () => ({
-  cryptoApi: {},
-  ensureCryptoReady: vi.fn().mockResolvedValue(undefined),
-}));
+vi.mock("@/workers/crypto", () => ({ cryptoApi: {}, ensureCryptoReady: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("@/api/files", () => ({ filesApi: { list: vi.fn().mockResolvedValue({ files: [] }) } }));
-vi.mock("@/api/folders", () => ({
-  foldersApi: { list: vi.fn().mockResolvedValue({ folders: [] }) },
-}));
-// Stub the modal so the view renders without its real dependencies.
-vi.mock("@/components/MovePickerModal.vue", () => ({
-  default: { template: "<div />", props: ["open", "excludeId"] },
-}));
+vi.mock("@/api/folders", () => ({ foldersApi: { list: vi.fn().mockResolvedValue({ folders: [] }) } }));
+vi.mock("@/components/MovePickerModal.vue", () => ({ default: { template: "<div />", props: ["open", "excludeId"] } }));
 
 describe("DriveView", () => {
-  it("renders a breadcrumb, a New folder button, and the empty hint at root", async () => {
+  it("renders header, breadcrumb and new-folder button at root", async () => {
     setActivePinia(createPinia());
-    const w = mount(DriveView);
+    const w = mount(DriveView, { global: { stubs: { RouterLink: { template: "<slot />" } } } });
     await flushPromises();
+    expect(w.text()).toMatch(/DragonFox/);
     expect(w.text()).toMatch(/Drive/);
-    expect(w.findAll("button").some((b) => b.text() === "New folder")).toBe(true);
+    expect(w.findAll("button").some((b) => b.text().includes("新建文件夹"))).toBe(true);
   });
 });

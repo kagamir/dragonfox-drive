@@ -1,292 +1,161 @@
 <script setup lang="ts">
 import { onMounted, ref, computed } from "vue";
-import { useRouter } from "vue-router";
 import { useAuthStore } from "@/stores/auth";
 import { useFilesStore } from "@/stores/files";
 import { useFoldersStore } from "@/stores/folders";
+import { useConfirm } from "@/composables/useConfirm";
+import { usePrompt } from "@/composables/usePrompt";
+import { useToast } from "@/composables/useToast";
 import type { FileMeta } from "@/api/types";
+import AppHeader from "@/components/AppHeader.vue";
+import UploadDropzone from "@/components/UploadDropzone.vue";
+import UploadQueueDrawer from "@/components/UploadQueueDrawer.vue";
+import FileList from "@/components/FileList.vue";
+import DfBreadcrumbs from "@/components/ui/DfBreadcrumbs.vue";
+import DfButton from "@/components/ui/DfButton.vue";
+import DfSegmented from "@/components/ui/DfSegmented.vue";
+import DfInput from "@/components/ui/DfInput.vue";
 import FilePreviewModal from "@/components/FilePreviewModal.vue";
 import MovePickerModal from "@/components/MovePickerModal.vue";
 import ShareDialog from "@/components/ShareDialog.vue";
+import { List, LayoutGrid, FolderPlus, Search } from "lucide-vue-next";
 
 const auth = useAuthStore();
 const files = useFilesStore();
 const folders = useFoldersStore();
-const router = useRouter();
+const confirm = useConfirm();
+const prompt = usePrompt();
+const toast = useToast();
+
 const fileInput = ref<HTMLInputElement | null>(null);
-const dragOver = ref(false);
-
-// Move-picker state: kind + id of the item being moved.
 const moveTarget = ref<{ kind: "folder" | "file"; id: string } | null>(null);
-
-// Share-dialog target: the file being shared (null when closed).
 const shareTarget = ref<FileMeta | null>(null);
+const view = ref<"list" | "grid">("list");
+const search = ref("");
 
-onMounted(async () => {
+onMounted(async () => { await folders.loadTree(); await files.refresh(); });
+
+function pickFile() { fileInput.value?.click(); }
+async function onFilesChosen(list: File[]) {
+  for (const f of list) {
+    try { await files.upload(f); } catch { /* store surfaces */ }
+  }
   await folders.loadTree();
-  await files.refresh();
-});
-
-function signOut() {
-  void auth.logout().then(() => router.push({ name: "login" }));
 }
-
-function pickFile() {
-  fileInput.value?.click();
-}
-
 async function onFileChosen(e: Event) {
-  const target = e.target as HTMLInputElement;
-  const f = target.files?.[0];
-  if (!f) return;
-  try {
-    await files.upload(f);
-    await folders.loadTree();
-  } catch {
-    /* error surfaced in store */
-  } finally {
-    target.value = "";
+  const t = e.target as HTMLInputElement;
+  if (t.files?.length) await onFilesChosen(Array.from(t.files));
+  t.value = "";
+}
+
+function openFile(f: FileMeta) { void files.openPreview(f).catch(() => {}); }
+function download(f: FileMeta) { void files.download(f).catch(() => {}); }
+function share(f: FileMeta) { shareTarget.value = f; }
+async function removeFile(f: FileMeta) {
+  if (await confirm.confirm({ message: `删除 “${files.displayNames[f.id] ?? f.id}”？`, danger: true, confirmText: "删除" })) {
+    await files.remove(f.id); await folders.loadTree(); toast.success("已删除");
   }
 }
-
-function onDrop(e: DragEvent) {
-  dragOver.value = false;
-  const f = e.dataTransfer?.files[0];
-  if (f) void files.upload(f).then(() => folders.loadTree()).catch(() => {});
+async function newFolder() {
+  const name = await prompt.prompt({ message: "文件夹名称", title: "新建文件夹", placeholder: "新建文件夹", confirmText: "创建" });
+  if (name) { await folders.createFolder(name); toast.success("已创建"); }
 }
-function onDragOver() {
-  dragOver.value = true;
+async function renameFolder(id: string, current: string) {
+  const name = await prompt.prompt({ message: "文件夹名称", title: "重命名", initial: current, confirmText: "保存" });
+  if (name && name !== current) { await folders.renameFolder(id, name); toast.success("已重命名"); }
 }
-function onDragLeave() {
-  dragOver.value = false;
-}
-
-function fmtSize(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KiB`;
-  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MiB`;
-  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GiB`;
-}
-
-function fileName(f: FileMeta): string {
-  return files.displayNames[f.id] ?? f.id;
-}
-
-function previewable(f: FileMeta): boolean {
-  return f.status === "ready";
-}
-
-function open(f: FileMeta) {
-  void files.openPreview(f).catch(() => {});
-}
-function download(f: FileMeta) {
-  void files.download(f).catch(() => {});
-}
-function remove(f: FileMeta) {
-  if (confirm(`Delete "${fileName(f)}"?`)) void files.remove(f.id).then(() => folders.loadTree());
-}
-
-function share(f: FileMeta) {
-  shareTarget.value = f;
-}
-
-// --- folder actions ------------------------------------------------------
-
-function newFolder() {
-  const name = prompt("Folder name");
-  if (name) void folders.createFolder(name);
-}
-
-function openFolder(id: string) {
-  folders.navigateTo(id);
-}
-
-function crumbTo(id: string | null) {
-  folders.navigateTo(id);
-}
-
-function renameFolder(id: string, current: string) {
-  const name = prompt("Rename folder", current);
-  if (name) void folders.renameFolder(id, name);
-}
-
-function moveFolder(id: string) {
-  moveTarget.value = { kind: "folder", id };
-}
-
-function moveFile(id: string) {
-  moveTarget.value = { kind: "file", id };
-}
-
-function removeFolder(id: string, name: string) {
-  if (confirm(`Delete "${name}" and everything inside it? This cannot be undone.`)) {
-    void folders.deleteFolder(id);
-  }
-}
-
+function moveFolder(id: string) { moveTarget.value = { kind: "folder", id }; }
+function moveFile(id: string) { moveTarget.value = { kind: "file", id }; }
 async function onMovePicked(dest: string | null) {
-  const t = moveTarget.value;
-  moveTarget.value = null;
+  const t = moveTarget.value; moveTarget.value = null;
   if (!t) return;
   try {
     if (t.kind === "folder") await folders.moveFolder(t.id, dest);
     else await files.moveFile(t.id, dest);
-  } catch {
-    /* error surfaced in store */
+    toast.success("已移动");
+  } catch { toast.error("移动失败，请重试"); }
+}
+async function deleteFolder(id: string, name: string) {
+  if (await confirm.confirm({ message: `删除 “${name}” 及其所有内容？此操作无法撤销。`, danger: true, confirmText: "删除" })) {
+    await folders.deleteFolder(id); toast.success("已删除");
   }
 }
 
-const showPrevPage = computed(() => folders.page > 0);
-const showNextPage = computed(() => folders.page < folders.totalPages - 1);
+const crumbs = computed(() => [
+  { id: null as string | null, label: "Drive" },
+  ...folders.breadcrumbs.map((b: { id: string; name: string }) => ({ id: b.id as string | null, label: b.name })),
+]);
+const showPrev = computed(() => folders.page > 0);
+const showNext = computed(() => folders.page < folders.totalPages - 1);
+const queueUploads = computed(() =>
+  files.activeUploads.map((u) => ({ fileId: u.fileId, name: u.file.name, progress: u.progress, phase: u.phase })),
+);
 </script>
 
 <template>
-  <main class="page">
-    <header class="bar">
-      <div class="brand"><span class="logo">DragonFox Drive</span></div>
-      <nav>
-        <RouterLink :to="{ name: 'drive' }">My files</RouterLink>
-        <RouterLink :to="{ name: 'settings' }">Settings</RouterLink>
-        <button class="link" @click="signOut">Sign out</button>
-      </nav>
-    </header>
-
-    <section class="content">
-      <nav class="breadcrumbs">
-        <a class="link crumb" @click="crumbTo(null)">Drive</a>
-        <template v-for="b in folders.breadcrumbs" :key="b.id">
-          <span class="sep">/</span>
-          <a class="link crumb" @click="crumbTo(b.id)">{{ b.name }}</a>
-        </template>
-      </nav>
-
-      <div class="toolbar">
-        <button class="link" @click="newFolder">New folder</button>
+  <div class="min-h-screen bg-bg">
+    <AppHeader :username="auth.username ?? '我'" active="drive" :show-upload="true" @upload="pickFile" />
+    <UploadDropzone class="mx-auto w-full max-w-7xl px-4 py-6 md:px-6" @files="onFilesChosen">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <DfBreadcrumbs :items="crumbs" @navigate="(id) => folders.navigateTo(id)" />
+        <DfInput v-model="search" class="min-w-[14rem] flex-1 sm:max-w-xs" placeholder="搜索当前文件夹…">
+          <template #prefix><Search class="h-4 w-4 text-fg-muted" /></template>
+        </DfInput>
+        <div class="flex items-center gap-2">
+          <DfButton variant="ghost" size="sm" @click="newFolder">
+            <template #icon><FolderPlus class="h-4 w-4" /></template>新建文件夹
+          </DfButton>
+          <DfSegmented v-model="view" :options="[{ value: 'list', icon: List }, { value: 'grid', icon: LayoutGrid }]" />
+        </div>
       </div>
 
-      <div
-        class="dropzone"
-        :class="{ over: dragOver }"
-        @click="pickFile"
-        @dragover.prevent="onDragOver"
-        @dragleave.prevent="onDragLeave"
-        @drop.prevent="onDrop"
-      >
-        <p v-if="!files.uploading">Drop a file here or click to choose</p>
-        <p v-else>Encrypting &amp; uploading… {{ Math.round(files.uploadProgress * 100) }}%</p>
-        <progress v-if="files.uploading" :value="files.uploadProgress" max="1" />
-        <input ref="fileInput" type="file" class="hidden" @change="onFileChosen" />
-      </div>
-
-      <p v-if="files.error || folders.error" class="error">{{ files.error || folders.error }}</p>
-
-      <p class="muted" v-if="!folders.paginatedView.length && !files.loading">
-        Nothing here.
+      <p v-if="files.error || folders.error" class="mt-4 rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger">
+        {{ files.error || folders.error }}
       </p>
 
-      <ul class="list">
-        <li v-for="entry in folders.paginatedView" :key="entry.kind + (entry.kind === 'folder' ? entry.folder.id : entry.file.id)">
-          <template v-if="entry.kind === 'folder'">
-            <span class="name">📁 {{ entry.folder.name }}</span>
-            <span class="actions">
-              <button class="link" @click="openFolder(entry.folder.id)">Open</button>
-              <button class="link" @click="renameFolder(entry.folder.id, entry.folder.name)">Rename</button>
-              <button class="link" @click="moveFolder(entry.folder.id)">Move</button>
-              <button class="link" @click="removeFolder(entry.folder.id, entry.folder.name)">Delete</button>
-            </span>
-          </template>
-          <template v-else>
-            <span class="name">{{ fileName(entry.file) }}</span>
-            <span class="meta">{{ fmtSize(entry.file.total_size) }} · {{ entry.file.status }}</span>
-            <span class="actions">
-              <button class="link" :disabled="!previewable(entry.file)" @click="open(entry.file)">Open</button>
-              <button class="link" :disabled="entry.file.status !== 'ready'" @click="download(entry.file)">Download</button>
-              <button class="link" :disabled="entry.file.status !== 'ready'" @click="share(entry.file)">Share</button>
-              <button class="link" @click="moveFile(entry.file.id)">Move</button>
-              <button class="link" @click="remove(entry.file)">Delete</button>
-            </span>
-          </template>
-        </li>
-      </ul>
+      <div class="mt-4">
+        <FileList
+          :entries="folders.paginatedView"
+          :display-names="files.displayNames"
+          :search="search"
+          @open-folder="(id) => folders.navigateTo(id)"
+          @open-file="openFile"
+          @download="download"
+          @share="share"
+          @rename-folder="renameFolder"
+          @move-folder="moveFolder"
+          @move-file="moveFile"
+          @delete-folder="deleteFolder"
+          @delete-file="removeFile"
+        />
+      </div>
 
-      <nav class="pager" v-if="folders.totalPages > 1">
-        <button class="link" :disabled="!showPrevPage" @click="folders.setPage(folders.page - 1)">Prev</button>
-        <span class="muted">Page {{ folders.page + 1 }} / {{ folders.totalPages }}</span>
-        <button class="link" :disabled="!showNextPage" @click="folders.setPage(folders.page + 1)">Next</button>
+      <nav v-if="folders.totalPages > 1" class="mt-6 flex items-center gap-3">
+        <DfButton variant="ghost" size="sm" :disabled="!showPrev" @click="folders.setPage(folders.page - 1)">上一页</DfButton>
+        <span class="text-sm text-fg-muted">第 {{ folders.page + 1 }} / {{ folders.totalPages }} 页</span>
+        <DfButton variant="ghost" size="sm" :disabled="!showNext" @click="folders.setPage(folders.page + 1)">下一页</DfButton>
       </nav>
 
-      <section v-if="files.activeUploads.length" class="uploads">
-        <h2>Incomplete uploads</h2>
-        <ul class="list">
-          <li v-for="u in files.activeUploads" :key="u.fileId">
-            <span class="name">{{ u.file.name }}</span>
-            <span class="meta">{{ Math.round(u.progress * 100) }}% · {{ u.phase }}</span>
-            <progress :value="u.progress" max="1" />
-            <button class="link" @click="files.cancelUpload(u.fileId)">Cancel</button>
-          </li>
-        </ul>
-      </section>
+      <input ref="fileInput" type="file" multiple class="hidden" @change="onFileChosen" />
+    </UploadDropzone>
 
-      <FilePreviewModal
-        v-if="files.preview"
-        :kind="files.preview.kind"
-        :url="files.preview.url"
-        :name="files.preview.name"
-        :player="files.preview.player"
-        @close="files.closePreview()"
-        @error="(m: string) => (files.error = m)"
-      />
+    <UploadQueueDrawer :uploads="queueUploads" @cancel="(id) => files.cancelUpload(id)" />
 
-      <MovePickerModal
-        :open="moveTarget !== null"
-        :exclude-id="moveTarget?.kind === 'folder' ? moveTarget.id : undefined"
-        @pick="onMovePicked"
-        @cancel="moveTarget = null"
-      />
-
-      <ShareDialog v-if="shareTarget" :file="shareTarget" @close="shareTarget = null" />
-    </section>
-  </main>
+    <FilePreviewModal
+      v-if="files.preview"
+      :kind="files.preview.kind"
+      :url="files.preview.url"
+      :name="files.preview.name"
+      :player="files.preview.player"
+      @close="files.closePreview()"
+      @error="(m: string) => (files.error = m)"
+    />
+    <MovePickerModal
+      :open="moveTarget !== null"
+      :exclude-id="moveTarget?.kind === 'folder' ? moveTarget.id : undefined"
+      @pick="onMovePicked"
+      @cancel="moveTarget = null"
+    />
+    <ShareDialog v-if="shareTarget" :file="shareTarget" @close="shareTarget = null" />
+  </div>
 </template>
-
-<style scoped>
-.page { display: flex; flex-direction: column; min-height: 100vh; }
-.bar {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 0.8rem 1.5rem; border-bottom: 1px solid var(--df-color-border);
-  background: var(--df-color-bg-elevated);
-}
-.brand .logo { font-weight: 700; letter-spacing: 0.02em; }
-nav { display: flex; gap: 1rem; align-items: center; }
-nav a { color: var(--df-color-fg-muted); }
-nav a.router-link-active { color: var(--df-color-fg); }
-.link { background: transparent; color: var(--df-color-fg-muted); border: 0; cursor: pointer; padding: 0; }
-.link:disabled { opacity: 0.4; cursor: default; }
-.content { padding: 2rem 1.5rem; max-width: 1100px; width: 100%; margin: 0 auto; }
-.breadcrumbs { margin-bottom: 1rem; display: flex; gap: 0.4rem; align-items: center; }
-.crumb { color: var(--df-color-fg-muted); cursor: pointer; }
-.sep { color: var(--df-color-fg-muted); }
-.toolbar { margin-bottom: 1rem; }
-h1, h2 { margin: 0 0 1rem; font-size: 1.4rem; }
-.muted { color: var(--df-color-fg-muted); }
-.error { color: #c0392b; }
-.dropzone {
-  border: 2px dashed var(--df-color-border); border-radius: var(--df-radius-sm);
-  padding: 2rem; text-align: center; cursor: pointer; color: var(--df-color-fg-muted);
-  margin-bottom: 1.5rem;
-}
-.dropzone.over { border-color: var(--df-color-fg); }
-.hidden { display: none; }
-progress { width: 60%; }
-.list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 0.4rem; }
-.list li {
-  background: var(--df-color-bg-elevated); border: 1px solid var(--df-color-border);
-  border-radius: var(--df-radius-sm); padding: 0.7rem 0.9rem;
-  display: flex; flex-direction: column; gap: 0.15rem;
-}
-.name { font-weight: 600; }
-.meta { color: var(--df-color-fg-muted); font-size: 0.8rem; }
-.actions { display: flex; gap: 1rem; margin-top: 0.3rem; }
-.pager { display: flex; gap: 1rem; align-items: center; margin-top: 1rem; }
-.uploads { margin-top: 2rem; }
-</style>
