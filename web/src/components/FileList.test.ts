@@ -90,7 +90,7 @@ describe("FileList", () => {
     expect(trigger).toBeTruthy();
     await trigger!.trigger("click");
     await flushPromises();
-    const del = w.findAll("button").find((b) => b.text().trim() === "删除");
+    const del = w.findAll("button").find((b) => b.text().trim() === "Delete");
     expect(del).toBeTruthy();
     await del!.trigger("click");
     await flushPromises();

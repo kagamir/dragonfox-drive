@@ -25,6 +25,7 @@ export default {
     prev: "Previous", next: "Next", page: "Page {cur} / {total}",
     empty: "Nothing here yet", emptyDesc: "Drop a file here, or click upload",
     folder: "Folder", selected: "{n} selected", move: "Move", moveTo: "Move to…",
+    open: "Open",
     root: "Root", noOtherFolders: "No other folders.",
     folderName: "Folder name", rename: "Rename",
     deleteFolder: "Delete \"{name}\" and everything inside it? This cannot be undone.",

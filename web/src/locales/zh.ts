@@ -25,6 +25,7 @@ export default {
     prev: "上一页", next: "下一页", page: "第 {cur} / {total} 页",
     empty: "这里还很空", emptyDesc: "拖拽文件到此处，或点击上传按钮",
     folder: "文件夹", selected: "已选 {n} 项", move: "移动", moveTo: "移动到…",
+    open: "打开",
     root: "根目录", noOtherFolders: "没有其他文件夹。",
     folderName: "文件夹名称", rename: "重命名",
     deleteFolder: "删除“{name}”及其所有内容？此操作无法撤销。",
