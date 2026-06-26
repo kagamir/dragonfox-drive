@@ -454,6 +454,58 @@ describe("files store", () => {
     folderKeyOfMock.mockReturnValue(undefined);
   });
 
+  it("renameFile re-encrypts the manifest with the new name and PUTs it", async () => {
+    const auth = useAuthStore();
+    auth.masterKey = new Uint8Array(32) as any;
+    const files = useFilesStore();
+    files.files = [];
+    const meta = {
+      id: "f1", owner_id: "u", status: "ready" as const,
+      total_size: 2, chunk_count: 1,
+      encrypted_manifest: "em", encrypted_manifest_nonce: "emn",
+      encrypted_file_key: "fk", encrypted_file_key_nonce: "fkn",
+      created_at: "", updated_at: "",
+    };
+    files.files = [meta];
+    putManifestMock.mockClear();
+    (cryptoApi.seal as any).mockClear();
+    await files.renameFile("f1", "new-name.txt");
+    // The manifest was re-sealed with the file key and PUT back.
+    expect(cryptoApi.seal).toHaveBeenCalledTimes(1);
+    expect(putManifestMock).toHaveBeenCalledWith("f1", expect.objectContaining({
+      encrypted_manifest: expect.any(String),
+      encrypted_manifest_nonce: expect.any(String),
+    }));
+    // Display name cache is updated so the UI re-renders immediately.
+    expect(files.displayNames["f1"]).toBe("new-name.txt");
+    // Local manifest blob cache is updated so preview/download don't use stale data.
+    const after = files.files.find((f) => f.id === "f1")!;
+    expect(after.encrypted_manifest).toBe(toBase64(new Uint8Array([7])));
+    expect(after.encrypted_manifest_nonce).toBe(toBase64(new Uint8Array([6])));
+  });
+
+  it("renameFile sets store.error and rethrows when the PUT fails", async () => {
+    const auth = useAuthStore();
+    auth.masterKey = new Uint8Array(32) as any;
+    const files = useFilesStore();
+    const meta = {
+      id: "f1", owner_id: "u", status: "ready" as const,
+      total_size: 2, chunk_count: 1,
+      encrypted_manifest: "em", encrypted_manifest_nonce: "emn",
+      encrypted_file_key: "fk", encrypted_file_key_nonce: "fkn",
+      created_at: "", updated_at: "",
+    };
+    files.files = [meta];
+    putManifestMock.mockClear();
+    putManifestMock.mockRejectedValueOnce(new Error("server boom"));
+    await expect(files.renameFile("f1", "whatever.txt")).rejects.toThrow("server boom");
+    // On failure the display name must NOT be updated (cache stays consistent).
+    expect(files.displayNames["f1"]).toBeUndefined();
+    expect(files.error).toBe("server boom");
+    // restore default for any later tests
+    putManifestMock.mockResolvedValue({ ok: true });
+  });
+
   it("download of a folder-resident file unwraps with the folder key", async () => {
     const auth = useAuthStore();
     auth.masterKey = new Uint8Array(32) as any;

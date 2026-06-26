@@ -461,6 +461,38 @@ export const useFilesStore = defineStore("files", () => {
     }
   }
 
+  async function renameFile(id: string, newName: string): Promise<void> {
+    error.value = null;
+    try {
+      await ensureCryptoReady();
+      const meta = files.value.find((f) => f.id === id);
+      if (!meta) throw new Error("file not found");
+      const { fileKey, manifest } = await unlockFile(meta);
+      const nextManifest: Manifest = { ...manifest, name: newName };
+      const manifestBytes = new TextEncoder().encode(JSON.stringify(nextManifest));
+      const em = await cryptoApi.seal(fileKey, manifestBytes);
+      await filesApi.putManifest(id, {
+        encrypted_manifest: toBase64(em.ciphertext),
+        encrypted_manifest_nonce: toBase64(em.iv),
+      });
+      // Keep the local cache in sync with the server so a subsequent
+      // preview/download doesn't re-fetch stale manifest data.
+      files.value = files.value.map((f) =>
+        f.id === id
+          ? {
+              ...f,
+              encrypted_manifest: toBase64(em.ciphertext),
+              encrypted_manifest_nonce: toBase64(em.iv),
+            }
+          : f,
+      );
+      displayNames.value[id] = newName;
+    } catch (e) {
+      error.value = (e as Error).message;
+      throw e;
+    }
+  }
+
   async function openVideo(meta: FileMeta, manifest: Manifest, fileKey: Uint8Array): Promise<void> {
     const ivBase = fromBase64(manifest.iv_base);
     const isMp4 = ["video/mp4", "video/quicktime", "video/x-m4v"].includes(manifest.mime);
@@ -588,6 +620,7 @@ export const useFilesStore = defineStore("files", () => {
     remove,
     filesWithParent,
     moveFile,
+    renameFile,
     unlockFile,
     preview,
     openPreview,
