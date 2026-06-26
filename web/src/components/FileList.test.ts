@@ -118,6 +118,27 @@ describe("FileList", () => {
     expect(ev![0][0]).toEqual(e.file);
   });
 
+  it("⋯ menu rename item is disabled for a non-ready file (no emit)", async () => {
+    const e = fileEntry(makeFile({ id: "f1", status: "uploading" }));
+    const w = mount(FileList, {
+      props: { entries: [e], displayNames: {}, search: "", view: "list", selection: [] },
+      global,
+    });
+    const trigger = w.findAll("button").find((b) => b.classes().includes("opacity-0"));
+    expect(trigger).toBeTruthy();
+    await trigger!.trigger("click");
+    await flushPromises();
+    const rename = w.findAll("button").find((b) => b.text().trim() === "Rename");
+    expect(rename).toBeTruthy();
+    // Headless UI marks a disabled MenuItem with aria-disabled + data-headlessui-state.
+    expect(rename!.attributes("aria-disabled")).toBe("true");
+    // Disabled MenuItems must not emit — the disable is the sole guard preventing
+    // a rename on a file whose manifest unlockFile would reject.
+    await rename!.trigger("click");
+    await flushPromises();
+    expect(w.emitted("renameFile")).toBeUndefined();
+  });
+
   it("checkbox toggle emits update:selection with the entry key", async () => {
     const e = fileEntry(makeFile({ id: "f1" }));
     const w = mount(FileList, {

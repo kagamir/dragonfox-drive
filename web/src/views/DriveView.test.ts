@@ -30,6 +30,7 @@ vi.mock("@/stores/files", () => ({
     cancelUpload: vi.fn(), cancelDownload: vi.fn().mockResolvedValue(undefined),
     download: vi.fn().mockResolvedValue(undefined),
     remove: STUB.remove, filesWithParent: () => [], moveFile: vi.fn().mockResolvedValue(undefined),
+    renameFile: vi.fn().mockResolvedValue(undefined),
     unlockFile: vi.fn(), openPreview: vi.fn().mockResolvedValue(undefined), closePreview: vi.fn(),
   }),
 }));
