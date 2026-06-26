@@ -44,6 +44,13 @@ export const useAuthStore = defineStore("auth", () => {
   const deviceId = ref<string | null>(null);
   const isRestoring = ref(true);
 
+  // Tracks the in-flight session-restore so the router guard (and anyone
+  // else) can await a single shared promise rather than racing the async
+  // restore on first navigation. Without this, a page refresh sees
+  // `isAuthenticated === false` before the refresh-token exchange completes
+  // and incorrectly bounces the user to /login.
+  let restoringPromise: Promise<void> | null = null;
+
   function setSession(
     info: { user_id: string; username: string },
     key: RawKey,
@@ -86,6 +93,17 @@ export const useAuthStore = defineStore("auth", () => {
     } finally {
       isRestoring.value = false;
     }
+  }
+
+  /**
+   * Idempotent wrapper around {@link tryRestoreSession} that returns a shared
+   * promise. The router's `beforeEach` guard awaits this so the auth state is
+   * settled before any redirect decision — fixing the refresh-page logout
+   * caused by reading `isAuthenticated` before the async restore completes.
+   */
+  function ensureSessionRestored(): Promise<void> {
+    if (!restoringPromise) restoringPromise = tryRestoreSession();
+    return restoringPromise;
   }
 
   async function register(p: { username: string; password: string }): Promise<void> {
@@ -168,6 +186,7 @@ export const useAuthStore = defineStore("auth", () => {
     deviceId,
     isRestoring,
     tryRestoreSession,
+    ensureSessionRestored,
     register,
     login,
     logout,

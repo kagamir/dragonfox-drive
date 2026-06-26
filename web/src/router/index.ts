@@ -59,8 +59,13 @@ export const router = createRouter({
   },
 });
 
-router.beforeEach((to) => {
+router.beforeEach(async (to) => {
   const auth = useAuthStore();
+  // Wait for the initial session restore so we don't mistake an in-flight
+  // refresh-token exchange for an unauthenticated state. This is what keeps
+  // a plain page refresh from bouncing to /login when the user is in fact
+  // still logged in.
+  await auth.ensureSessionRestored();
   if (to.meta.requiresAuth && !auth.isAuthenticated) {
     return { name: "login", query: { redirect: to.fullPath } };
   }

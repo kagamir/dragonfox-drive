@@ -17,8 +17,8 @@ onMounted(() => {
   // refresh-token failure observed by client.ts (on an authenticated
   // request) is propagated to the store.
   onSessionLost(() => auth.logout());
-  // Try to restore session from IndexedDB (device-level key path).
-  void auth.tryRestoreSession();
+  // Session restore is kicked off in main.ts (before mount) so the router
+  // guard can await it; nothing to do here.
   // Pull public runtime flags (e.g. allow_registration) for the pre-auth UI.
   void config.load();
 });

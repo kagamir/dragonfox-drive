@@ -98,3 +98,90 @@ describe("login", () => {
     expect(auth.isAuthenticated).toBe(false);
   });
 });
+
+describe("ensureSessionRestored (refresh-page race fix)", () => {
+  function mockRefreshSuccess() {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.endsWith("/api/auth/refresh")) {
+        return new Response(
+          JSON.stringify({ access_token: "AT2", refresh_token: "RT2", expires_in: 900 }),
+          { status: 200 },
+        );
+      }
+      return new Response("{}", { status: 404 });
+    });
+  }
+
+  function mockRefreshFailure() {
+    fetchMock.mockImplementation(async () =>
+      new Response(JSON.stringify({ error: "token expired" }), { status: 401 }),
+    );
+  }
+
+  it("triggers the refresh-token exchange only once across concurrent callers", async () => {
+    localStorage.setItem("df_refresh_token", "RT");
+    mockRefreshSuccess();
+    const auth = useAuthStore();
+    // The router guard and main.ts both call this on first paint; Pinia
+    // wraps action return values so identity comparison is unreliable, but
+    // the underlying restore must run exactly once (single /refresh call).
+    await Promise.all([auth.ensureSessionRestored(), auth.ensureSessionRestored()]);
+    const refreshCalls = fetchMock.mock.calls.filter((c) =>
+      String(c[0]).endsWith("/api/auth/refresh"),
+    );
+    expect(refreshCalls).toHaveLength(1);
+    expect(auth.isAuthenticated).toBe(true);
+  });
+
+  it("marks the session authenticated when the refresh token is still valid", async () => {
+    localStorage.setItem("df_refresh_token", "RT");
+    mockRefreshSuccess();
+    const auth = useAuthStore();
+    await auth.ensureSessionRestored();
+    expect(auth.isAuthenticated).toBe(true);
+    expect(getRefreshToken()).toBe("RT2");
+  });
+
+  it("leaves the session unauthenticated when the refresh token is expired/revoked", async () => {
+    localStorage.setItem("df_refresh_token", "RT");
+    mockRefreshFailure();
+    const auth = useAuthStore();
+    await auth.ensureSessionRestored();
+    expect(auth.isAuthenticated).toBe(false);
+    expect(getRefreshToken()).toBeNull();
+  });
+
+  it("keeps isRestoring true until the restore promise settles", async () => {
+    localStorage.setItem("df_refresh_token", "RT");
+    let resolveRefresh!: (r: Response) => void;
+    fetchMock.mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveRefresh = resolve;
+        }),
+    );
+    const auth = useAuthStore();
+    const p = auth.ensureSessionRestored();
+    // Let the restore coroutine advance until it hits the pending fetch.
+    await vi.waitFor(() => expect(resolveRefresh).toBeDefined());
+    expect(auth.isRestoring).toBe(true);
+    resolveRefresh(
+      new Response(
+        JSON.stringify({ access_token: "AT2", refresh_token: "RT2", expires_in: 900 }),
+        { status: 200 },
+      ),
+    );
+    await p;
+    expect(auth.isRestoring).toBe(false);
+    expect(auth.isAuthenticated).toBe(true);
+  });
+
+  it("treats an absent refresh token as 'nothing to restore' (no logout storm)", async () => {
+    // No df_refresh_token in localStorage.
+    const auth = useAuthStore();
+    await auth.ensureSessionRestored();
+    expect(auth.isAuthenticated).toBe(false);
+    expect(auth.isRestoring).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
