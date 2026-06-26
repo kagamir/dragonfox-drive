@@ -225,8 +225,8 @@ describe("files store", () => {
       created_at: "", updated_at: "",
     };
     await files.download(meta);
-    expect(getChunkMock).toHaveBeenCalledWith("f1", 0);
-    expect(getChunkMock).toHaveBeenCalledWith("f1", 1);
+    expect(getChunkMock).toHaveBeenCalledWith("f1", 0, expect.any(AbortSignal));
+    expect(getChunkMock).toHaveBeenCalledWith("f1", 1, expect.any(AbortSignal));
     expect((cryptoApi.decryptChunk as any)).toHaveBeenCalledTimes(2);
   });
 
@@ -501,5 +501,108 @@ describe("files store", () => {
     (cryptoApi.unwrap as any).mockClear();
     await files.download(meta);
     expect(cryptoApi.unwrap).toHaveBeenCalledWith(expect.any(Object), mk);
+  });
+
+  it("download pushes a session, tracks progress, and clears it on success", async () => {
+    const auth = useAuthStore();
+    auth.masterKey = new Uint8Array(32) as any;
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn(() => "blob:x"),
+      revokeObjectURL: vi.fn(),
+    });
+    const files = useFilesStore();
+    const meta = {
+      id: "p1", owner_id: "u", status: "ready" as const,
+      total_size: 4, chunk_count: 3,
+      encrypted_manifest: "em", encrypted_manifest_nonce: "emn",
+      encrypted_file_key: "fk", encrypted_file_key_nonce: "fkn",
+      created_at: "", updated_at: "",
+    };
+    // Record the session's phase as seen by each in-flight chunk: proves the
+    // session was observable (pushed to activeDownloads) during the run.
+    let seenDuring = 0;
+    (cryptoApi.decryptChunk as any).mockImplementation(async () => {
+      const s = files.activeDownloads.find((x) => x.fileId === "p1");
+      if (s && s.phase === "downloading") seenDuring++;
+      return new Uint8Array([9, 9]);
+    });
+    await files.download(meta);
+    expect(seenDuring).toBe(3); // all 3 chunks saw the live "downloading" session
+    // Final state: phase advanced to "done" and progress reached 1 (the
+    // increment hook in the pool ran for every chunk). The session is still
+    // in the list — the 1500ms cleanup timer hasn't fired yet.
+    expect(files.activeDownloads.length).toBe(1);
+    expect(files.activeDownloads[0].fileId).toBe("p1");
+    expect(files.activeDownloads[0].phase).toBe("done");
+    expect(files.activeDownloads[0].progress).toBe(1);
+    // restore the default decryptChunk mock for any later tests
+    (cryptoApi.decryptChunk as any).mockResolvedValue(new Uint8Array([9, 9]));
+  });
+
+  it("cancelDownload aborts and removes the session mid-flight", async () => {
+    const auth = useAuthStore();
+    auth.masterKey = new Uint8Array(32) as any;
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn(() => "blob:x"),
+      revokeObjectURL: vi.fn(),
+    });
+    // Stall getChunk so we can cancel before it resolves.
+    let resolveGet: (v: Response) => void = () => {};
+    getChunkMock.mockImplementation(
+      () => new Promise<Response>((r) => { resolveGet = r; }),
+    );
+    const files = useFilesStore();
+    const meta = {
+      id: "c1", owner_id: "u", status: "ready" as const,
+      total_size: 2, chunk_count: 1,
+      encrypted_manifest: "em", encrypted_manifest_nonce: "emn",
+      encrypted_file_key: "fk", encrypted_file_key_nonce: "fkn",
+      created_at: "", updated_at: "",
+    };
+    const p = files.download(meta);
+    // Let the pool reach the stalled getChunk.
+    await new Promise((r) => setTimeout(r, 10));
+    expect(files.activeDownloads.length).toBe(1);
+    const abort = files.activeDownloads[0].abort;
+    await files.cancelDownload("c1");
+    expect(abort.signal.aborted).toBe(true);
+    expect(files.activeDownloads.length).toBe(0);
+    // Release the stalled request; download() resolves cleanly via the abort
+    // short-circuit (no throw, no saveBlob).
+    resolveGet(new Response(new Uint8Array([1, 2, 3])));
+    await p;
+  });
+
+  it("cancelDownload is a no-op when no session matches", async () => {
+    const files = useFilesStore();
+    await expect(files.cancelDownload("nope")).resolves.toBeUndefined();
+    expect(files.activeDownloads.length).toBe(0);
+  });
+
+  it("download marks the session as error when a chunk fails", async () => {
+    const auth = useAuthStore();
+    auth.masterKey = new Uint8Array(32) as any;
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn(() => "blob:x"),
+      revokeObjectURL: vi.fn(),
+    });
+    getChunkMock.mockReset();
+    getChunkMock.mockRejectedValue(new Error("net fail"));
+    const files = useFilesStore();
+    const meta = {
+      id: "e1", owner_id: "u", status: "ready" as const,
+      total_size: 2, chunk_count: 1,
+      encrypted_manifest: "em", encrypted_manifest_nonce: "emn",
+      encrypted_file_key: "fk", encrypted_file_key_nonce: "fkn",
+      created_at: "", updated_at: "",
+    };
+    await expect(files.download(meta)).rejects.toThrow("net fail");
+    // The session stays in the list, flagged as error (so the UI can show it).
+    expect(files.activeDownloads.length).toBe(1);
+    expect(files.activeDownloads[0].phase).toBe("error");
+    // restore default getChunk mock for subsequent tests
+    getChunkMock.mockImplementation(() =>
+      Promise.resolve(new Response(new Uint8Array([1, 2, 3]))),
+    );
   });
 });

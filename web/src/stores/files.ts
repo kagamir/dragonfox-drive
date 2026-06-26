@@ -23,6 +23,14 @@ export interface UploadSession {
   abort: AbortController;
 }
 
+export interface DownloadSession {
+  fileId: string;
+  name: string;
+  progress: number; // 0..1
+  phase: "downloading" | "done" | "error";
+  abort: AbortController;
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -61,6 +69,7 @@ export const useFilesStore = defineStore("files", () => {
   const displayNames = ref<Record<string, string>>({});
   const fileParents = ref<Record<string, string | null>>({});
   const activeUploads = ref<UploadSession[]>([]);
+  const activeDownloads = ref<DownloadSession[]>([]);
   const preview = ref<{
     meta: FileMeta;
     url: string;
@@ -337,28 +346,55 @@ export const useFilesStore = defineStore("files", () => {
   async function download(meta: FileMeta): Promise<void> {
     downloading.value = true;
     error.value = null;
+    const session: DownloadSession = {
+      fileId: meta.id,
+      name: displayNames.value[meta.id] ?? meta.id,
+      progress: 0,
+      phase: "downloading",
+      abort: new AbortController(),
+    };
+    activeDownloads.value.push(session);
     try {
       await ensureCryptoReady();
       const { fileKey, manifest } = await unlockFile(meta);
       const ivBase = fromBase64(manifest.iv_base);
       const n = meta.chunk_count;
       const parts = new Array<Uint8Array>(n);
+      const done = new Set<number>();
       await asyncPool(
         3,
         Array.from({ length: n }, (_, i) => i),
         async (i) => {
-          const resp = await filesApi.getChunk(meta.id, i);
+          if (session.abort.signal.aborted) return;
+          const resp = await filesApi.getChunk(meta.id, i, session.abort.signal);
           const cipher = new Uint8Array(await resp.arrayBuffer());
           parts[i] = await cryptoApi.decryptChunk(fileKey, ivBase, i, cipher);
+          done.add(i);
+          session.progress = done.size / n;
         },
       );
+      if (session.abort.signal.aborted) return;
       saveBlob(new Blob(parts as BlobPart[], { type: manifest.mime }), manifest.name);
+      session.phase = "done";
+      setTimeout(() => {
+        const idx = activeDownloads.value.indexOf(session);
+        if (idx >= 0) activeDownloads.value.splice(idx, 1);
+      }, 1500);
     } catch (e) {
+      session.phase = "error";
       error.value = (e as Error).message;
       throw e;
     } finally {
       downloading.value = false;
     }
+  }
+
+  async function cancelDownload(fileId: string): Promise<void> {
+    const s = activeDownloads.value.find((x) => x.fileId === fileId);
+    if (!s) return;
+    s.abort.abort();
+    const idx = activeDownloads.value.indexOf(s);
+    if (idx >= 0) activeDownloads.value.splice(idx, 1);
   }
 
   async function moveFile(id: string, newParentId: string | null): Promise<void> {
@@ -542,11 +578,13 @@ export const useFilesStore = defineStore("files", () => {
     downloading,
     displayNames,
     activeUploads,
+    activeDownloads,
     fileParents,
     refresh,
     upload,
     cancelUpload,
     download,
+    cancelDownload,
     remove,
     filesWithParent,
     moveFile,
