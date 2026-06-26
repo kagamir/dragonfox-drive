@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { mount } from "@vue/test-utils";
+import { mount, flushPromises } from "@vue/test-utils";
 import FilePreviewModal from "./FilePreviewModal.vue";
 import Mp4Player from "./Mp4Player.vue";
 
@@ -11,42 +11,54 @@ vi.mock("@/workers/crypto", () => ({
   ensureCryptoReady: vi.fn(),
 }));
 
+// DfModal wraps Headless UI Dialog, which teleports its panel to document.body.
+// Wrapper-level find()/text() can't see teleported content, so the non-player
+// branch asserts against document.body. The player branch (Mp4Player owns its
+// own <video>, no DfModal) still uses wrapper queries.
+function mountAttached(props: Record<string, unknown>) {
+  return mount(FilePreviewModal, { props, attachTo: document.body });
+}
+
 describe("FilePreviewModal", () => {
-  it("renders an <img> for image kind", () => {
-    const w = mount(FilePreviewModal, { props: { kind: "image", url: "blob:i", name: "a.png" } });
-    expect(w.find("img").attributes("src")).toBe("blob:i");
+  it("renders an <img> for image kind", async () => {
+    const w = mountAttached({ kind: "image", url: "blob:i", name: "a.png" });
+    await flushPromises();
+    expect((document.body.querySelector("img") as HTMLImageElement)?.src).toContain("blob:i");
+    w.unmount();
   });
 
-  it("renders a <video> for video kind", () => {
-    const w = mount(FilePreviewModal, { props: { kind: "video", url: "blob:v", name: "a.mp4" } });
-    expect(w.find("video").exists()).toBe(true);
+  it("renders a <video> for video kind", async () => {
+    const w = mountAttached({ kind: "video", url: "blob:v", name: "a.mp4" });
+    await flushPromises();
+    expect(document.body.querySelector("video")).toBeTruthy();
+    w.unmount();
   });
 
-  it("renders an <audio> for audio kind", () => {
-    const w = mount(FilePreviewModal, { props: { kind: "audio", url: "blob:a", name: "a.mp3" } });
-    expect(w.find("audio").exists()).toBe(true);
+  it("renders an <audio> for audio kind", async () => {
+    const w = mountAttached({ kind: "audio", url: "blob:a", name: "a.mp3" });
+    await flushPromises();
+    expect(document.body.querySelector("audio")).toBeTruthy();
+    w.unmount();
   });
 
   it("renders decoded text for text kind", async () => {
     vi.stubGlobal("URL", { createObjectURL: vi.fn(), revokeObjectURL: vi.fn() });
-    const w = mount(FilePreviewModal, { props: { kind: "text", url: "blob:t", name: "a.txt" } });
+    const w = mountAttached({ kind: "text", url: "blob:t", name: "a.txt" });
+    await flushPromises();
     // wait for the fetch+decode cycle
     await vi.waitFor(() => {
-      expect(w.find("pre").text().length).toBeGreaterThan(0);
+      expect(document.body.querySelector("pre")?.textContent?.length).toBeGreaterThan(0);
     });
+    w.unmount();
   });
 
-  it("emits close on backdrop click", async () => {
-    const w = mount(FilePreviewModal, { props: { kind: "image", url: "blob:i", name: "a.png" } });
-    await w.find(".preview-backdrop").trigger("click");
-    expect(w.emitted("close")).toBeTruthy();
-  });
-
-  it("emits close on Esc", async () => {
-    const w = mount(FilePreviewModal, { props: { kind: "image", url: "blob:i", name: "a.png" } });
-    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+  it("emits close when the DfModal close button is clicked", async () => {
+    const w = mountAttached({ kind: "image", url: "blob:i", name: "a.png" });
+    await flushPromises();
+    (document.body.querySelector('button[aria-label="关闭"]') as HTMLButtonElement).click();
     await w.vm.$nextTick();
     expect(w.emitted("close")).toBeTruthy();
+    w.unmount();
   });
 
   it("renders the MSE player (Mp4Player) when a player payload is passed", async () => {
@@ -73,6 +85,7 @@ describe("FilePreviewModal", () => {
     const w = mount(FilePreviewModal, {
       props: { kind: "video", url: "", name: "clip.mp4", player: payload },
     });
+    await flushPromises();
     // The `player` branch mounts <Mp4Player> (which owns the <video> element);
     // the v-else blob <video> must NOT render.
     expect(w.findComponent(Mp4Player).exists()).toBe(true);

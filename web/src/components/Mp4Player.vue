@@ -36,31 +36,13 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="preview-backdrop" @click.self="emit('close')">
-    <div class="preview-card">
-      <header>
-        <span class="name">{{ name }}</span>
-        <button class="link" @click="emit('close')">Close</button>
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" @click.self="emit('close')">
+    <div class="flex max-h-[90vh] max-w-[90vw] flex-col gap-3 overflow-auto rounded-xl border border-border bg-surface p-4 shadow-lg">
+      <header class="flex items-center justify-between gap-4">
+        <span class="font-semibold text-fg">{{ name }}</span>
+        <button class="text-fg-muted hover:text-fg" @click="emit('close')">关闭</button>
       </header>
-      <div class="body">
-        <video ref="videoEl" controls autoplay />
-      </div>
+      <video ref="videoEl" controls autoplay class="max-h-[75vh] max-w-[85vw] rounded-lg bg-black" />
     </div>
   </div>
 </template>
-
-<style scoped>
-.preview-backdrop {
-  position: fixed; inset: 0; background: rgba(0, 0, 0, 0.6);
-  display: flex; align-items: center; justify-content: center; z-index: 50;
-}
-.preview-card {
-  background: var(--df-color-bg-elevated); border-radius: var(--df-radius-sm);
-  max-width: 90vw; max-height: 90vh; overflow: auto; padding: 1rem;
-  display: flex; flex-direction: column; gap: 0.75rem;
-}
-header { display: flex; justify-content: space-between; align-items: center; }
-.name { font-weight: 600; }
-.body video { max-width: 85vw; max-height: 75vh; }
-.link { background: transparent; border: 0; cursor: pointer; color: var(--df-color-fg-muted); }
-</style>

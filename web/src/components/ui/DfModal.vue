@@ -3,6 +3,7 @@ import {
   Dialog, DialogPanel, DialogTitle,
   TransitionRoot, TransitionChild,
 } from "@headlessui/vue";
+import { X } from "lucide-vue-next";
 withDefaults(defineProps<{ open: boolean; title?: string; size?: "sm" | "md" | "lg" }>(), { size: "md" });
 defineEmits<{ close: [] }>();
 const maxW = { sm: "max-w-sm", md: "max-w-md", lg: "max-w-2xl" };
@@ -21,7 +22,12 @@ const maxW = { sm: "max-w-sm", md: "max-w-md", lg: "max-w-2xl" };
           enter="duration-200 ease-out" enter-from="opacity-0 scale-95" enter-to="opacity-100 scale-100"
           leave="duration-150 ease-in" leave-from="opacity-100 scale-100" leave-to="opacity-0 scale-95">
           <DialogPanel :class="['w-full rounded-xl border border-border bg-surface p-6 shadow-lg', maxW[size]]">
-            <DialogTitle v-if="title" class="mb-1 text-lg font-semibold text-fg">{{ title }}</DialogTitle>
+            <div class="mb-2 flex items-start justify-between gap-4">
+              <DialogTitle v-if="title" class="text-lg font-semibold text-fg">{{ title }}</DialogTitle>
+              <button type="button" class="ml-auto text-fg-muted hover:text-fg" aria-label="关闭" @click="$emit('close')">
+                <X class="h-5 w-5" />
+              </button>
+            </div>
             <slot />
           </DialogPanel>
         </TransitionChild>
