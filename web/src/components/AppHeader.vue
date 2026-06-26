@@ -54,7 +54,7 @@ const menu: DropdownItem[] = [
     </DfButton>
 
     <DfTooltip :label="`主题：${themeStore}`">
-      <button class="rounded-lg p-2 text-fg-muted hover:bg-bg hover:text-fg" @click="cycleTheme">
+      <button class="rounded-lg p-2 text-fg-muted hover:bg-bg hover:text-fg" :aria-label="`切换主题（当前：${themeStore}）`" @click="cycleTheme">
         <component :is="themeIcon[themeStore as keyof typeof themeIcon]" class="h-5 w-5" />
       </button>
     </DfTooltip>

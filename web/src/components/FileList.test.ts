@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mount } from "@vue/test-utils";
+import { mount, flushPromises } from "@vue/test-utils";
 import FileList from "./FileList.vue";
 import { keyOf } from "./fileMenu";
 import type { FileMeta } from "@/api/types";
@@ -24,6 +24,7 @@ function makeFile(overrides: Partial<FileMeta> = {}): FileMeta {
   };
 }
 const fileEntry = (f: FileMeta): Entry => ({ kind: "file", file: f });
+const folderEntry = (id: string, name: string): Entry => ({ kind: "folder", folder: { id, name } });
 
 describe("FileList", () => {
   it("renders grid cards (no list rows) when view='grid'", () => {
@@ -37,6 +38,58 @@ describe("FileList", () => {
     });
     expect(w.findAll("li").length).toBe(0);
     expect(w.text()).toMatch(/f1/);
+  });
+
+  it("renders list rows with the folder and file names", () => {
+    const w = mount(FileList, {
+      props: {
+        entries: [folderEntry("d1", "Documents"), fileEntry(makeFile({ id: "f1" }))],
+        displayNames: { f1: "report.pdf" },
+        search: "",
+        view: "list",
+      },
+    });
+    const rows = w.findAll("li");
+    expect(rows.length).toBe(2);
+    expect(w.text()).toMatch(/Documents/);
+    expect(w.text()).toMatch(/report\.pdf/);
+  });
+
+  it("clicking a folder row name emits openFolder; clicking a file name emits openFile", async () => {
+    const w = mount(FileList, {
+      props: {
+        entries: [folderEntry("d1", "Docs"), fileEntry(makeFile({ id: "f1" }))],
+        displayNames: {},
+        search: "",
+        view: "list",
+      },
+    });
+    const nameButtons = w.findAll("button").filter((b) => b.classes().includes("truncate"));
+    expect(nameButtons.length).toBe(2);
+    await nameButtons[0].trigger("click");
+    expect(w.emitted("openFolder")?.[0]).toEqual(["d1"]);
+    await nameButtons[1].trigger("click");
+    const ev = w.emitted("openFile");
+    expect(ev).toBeTruthy();
+    expect((ev![0][0] as FileMeta).id).toBe("f1");
+  });
+
+  it("⋯ menu delete item emits deleteFile for a ready file", async () => {
+    const e = fileEntry(makeFile({ id: "f1" }));
+    const w = mount(FileList, {
+      props: { entries: [e], displayNames: {}, search: "", view: "list", selection: [] },
+    });
+    const trigger = w.findAll("button").find((b) => b.classes().includes("opacity-0"));
+    expect(trigger).toBeTruthy();
+    await trigger!.trigger("click");
+    await flushPromises();
+    const del = w.findAll("button").find((b) => b.text().trim() === "删除");
+    expect(del).toBeTruthy();
+    await del!.trigger("click");
+    await flushPromises();
+    const ev = w.emitted("deleteFile");
+    expect(ev).toBeTruthy();
+    expect(ev![0][0]).toEqual(e.file);
   });
 
   it("checkbox toggle emits update:selection with the entry key", async () => {
@@ -91,5 +144,13 @@ describe("FileList", () => {
     expect(nameBtn).toBeTruthy();
     await nameBtn!.trigger("click");
     expect(w.emitted("update:sortKey")![0][0]).toBe("name");
+  });
+
+  it("renders the DfEmpty title when entries is empty", () => {
+    const w = mount(FileList, {
+      props: { entries: [], displayNames: {}, search: "", view: "list" },
+    });
+    expect(w.text()).toMatch(/这里还很空/);
+    expect(w.findAll("li").length).toBe(0);
   });
 });

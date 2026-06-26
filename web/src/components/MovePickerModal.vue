@@ -5,15 +5,15 @@ import { CornerUpLeft } from "lucide-vue-next";
 import DfModal from "@/components/ui/DfModal.vue";
 import FileTypeIcon from "@/components/FileTypeIcon.vue";
 
-const props = defineProps<{ open: boolean; excludeId?: string }>();
+const props = defineProps<{ open: boolean; excludeIds?: string[] }>();
 const emit = defineEmits<{ pick: [dest: string | null]; cancel: [] }>();
 const folders = useFoldersStore();
 
 const hiddenIds = computed<Set<string>>(() => {
   const out = new Set<string>();
-  if (!props.excludeId) return out;
-  const stack = [props.excludeId];
-  out.add(props.excludeId);
+  if (!props.excludeIds?.length) return out;
+  const stack = [...props.excludeIds];
+  for (const id of props.excludeIds) out.add(id);
   while (stack.length) {
     const cur = stack.pop()!;
     for (const f of folders.folders) {

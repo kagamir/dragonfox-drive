@@ -23,7 +23,7 @@ describe("MovePickerModal", () => {
       { id: "b", parentId: "a", folderKey: new Uint8Array(32), name: "Beta", createdAt: "" },
     ] as any;
 
-    const w = mount(MovePickerModal, { props: { open: true, excludeId: "a" }, attachTo: document.body });
+    const w = mount(MovePickerModal, { props: { open: true, excludeIds: ["a"] }, attachTo: document.body });
     await flushPromises();
     // "Alpha" is excluded (it's the moved folder itself); "Beta" is its
     // descendant and must also be excluded to prevent cycles.

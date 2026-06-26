@@ -31,6 +31,7 @@ const toast = useToast();
 
 const fileInput = ref<HTMLInputElement | null>(null);
 const moveTarget = ref<{ kind: "folder" | "file"; id: string } | null>(null);
+const bulkMoveSelection = ref<string[]>([]);
 const shareTarget = ref<FileMeta | null>(null);
 const view = ref<"list" | "grid">("list");
 const search = ref("");
@@ -76,38 +77,53 @@ function moveFolder(id: string) { moveTarget.value = { kind: "folder", id }; }
 function moveFile(id: string) { moveTarget.value = { kind: "file", id }; }
 function bulkMove() {
   if (!selection.value.length) return;
+  bulkMoveSelection.value = selection.value
+    .filter((k) => k.startsWith("folder"))
+    .map((k) => k.slice("folder".length));
   bulkMoving.value = true;
 }
+const moveExcludeIds = computed<string[]>(() => {
+  if (bulkMoving.value) return bulkMoveSelection.value;
+  if (moveTarget.value && moveTarget.value.kind === "folder") return [moveTarget.value.id];
+  return [];
+});
 async function bulkDelete() {
   if (!selection.value.length) return;
   if (await confirm.confirm({ message: `删除选中的 ${selection.value.length} 项？此操作无法撤销。`, danger: true, confirmText: "删除" })) {
-    try {
-      for (const key of selection.value) {
+    let ok = 0, fail = 0;
+    for (const key of [...selection.value]) {
+      try {
         const { kind, id } = parseKey(key);
         if (kind === "folder") await folders.deleteFolder(id);
         else await files.remove(id);
-      }
-      toast.success("已删除");
-      selection.value = [];
-    } catch {
-      toast.error("删除失败，请重试");
+        ok++;
+      } catch { fail++; }
     }
+    selection.value = [];
+    if (fail === 0) toast.success("已删除");
+    else if (ok === 0) toast.error("删除失败，请重试");
+    else toast.error(`已删除 ${ok} 项，${fail} 项失败`);
     await folders.loadTree();
   }
 }
 async function onMovePicked(dest: string | null) {
   if (bulkMoving.value) {
     bulkMoving.value = false;
+    bulkMoveSelection.value = [];
     if (dest === null) return;
-    try {
-      for (const key of selection.value) {
+    let ok = 0, fail = 0;
+    for (const key of [...selection.value]) {
+      try {
         const { kind, id } = parseKey(key);
         if (kind === "folder") await folders.moveFolder(id, dest);
         else await files.moveFile(id, dest);
-      }
-      toast.success("已移动");
-      selection.value = [];
-    } catch { toast.error("移动失败，请重试"); }
+        ok++;
+      } catch { fail++; }
+    }
+    selection.value = [];
+    if (fail === 0) toast.success("已移动");
+    else if (ok === 0) toast.error("移动失败，请重试");
+    else toast.error(`已移动 ${ok} 项，${fail} 项失败`);
     return;
   }
   const t = moveTarget.value; moveTarget.value = null;
@@ -121,6 +137,7 @@ async function onMovePicked(dest: string | null) {
 function cancelMove() {
   moveTarget.value = null;
   bulkMoving.value = false;
+  bulkMoveSelection.value = [];
 }
 function onCtx(e: MouseEvent, entry: Entry) {
   ctxTarget.value = entry;
@@ -229,7 +246,7 @@ const queueUploads = computed(() =>
     />
     <MovePickerModal
       :open="moveTarget !== null || bulkMoving"
-      :exclude-id="moveTarget?.kind === 'folder' ? moveTarget.id : undefined"
+      :exclude-ids="moveExcludeIds"
       @pick="onMovePicked"
       @cancel="cancelMove"
     />
