@@ -75,6 +75,7 @@ export const useAuthStore = defineStore("auth", () => {
         const deviceKey = await getOrCreateDeviceKey();
         masterKey.value = await unwrapMasterKey(stored.wrap, deviceKey);
         userId.value = stored.userId;
+        username.value = stored.username;
         deviceId.value = await loadDeviceId();
       }
 
@@ -131,7 +132,7 @@ export const useAuthStore = defineStore("auth", () => {
       encrypted_master_key_nonce: toBase64(iv),
     });
 
-    await persistDeviceWrap(res.user_id, deviceWrap);
+    await persistDeviceWrap(res.user_id, res.username, deviceWrap);
     await persistDeviceId(res.user_id, res.device_id);
     deviceId.value = res.device_id;
     setSession(res, master, res.tokens);
@@ -160,7 +161,7 @@ export const useAuthStore = defineStore("auth", () => {
 
     const deviceKey = await getOrCreateDeviceKey();
     const deviceWrap = await wrapMasterKey(master, deviceKey);
-    await persistDeviceWrap(res.user_id, deviceWrap);
+    await persistDeviceWrap(res.user_id, res.username, deviceWrap);
     await persistDeviceId(res.user_id, res.device_id);
     deviceId.value = res.device_id;
 

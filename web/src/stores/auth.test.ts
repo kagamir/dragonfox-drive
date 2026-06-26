@@ -29,6 +29,7 @@ vi.mock("@/workers/crypto", () => ({ ensureCryptoReady: vi.fn(async () => {}) })
 import { setActivePinia, createPinia } from "pinia";
 import { useAuthStore } from "./auth";
 import { setAuthToken, getRefreshToken } from "@/api/client";
+import { loadDeviceWrap } from "@/crypto/keys";
 
 let fetchMock: ReturnType<typeof vi.fn>;
 
@@ -183,5 +184,22 @@ describe("ensureSessionRestored (refresh-page race fix)", () => {
     expect(auth.isAuthenticated).toBe(false);
     expect(auth.isRestoring).toBe(false);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("restores the username from the persisted device wrap", async () => {
+    // The /api/auth/refresh response only carries tokens, so the username
+    // must come from the device-identity bundle in IndexedDB. Without this,
+    // the Settings page's "Signed in as <name>" goes blank after refresh.
+    localStorage.setItem("df_refresh_token", "RT");
+    vi.mocked(loadDeviceWrap).mockResolvedValueOnce({
+      userId: "u1",
+      username: "alice",
+      wrap: { ciphertext: new Uint8Array(8), iv: new Uint8Array(12) },
+    });
+    mockRefreshSuccess();
+    const auth = useAuthStore();
+    await auth.ensureSessionRestored();
+    expect(auth.isAuthenticated).toBe(true);
+    expect(auth.username).toBe("alice");
   });
 });

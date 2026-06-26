@@ -110,10 +110,11 @@ describe("device-wrap persistence (localforage mock)", () => {
 
   it("persistDeviceWrap / loadDeviceWrap round-trip", async () => {
     const wrap = await wrapMasterKey(generateMasterKey(), generateMasterKey());
-    await persistDeviceWrap("user-123", wrap);
+    await persistDeviceWrap("user-123", "alice", wrap);
     const loaded = await loadDeviceWrap();
     expect(loaded).not.toBeNull();
     expect(loaded!.userId).toBe("user-123");
+    expect(loaded!.username).toBe("alice");
     expect(Array.from(loaded!.wrap.ciphertext)).toEqual(
       Array.from(wrap.ciphertext),
     );
@@ -121,7 +122,7 @@ describe("device-wrap persistence (localforage mock)", () => {
 
   it("clearDeviceWrap makes loadDeviceWrap return null", async () => {
     const wrap = await wrapMasterKey(generateMasterKey(), generateMasterKey());
-    await persistDeviceWrap("u", wrap);
+    await persistDeviceWrap("u", "bob", wrap);
     await clearDeviceWrap();
     expect(await loadDeviceWrap()).toBeNull();
   });

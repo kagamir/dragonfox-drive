@@ -34,6 +34,7 @@ const KEY_DEVICE = "device_key";
 const KEY_DEVICE_WRAP = "device_wrap"; // master_key wrapped by device_key
 const KEY_USER_ID = "user_id";
 const KEY_DEVICE_ID = "device_id";
+const KEY_USERNAME = "username";
 
 export interface WrappedKey {
   ciphertext: Uint8Array;
@@ -103,21 +104,27 @@ export async function unwrapWithPassword(
 /** Persist a `device_wrap` so the next visit can unlock without password. */
 export async function persistDeviceWrap(
   userId: string,
+  username: string,
   wrap: WrappedKey,
 ): Promise<void> {
   await STORE_KEYS.setItem(KEY_USER_ID, userId);
+  await STORE_KEYS.setItem(KEY_USERNAME, username);
   await STORE_KEYS.setItem(KEY_DEVICE_WRAP, wrap);
 }
 
 /** Read persisted `device_wrap` (if any) for the current device. */
 export async function loadDeviceWrap(): Promise<{
   userId: string;
+  username: string | null;
   wrap: WrappedKey;
 } | null> {
   const userId = await STORE_KEYS.getItem<string>(KEY_USER_ID);
   const wrap = await STORE_KEYS.getItem<WrappedKey>(KEY_DEVICE_WRAP);
   if (!userId || !wrap) return null;
-  return { userId, wrap };
+  // `username` was added after the initial release, so legacy entries may
+  // not have it; surface null rather than failing the whole restore.
+  const username = await STORE_KEYS.getItem<string>(KEY_USERNAME);
+  return { userId, username, wrap };
 }
 
 /** Forget this device's stored wrap (logout). */
@@ -125,6 +132,7 @@ export async function clearDeviceWrap(): Promise<void> {
   await STORE_KEYS.removeItem(KEY_DEVICE_WRAP);
   await STORE_KEYS.removeItem(KEY_USER_ID);
   await STORE_KEYS.removeItem(KEY_DEVICE_ID);
+  await STORE_KEYS.removeItem(KEY_USERNAME);
 }
 
 /** Persist the server-assigned `device_id` alongside the user id. */
