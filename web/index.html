@@ -10,6 +10,10 @@
           if ((t === "dark" || (!t || t === "auto") && sys) && t !== "light") {
             document.documentElement.classList.add("dark");
           }
+          var l = localStorage.getItem("df-lang");
+          var nl = (navigator.language || "en").toLowerCase();
+          var loc = (l === "en" || l === "zh") ? l : (nl.indexOf("zh") === 0 ? "zh" : "en");
+          document.documentElement.lang = loc;
         } catch (e) {}
       })();
     </script>
