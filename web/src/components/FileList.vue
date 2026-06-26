@@ -71,9 +71,9 @@ const sorted = computed(() => {
       return (as - bs) * dir;
     }
     if (props.sortKey === "status") {
-      const as = a.kind === "folder" ? "" : a.file.status;
-      const bs = b.kind === "folder" ? "" : b.file.status;
-      return as.localeCompare(bs) * dir;
+      const ra = a.kind === "folder" ? -1 : STATUS_RANK[a.file.status] ?? 9;
+      const rb = b.kind === "folder" ? -1 : STATUS_RANK[b.file.status] ?? 9;
+      return (ra - rb) * dir;
     }
     const an = a.kind === "folder" ? a.folder.name : fname(a.file);
     const bn = b.kind === "folder" ? b.folder.name : fname(b.file);
@@ -86,6 +86,7 @@ function statusVariant(s: string) {
   return s === "ready" ? "ok" : s === "uploading" || s === "pending" ? "proc" : "neutral";
 }
 const STATUS_KEY: Record<string, string> = { ready: "ready", uploading: "uploading", pending: "pending" };
+const STATUS_RANK: Record<string, number> = { ready: 0, uploading: 1, pending: 2, deleted: 3 };
 function statusLabel(s: string) {
   return t("status." + (STATUS_KEY[s] ?? "pending"));
 }
@@ -152,15 +153,19 @@ function onContextmenu(ev: MouseEvent, e: Entry) {
     </div>
 
     <template v-else>
-      <div class="grid grid-cols-[auto_1fr_auto] gap-3 border-b border-border px-3 pb-2 text-xs font-medium text-fg-muted">
+      <div class="grid grid-cols-[auto_1fr_auto_auto] gap-3 border-b border-border px-3 pb-2 text-xs font-medium text-fg-muted">
         <span class="w-4" />
         <button class="flex items-center gap-1 hover:text-fg" @click="onSort('name')">
           {{ t("drive.name") }}
           <span v-if="sortKey === 'name'">{{ sortDir === "asc" ? "▲" : "▼" }}</span>
         </button>
-        <button class="flex items-center gap-1 hover:text-fg" @click="onSort('size')">
+        <button class="hidden items-center gap-1 hover:text-fg sm:flex" @click="onSort('size')">
           {{ t("drive.size") }}
           <span v-if="sortKey === 'size'">{{ sortDir === "asc" ? "▲" : "▼" }}</span>
+        </button>
+        <button class="flex items-center gap-1 hover:text-fg" @click="onSort('status')">
+          {{ t("drive.status") }}
+          <span v-if="sortKey === 'status'">{{ sortDir === "asc" ? "▲" : "▼" }}</span>
         </button>
       </div>
 
@@ -168,7 +173,7 @@ function onContextmenu(ev: MouseEvent, e: Entry) {
         <li
           v-for="e in sorted"
           :key="keyOf(e)"
-          class="group grid grid-cols-[auto_1fr_auto] items-center gap-3 rounded-lg border border-transparent px-3 py-2 transition-colors hover:border-border hover:bg-surface"
+          class="group grid grid-cols-[auto_1fr_auto_auto] items-center gap-3 rounded-lg border border-transparent px-3 py-2 transition-colors hover:border-border hover:bg-surface"
           @contextmenu="onContextmenu($event, e)"
         >
           <input type="checkbox" class="accent-brand"
@@ -181,11 +186,10 @@ function onContextmenu(ev: MouseEvent, e: Entry) {
               @click="e.kind === 'folder' ? emit('openFolder', e.folder.id) : emit('openFile', e.file)"
             >{{ e.kind === "folder" ? e.folder.name : fname(e.file) }}</button>
           </div>
+          <span v-if="e.kind === 'file'" class="hidden text-xs text-fg-muted sm:block">{{ fmtSize(e.file.total_size) }}</span>
+          <span v-else class="hidden text-xs text-fg-muted sm:block"></span>
           <div class="flex items-center gap-3">
-            <template v-if="e.kind === 'file'">
-              <span class="hidden text-xs text-fg-muted sm:inline">{{ fmtSize(e.file.total_size) }}</span>
-              <DfBadge :variant="statusVariant(e.file.status)">{{ statusLabel(e.file.status) }}</DfBadge>
-            </template>
+            <DfBadge v-if="e.kind === 'file'" :variant="statusVariant(e.file.status)">{{ statusLabel(e.file.status) }}</DfBadge>
             <span v-else class="text-xs text-fg-muted">{{ t("drive.folder") }}</span>
             <DfDropdown :items="itemsFor(e)" align="right">
               <template #trigger>

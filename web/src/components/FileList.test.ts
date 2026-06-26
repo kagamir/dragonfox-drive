@@ -156,6 +156,70 @@ describe("FileList", () => {
     expect(w.emitted("update:sortKey")![0][0]).toBe("name");
   });
 
+  it("status sort (asc): folders pin top, then ready < uploading < pending", () => {
+    const ready = fileEntry(makeFile({ id: "ready", status: "ready" }));
+    const uploading = fileEntry(makeFile({ id: "uploading", status: "uploading" }));
+    const pending = fileEntry(makeFile({ id: "pending", status: "pending" }));
+    const folder = folderEntry("d1", "Documents");
+    const w = mount(FileList, {
+      props: {
+        entries: [pending, uploading, ready, folder],
+        displayNames: {},
+        search: "",
+        view: "list",
+        sortKey: "status",
+        sortDir: "asc",
+      },
+      global,
+    });
+    const rows = w.findAll("li").map((r) => r.text());
+    expect(rows[0]).toMatch(/Documents/);
+    expect(rows[1]).toMatch(/ready/);
+    expect(rows[2]).toMatch(/uploading/);
+    expect(rows[3]).toMatch(/pending/);
+  });
+
+  it("status sort (desc) reverses file order but keeps folders on top", () => {
+    const ready = fileEntry(makeFile({ id: "ready", status: "ready" }));
+    const pending = fileEntry(makeFile({ id: "pending", status: "pending" }));
+    const folder = folderEntry("d1", "Documents");
+    const w = mount(FileList, {
+      props: {
+        entries: [ready, pending, folder],
+        displayNames: {},
+        search: "",
+        view: "list",
+        sortKey: "status",
+        sortDir: "desc",
+      },
+      global,
+    });
+    const rows = w.findAll("li").map((r) => r.text());
+    expect(rows[0]).toMatch(/Documents/);
+    expect(rows[1]).toMatch(/pending/);
+    expect(rows[2]).toMatch(/ready/);
+  });
+
+  it("renders size and status in separate columns of the list row", () => {
+    const w = mount(FileList, {
+      props: {
+        entries: [fileEntry(makeFile({ id: "f1", total_size: 2048, status: "uploading" }))],
+        displayNames: {},
+        search: "",
+        view: "list",
+      },
+      global,
+    });
+    const li = w.find("li");
+    expect(li.classes().some((c) => c.includes("grid-cols-[auto_1fr_auto_auto]"))).toBe(true);
+    const kids = li.element.children;
+    expect(kids.length).toBe(4);
+    expect(kids[2].tagName).toBe("SPAN");
+    expect(kids[2].textContent).toMatch(/2\.0 KB/);
+    expect(kids[3].tagName).toBe("DIV");
+    expect(kids[3].textContent).toMatch(/Uploading/);
+  });
+
   it("renders the DfEmpty title when entries is empty", () => {
     const w = mount(FileList, {
       props: { entries: [], displayNames: {}, search: "", view: "list" },
