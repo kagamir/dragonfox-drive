@@ -3,6 +3,7 @@ import { mount, flushPromises } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import DriveView from "./DriveView.vue";
 import { useConfirm } from "@/composables/useConfirm";
+import { i18n } from "@/locales";
 import type { FileMeta } from "@/api/types";
 
 // Mutable, per-test-controllable stub state. vi.hoisted makes `STUB` available
@@ -69,7 +70,7 @@ describe("DriveView", () => {
 
   it("renders header, breadcrumb and new-folder button at root", async () => {
     setActivePinia(createPinia());
-    const w = mount(DriveView, { global: { stubs } });
+    const w = mount(DriveView, { global: { stubs, plugins: [i18n] } });
     await flushPromises();
     expect(w.text()).toMatch(/DragonFox/);
     expect(w.text()).toMatch(/Drive/);
@@ -83,7 +84,7 @@ describe("DriveView", () => {
         { kind: "file", file: makeFile("f1") },
         { kind: "file", file: makeFile("f2") },
       ];
-      const w = mount(DriveView, { global: { stubs } });
+      const w = mount(DriveView, { global: { stubs, plugins: [i18n] } });
       await flushPromises();
 
       const boxes = w.findAll('input[type="checkbox"]');
@@ -112,7 +113,7 @@ describe("DriveView", () => {
         { kind: "file", file: makeFile("f1") },
         { kind: "file", file: makeFile("f2") },
       ];
-      const w = mount(DriveView, { global: { stubs } });
+      const w = mount(DriveView, { global: { stubs, plugins: [i18n] } });
       await flushPromises();
 
       const boxes = w.findAll('input[type="checkbox"]');

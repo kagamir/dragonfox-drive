@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
+import { i18n } from "../locales";
 
 const listMock = vi.fn();
 const revokeMock = vi.fn();
@@ -74,7 +75,7 @@ const SettingsView = (await import("../views/SettingsView.vue")).default;
 function mountWith(currentId: string) {
   setActivePinia(createPinia());
   currentDeviceId.value = currentId;
-  return mount(SettingsView);
+  return mount(SettingsView, { global: { plugins: [i18n] } });
 }
 
 // The redesign hides devices behind the "设备" segmented tab; switch to it
