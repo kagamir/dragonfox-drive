@@ -1,4 +1,5 @@
 import { ref, readonly } from "vue";
+import { i18n } from "@/locales";
 
 export interface ConfirmOptions {
   message: string;
@@ -22,10 +23,10 @@ export function useConfirm() {
         state.value = {
           open: true,
           resolve,
-          title: opts.title ?? "请确认",
+          title: opts.title ?? i18n.global.t("dialog.confirmTitle"),
           message: opts.message,
-          confirmText: opts.confirmText ?? "确认",
-          cancelText: opts.cancelText ?? "取消",
+          confirmText: opts.confirmText ?? i18n.global.t("dialog.confirm"),
+          cancelText: opts.cancelText ?? i18n.global.t("dialog.cancel"),
           danger: opts.danger ?? false,
         };
       });

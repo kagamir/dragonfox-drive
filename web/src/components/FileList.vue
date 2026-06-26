@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import type { FileMeta } from "@/api/types";
 import FileTypeIcon from "@/components/FileTypeIcon.vue";
 import DfBadge from "@/components/ui/DfBadge.vue";
@@ -38,6 +39,8 @@ const emit = defineEmits<{
   "update:sortDir": ["asc" | "desc"];
   contextmenu: [MouseEvent, Entry];
 }>();
+
+const { t } = useI18n();
 
 const lastSelected = ref<string | null>(null);
 
@@ -82,8 +85,9 @@ const sorted = computed(() => {
 function statusVariant(s: string) {
   return s === "ready" ? "ok" : s === "uploading" || s === "pending" ? "proc" : "neutral";
 }
+const STATUS_KEY: Record<string, string> = { ready: "ready", uploading: "uploading", pending: "pending" };
 function statusLabel(s: string) {
-  return ({ ready: "就绪", uploading: "上传中", pending: "等待" } as Record<string, string>)[s] ?? s;
+  return t("status." + (STATUS_KEY[s] ?? "pending"));
 }
 
 const handlers: MenuHandlers = {
@@ -131,7 +135,7 @@ function onContextmenu(ev: MouseEvent, e: Entry) {
 </script>
 
 <template>
-  <DfEmpty v-if="!sorted.length" title="这里还很空" description="拖拽文件到此处，或点击上传按钮" />
+  <DfEmpty v-if="!sorted.length" :title="t('drive.empty')" :description="t('drive.emptyDesc')" />
   <template v-else>
     <div v-if="view === 'grid'" class="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
       <button
@@ -151,11 +155,11 @@ function onContextmenu(ev: MouseEvent, e: Entry) {
       <div class="grid grid-cols-[auto_1fr_auto] gap-3 border-b border-border px-3 pb-2 text-xs font-medium text-fg-muted">
         <span class="w-4" />
         <button class="flex items-center gap-1 hover:text-fg" @click="onSort('name')">
-          名称
+          {{ t("drive.name") }}
           <span v-if="sortKey === 'name'">{{ sortDir === "asc" ? "▲" : "▼" }}</span>
         </button>
         <button class="flex items-center gap-1 hover:text-fg" @click="onSort('size')">
-          大小
+          {{ t("drive.size") }}
           <span v-if="sortKey === 'size'">{{ sortDir === "asc" ? "▲" : "▼" }}</span>
         </button>
       </div>
@@ -182,7 +186,7 @@ function onContextmenu(ev: MouseEvent, e: Entry) {
               <span class="hidden text-xs text-fg-muted sm:inline">{{ fmtSize(e.file.total_size) }}</span>
               <DfBadge :variant="statusVariant(e.file.status)">{{ statusLabel(e.file.status) }}</DfBadge>
             </template>
-            <span v-else class="text-xs text-fg-muted">文件夹</span>
+            <span v-else class="text-xs text-fg-muted">{{ t("drive.folder") }}</span>
             <DfDropdown :items="itemsFor(e)" align="right">
               <template #trigger>
                 <button class="rounded-md p-1 text-fg-muted opacity-0 transition-opacity hover:bg-bg hover:text-fg group-hover:opacity-100">

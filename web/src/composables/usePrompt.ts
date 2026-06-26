@@ -1,4 +1,5 @@
 import { ref, readonly } from "vue";
+import { i18n } from "@/locales";
 
 export interface PromptOptions {
   message: string;
@@ -19,12 +20,12 @@ export function usePrompt() {
       return new Promise((resolve) => {
         state.value = {
           open: true, resolve,
-          title: opts.title ?? "输入",
+          title: opts.title ?? i18n.global.t("dialog.confirmTitle"),
           message: opts.message,
           placeholder: opts.placeholder ?? "",
           initial: opts.initial ?? "",
-          confirmText: opts.confirmText ?? "确认",
-          cancelText: opts.cancelText ?? "取消",
+          confirmText: opts.confirmText ?? i18n.global.t("dialog.confirm"),
+          cancelText: opts.cancelText ?? i18n.global.t("dialog.cancel"),
         };
       });
     },

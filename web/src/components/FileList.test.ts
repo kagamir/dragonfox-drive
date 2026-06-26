@@ -2,8 +2,11 @@ import { describe, it, expect } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 import FileList from "./FileList.vue";
 import { keyOf } from "./fileMenu";
+import { i18n } from "@/locales";
 import type { FileMeta } from "@/api/types";
 import type { Entry } from "./fileMenu";
+
+const global = { plugins: [i18n] } as const;
 
 function makeFile(overrides: Partial<FileMeta> = {}): FileMeta {
   return {
@@ -35,6 +38,7 @@ describe("FileList", () => {
         search: "",
         view: "grid",
       },
+      global,
     });
     expect(w.findAll("li").length).toBe(0);
     expect(w.text()).toMatch(/f1/);
@@ -48,6 +52,7 @@ describe("FileList", () => {
         search: "",
         view: "list",
       },
+      global,
     });
     const rows = w.findAll("li");
     expect(rows.length).toBe(2);
@@ -63,6 +68,7 @@ describe("FileList", () => {
         search: "",
         view: "list",
       },
+      global,
     });
     const nameButtons = w.findAll("button").filter((b) => b.classes().includes("truncate"));
     expect(nameButtons.length).toBe(2);
@@ -78,6 +84,7 @@ describe("FileList", () => {
     const e = fileEntry(makeFile({ id: "f1" }));
     const w = mount(FileList, {
       props: { entries: [e], displayNames: {}, search: "", view: "list", selection: [] },
+      global,
     });
     const trigger = w.findAll("button").find((b) => b.classes().includes("opacity-0"));
     expect(trigger).toBeTruthy();
@@ -102,6 +109,7 @@ describe("FileList", () => {
         view: "list",
         selection: [],
       },
+      global,
     });
     await w.find('input[type="checkbox"]').trigger("click");
     const ev = w.emitted("update:selection");
@@ -121,6 +129,7 @@ describe("FileList", () => {
         view: "list",
         selection: [],
       },
+      global,
     });
     const boxes = w.findAll('input[type="checkbox"]');
     await boxes[0].trigger("click");
@@ -139,8 +148,9 @@ describe("FileList", () => {
         view: "list",
         sortKey: "size",
       },
+      global,
     });
-    const nameBtn = w.findAll("button").find((b) => b.text().trim() === "名称");
+    const nameBtn = w.findAll("button").find((b) => b.text().trim() === "Name");
     expect(nameBtn).toBeTruthy();
     await nameBtn!.trigger("click");
     expect(w.emitted("update:sortKey")![0][0]).toBe("name");
@@ -149,8 +159,9 @@ describe("FileList", () => {
   it("renders the DfEmpty title when entries is empty", () => {
     const w = mount(FileList, {
       props: { entries: [], displayNames: {}, search: "", view: "list" },
+      global,
     });
-    expect(w.text()).toMatch(/这里还很空/);
+    expect(w.text()).toMatch(/Nothing here yet/);
     expect(w.findAll("li").length).toBe(0);
   });
 });
