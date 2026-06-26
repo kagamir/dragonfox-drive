@@ -1,23 +1,28 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import type { FileMeta } from "@/api/types";
 import FileTypeIcon from "@/components/FileTypeIcon.vue";
 import DfBadge from "@/components/ui/DfBadge.vue";
 import DfEmpty from "@/components/ui/DfEmpty.vue";
-import DfDropdown, { type DropdownItem } from "@/components/ui/DfDropdown.vue";
-import {
-  MoreHorizontal, Download, Share2, Pencil, FolderInput, Trash2, FolderOpen,
-} from "lucide-vue-next";
+import DfDropdown from "@/components/ui/DfDropdown.vue";
+import { MoreHorizontal } from "lucide-vue-next";
+import { keyOf, menuFor, type Entry, type MenuHandlers, type SortKey } from "@/components/fileMenu";
 
-type Entry =
-  | { kind: "folder"; folder: { id: string; name: string } }
-  | { kind: "file"; file: FileMeta };
-
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   entries: Entry[];
   displayNames: Record<string, string>;
   search: string;
-}>();
+  view?: "list" | "grid";
+  selection?: string[];
+  sortKey?: SortKey;
+  sortDir?: "asc" | "desc";
+}>(), {
+  view: "list",
+  selection: () => [],
+  sortKey: "name",
+  sortDir: "asc",
+});
+
 const emit = defineEmits<{
   openFolder: [string];
   openFile: [FileMeta];
@@ -28,7 +33,13 @@ const emit = defineEmits<{
   moveFile: [string];
   deleteFolder: [string, string];
   deleteFile: [FileMeta];
+  "update:selection": [string[]];
+  "update:sortKey": [SortKey];
+  "update:sortDir": ["asc" | "desc"];
+  contextmenu: [MouseEvent, Entry];
 }>();
+
+const lastSelected = ref<string | null>(null);
 
 function fname(f: FileMeta): string { return props.displayNames[f.id] ?? f.id; }
 function fmtSize(n: number): string {
@@ -37,6 +48,7 @@ function fmtSize(n: number): string {
   if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
   return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
+
 const filtered = computed(() => {
   const q = props.search.trim().toLowerCase();
   if (!q) return props.entries;
@@ -44,57 +56,143 @@ const filtered = computed(() => {
     e.kind === "folder" ? e.folder.name.toLowerCase().includes(q) : fname(e.file).toLowerCase().includes(q),
   );
 });
+
+const sorted = computed(() => {
+  const dir = props.sortDir === "asc" ? 1 : -1;
+  const arr = [...filtered.value];
+  arr.sort((a, b) => {
+    if (a.kind !== b.kind) return a.kind === "folder" ? -1 : 1;
+    if (props.sortKey === "size") {
+      const as = a.kind === "folder" ? 0 : a.file.total_size;
+      const bs = b.kind === "folder" ? 0 : b.file.total_size;
+      return (as - bs) * dir;
+    }
+    if (props.sortKey === "status") {
+      const as = a.kind === "folder" ? "" : a.file.status;
+      const bs = b.kind === "folder" ? "" : b.file.status;
+      return as.localeCompare(bs) * dir;
+    }
+    const an = a.kind === "folder" ? a.folder.name : fname(a.file);
+    const bn = b.kind === "folder" ? b.folder.name : fname(b.file);
+    return an.localeCompare(bn) * dir;
+  });
+  return arr;
+});
+
 function statusVariant(s: string) {
   return s === "ready" ? "ok" : s === "uploading" || s === "pending" ? "proc" : "neutral";
 }
 function statusLabel(s: string) {
   return ({ ready: "就绪", uploading: "上传中", pending: "等待" } as Record<string, string>)[s] ?? s;
 }
-function menuFor(e: Entry): DropdownItem[] {
-  if (e.kind === "folder") {
-    return [
-      { label: "重命名", icon: Pencil, onClick: () => emit("renameFolder", e.folder.id, e.folder.name) },
-      { label: "移动", icon: FolderInput, onClick: () => emit("moveFolder", e.folder.id) },
-      { label: "删除", icon: Trash2, danger: true, onClick: () => emit("deleteFolder", e.folder.id, e.folder.name) },
-    ];
+
+const handlers: MenuHandlers = {
+  openFolder: (id) => emit("openFolder", id),
+  openFile: (f) => emit("openFile", f),
+  download: (f) => emit("download", f),
+  share: (f) => emit("share", f),
+  renameFolder: (id, name) => emit("renameFolder", id, name),
+  moveFolder: (id) => emit("moveFolder", id),
+  moveFile: (id) => emit("moveFile", id),
+  deleteFolder: (id, name) => emit("deleteFolder", id, name),
+  deleteFile: (f) => emit("deleteFile", f),
+};
+function itemsFor(e: Entry) { return menuFor(e, handlers); }
+
+function toggle(e: Entry, shift: boolean) {
+  const k = keyOf(e);
+  const next = new Set(props.selection);
+  if (shift && lastSelected.value && lastSelected.value !== k) {
+    const keys = sorted.value.map(keyOf);
+    const a = keys.indexOf(lastSelected.value);
+    const b = keys.indexOf(k);
+    if (a >= 0 && b >= 0) {
+      const [lo, hi] = a < b ? [a, b] : [b, a];
+      for (let i = lo; i <= hi; i++) next.add(keys[i]);
+    }
+  } else {
+    if (next.has(k)) next.delete(k); else next.add(k);
   }
-  return [
-    { label: "打开", icon: FolderOpen, onClick: () => emit("openFile", e.file), disabled: e.file.status !== "ready" },
-    { label: "下载", icon: Download, onClick: () => emit("download", e.file), disabled: e.file.status !== "ready" },
-    { label: "分享", icon: Share2, onClick: () => emit("share", e.file), disabled: e.file.status !== "ready" },
-    { label: "移动", icon: FolderInput, onClick: () => emit("moveFile", e.file.id) },
-    { label: "删除", icon: Trash2, danger: true, onClick: () => emit("deleteFile", e.file) },
-  ];
+  lastSelected.value = k;
+  emit("update:selection", [...next]);
+}
+
+function onSort(k: SortKey) {
+  if (props.sortKey === k) {
+    emit("update:sortDir", props.sortDir === "asc" ? "desc" : "asc");
+  } else {
+    emit("update:sortKey", k);
+  }
+}
+
+function onContextmenu(ev: MouseEvent, e: Entry) {
+  emit("contextmenu", ev, e);
 }
 </script>
 
 <template>
-  <DfEmpty v-if="!filtered.length" title="这里还很空" description="拖拽文件到此处，或点击上传按钮" />
-  <ul v-else class="flex flex-col gap-1">
-    <li
-      v-for="e in filtered"
-      :key="e.kind + (e.kind === 'folder' ? e.folder.id : e.file.id)"
-      class="group grid grid-cols-[auto_1fr_auto] items-center gap-3 rounded-lg border border-transparent px-3 py-2 transition-colors hover:border-border hover:bg-surface"
-    >
-      <FileTypeIcon :name="e.kind === 'folder' ? e.folder.name : fname(e.file)" :is-folder="e.kind === 'folder'" />
+  <DfEmpty v-if="!sorted.length" title="这里还很空" description="拖拽文件到此处，或点击上传按钮" />
+  <template v-else>
+    <div v-if="view === 'grid'" class="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
       <button
-        class="min-w-0 truncate text-left text-sm font-medium text-fg hover:text-brand"
+        v-for="e in sorted"
+        :key="keyOf(e)"
+        class="flex flex-col items-center gap-2 rounded-xl border border-border bg-surface p-4 text-center transition-colors hover:border-brand"
         @click="e.kind === 'folder' ? emit('openFolder', e.folder.id) : emit('openFile', e.file)"
-      >{{ e.kind === "folder" ? e.folder.name : fname(e.file) }}</button>
-      <div class="flex items-center gap-3">
-        <template v-if="e.kind === 'file'">
-          <span class="hidden text-xs text-fg-muted sm:inline">{{ fmtSize(e.file.total_size) }}</span>
-          <DfBadge :variant="statusVariant(e.file.status)">{{ statusLabel(e.file.status) }}</DfBadge>
-        </template>
-        <span v-else class="text-xs text-fg-muted">文件夹</span>
-        <DfDropdown :items="menuFor(e)" align="right">
-          <template #trigger>
-            <button class="rounded-md p-1 text-fg-muted opacity-0 transition-opacity hover:bg-bg hover:text-fg group-hover:opacity-100">
-              <MoreHorizontal class="h-4 w-4" />
-            </button>
-          </template>
-        </DfDropdown>
+        @contextmenu="onContextmenu($event, e)"
+      >
+        <FileTypeIcon :name="e.kind === 'folder' ? e.folder.name : fname(e.file)" :is-folder="e.kind === 'folder'" />
+        <span class="w-full truncate text-xs font-medium text-fg">{{ e.kind === "folder" ? e.folder.name : fname(e.file) }}</span>
+        <span v-if="e.kind === 'file'" class="text-[10px] text-fg-muted">{{ fmtSize(e.file.total_size) }}</span>
+      </button>
+    </div>
+
+    <template v-else>
+      <div class="grid grid-cols-[auto_1fr_auto] gap-3 border-b border-border px-3 pb-2 text-xs font-medium text-fg-muted">
+        <span class="w-4" />
+        <button class="flex items-center gap-1 hover:text-fg" @click="onSort('name')">
+          名称
+          <span v-if="sortKey === 'name'">{{ sortDir === "asc" ? "▲" : "▼" }}</span>
+        </button>
+        <button class="flex items-center gap-1 hover:text-fg" @click="onSort('size')">
+          大小
+          <span v-if="sortKey === 'size'">{{ sortDir === "asc" ? "▲" : "▼" }}</span>
+        </button>
       </div>
-    </li>
-  </ul>
+
+      <ul class="flex flex-col gap-1">
+        <li
+          v-for="e in sorted"
+          :key="keyOf(e)"
+          class="group grid grid-cols-[auto_1fr_auto] items-center gap-3 rounded-lg border border-transparent px-3 py-2 transition-colors hover:border-border hover:bg-surface"
+          @contextmenu="onContextmenu($event, e)"
+        >
+          <input type="checkbox" class="accent-brand"
+            :checked="selection.includes(keyOf(e))"
+            @click.stop="toggle(e, $event.shiftKey)" />
+          <div class="flex min-w-0 items-center gap-3">
+            <FileTypeIcon :name="e.kind === 'folder' ? e.folder.name : fname(e.file)" :is-folder="e.kind === 'folder'" />
+            <button
+              class="min-w-0 truncate text-left text-sm font-medium text-fg hover:text-brand"
+              @click="e.kind === 'folder' ? emit('openFolder', e.folder.id) : emit('openFile', e.file)"
+            >{{ e.kind === "folder" ? e.folder.name : fname(e.file) }}</button>
+          </div>
+          <div class="flex items-center gap-3">
+            <template v-if="e.kind === 'file'">
+              <span class="hidden text-xs text-fg-muted sm:inline">{{ fmtSize(e.file.total_size) }}</span>
+              <DfBadge :variant="statusVariant(e.file.status)">{{ statusLabel(e.file.status) }}</DfBadge>
+            </template>
+            <span v-else class="text-xs text-fg-muted">文件夹</span>
+            <DfDropdown :items="itemsFor(e)" align="right">
+              <template #trigger>
+                <button class="rounded-md p-1 text-fg-muted opacity-0 transition-opacity hover:bg-bg hover:text-fg group-hover:opacity-100">
+                  <MoreHorizontal class="h-4 w-4" />
+                </button>
+              </template>
+            </DfDropdown>
+          </div>
+        </li>
+      </ul>
+    </template>
+  </template>
 </template>

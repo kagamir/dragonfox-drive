@@ -11,10 +11,12 @@ import AppHeader from "@/components/AppHeader.vue";
 import UploadDropzone from "@/components/UploadDropzone.vue";
 import UploadQueueDrawer from "@/components/UploadQueueDrawer.vue";
 import FileList from "@/components/FileList.vue";
+import { menuFor, parseKey, type Entry, type MenuHandlers, type SortKey } from "@/components/fileMenu";
 import DfBreadcrumbs from "@/components/ui/DfBreadcrumbs.vue";
 import DfButton from "@/components/ui/DfButton.vue";
 import DfSegmented from "@/components/ui/DfSegmented.vue";
 import DfInput from "@/components/ui/DfInput.vue";
+import DfContextMenu from "@/components/ui/DfContextMenu.vue";
 import FilePreviewModal from "@/components/FilePreviewModal.vue";
 import MovePickerModal from "@/components/MovePickerModal.vue";
 import ShareDialog from "@/components/ShareDialog.vue";
@@ -32,6 +34,12 @@ const moveTarget = ref<{ kind: "folder" | "file"; id: string } | null>(null);
 const shareTarget = ref<FileMeta | null>(null);
 const view = ref<"list" | "grid">("list");
 const search = ref("");
+const selection = ref<string[]>([]);
+const sortKey = ref<SortKey>("name");
+const sortDir = ref<"asc" | "desc">("asc");
+const bulkMoving = ref(false);
+const ctxMenu = ref<InstanceType<typeof DfContextMenu> | null>(null);
+const ctxTarget = ref<Entry | null>(null);
 
 onMounted(async () => { await folders.loadTree(); await files.refresh(); });
 
@@ -66,7 +74,42 @@ async function renameFolder(id: string, current: string) {
 }
 function moveFolder(id: string) { moveTarget.value = { kind: "folder", id }; }
 function moveFile(id: string) { moveTarget.value = { kind: "file", id }; }
+function bulkMove() {
+  if (!selection.value.length) return;
+  bulkMoving.value = true;
+}
+async function bulkDelete() {
+  if (!selection.value.length) return;
+  if (await confirm.confirm({ message: `删除选中的 ${selection.value.length} 项？此操作无法撤销。`, danger: true, confirmText: "删除" })) {
+    try {
+      for (const key of selection.value) {
+        const { kind, id } = parseKey(key);
+        if (kind === "folder") await folders.deleteFolder(id);
+        else await files.remove(id);
+      }
+      toast.success("已删除");
+      selection.value = [];
+    } catch {
+      toast.error("删除失败，请重试");
+    }
+    await folders.loadTree();
+  }
+}
 async function onMovePicked(dest: string | null) {
+  if (bulkMoving.value) {
+    bulkMoving.value = false;
+    if (dest === null) return;
+    try {
+      for (const key of selection.value) {
+        const { kind, id } = parseKey(key);
+        if (kind === "folder") await folders.moveFolder(id, dest);
+        else await files.moveFile(id, dest);
+      }
+      toast.success("已移动");
+      selection.value = [];
+    } catch { toast.error("移动失败，请重试"); }
+    return;
+  }
   const t = moveTarget.value; moveTarget.value = null;
   if (!t) return;
   try {
@@ -75,11 +118,31 @@ async function onMovePicked(dest: string | null) {
     toast.success("已移动");
   } catch { toast.error("移动失败，请重试"); }
 }
+function cancelMove() {
+  moveTarget.value = null;
+  bulkMoving.value = false;
+}
+function onCtx(e: MouseEvent, entry: Entry) {
+  ctxTarget.value = entry;
+  ctxMenu.value?.show(e);
+}
 async function deleteFolder(id: string, name: string) {
   if (await confirm.confirm({ message: `删除 “${name}” 及其所有内容？此操作无法撤销。`, danger: true, confirmText: "删除" })) {
     await folders.deleteFolder(id); toast.success("已删除");
   }
 }
+const menuHandlers: MenuHandlers = {
+  openFolder: (id) => folders.navigateTo(id),
+  openFile,
+  download,
+  share,
+  renameFolder,
+  moveFolder,
+  moveFile,
+  deleteFolder,
+  deleteFile: removeFile,
+};
+const ctxItems = computed(() => (ctxTarget.value ? menuFor(ctxTarget.value, menuHandlers) : []));
 
 const crumbs = computed(() => [
   { id: null as string | null, label: "Drive" },
@@ -118,6 +181,10 @@ const queueUploads = computed(() =>
           :entries="folders.paginatedView"
           :display-names="files.displayNames"
           :search="search"
+          :view="view"
+          :selection="selection"
+          :sort-key="sortKey"
+          :sort-dir="sortDir"
           @open-folder="(id) => folders.navigateTo(id)"
           @open-file="openFile"
           @download="download"
@@ -127,7 +194,17 @@ const queueUploads = computed(() =>
           @move-file="moveFile"
           @delete-folder="deleteFolder"
           @delete-file="removeFile"
+          @update:selection="(s: string[]) => (selection = s)"
+          @update:sort-key="(k: SortKey) => (sortKey = k)"
+          @update:sort-dir="(d: 'asc' | 'desc') => (sortDir = d)"
+          @contextmenu="onCtx"
         />
+      </div>
+
+      <div v-if="selection.length" class="sticky bottom-4 z-10 mx-auto mt-4 flex w-fit items-center gap-2 rounded-full border border-border bg-surface px-4 py-2 shadow-lg">
+        <span class="text-sm text-fg-muted">已选 {{ selection.length }} 项</span>
+        <DfButton variant="ghost" size="sm" @click="bulkMove">移动</DfButton>
+        <DfButton variant="danger" size="sm" @click="bulkDelete">删除</DfButton>
       </div>
 
       <nav v-if="folders.totalPages > 1" class="mt-6 flex items-center gap-3">
@@ -151,11 +228,12 @@ const queueUploads = computed(() =>
       @error="(m: string) => (files.error = m)"
     />
     <MovePickerModal
-      :open="moveTarget !== null"
+      :open="moveTarget !== null || bulkMoving"
       :exclude-id="moveTarget?.kind === 'folder' ? moveTarget.id : undefined"
       @pick="onMovePicked"
-      @cancel="moveTarget = null"
+      @cancel="cancelMove"
     />
     <ShareDialog v-if="shareTarget" :file="shareTarget" @close="shareTarget = null" />
+    <DfContextMenu ref="ctxMenu" :items="ctxItems" />
   </div>
 </template>
