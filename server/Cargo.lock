@@ -507,6 +507,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "jsonwebtoken",
+ "libsqlite3-sys",
  "mime_guess",
  "once_cell",
  "pretty_assertions",
