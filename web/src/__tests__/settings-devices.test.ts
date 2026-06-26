@@ -56,6 +56,19 @@ vi.mock("../stores/auth", () => ({
   }),
 }));
 
+// The redesigned SettingsView routes confirms through useConfirm and surfaces
+// outcomes through useToast. Mock both so the test can drive confirmations
+// without rendering the global dialog, and assert side effects deterministically.
+const confirmMock = vi.fn().mockResolvedValue(true);
+const toastSuccess = vi.fn();
+const toastError = vi.fn();
+vi.mock("../composables/useConfirm", () => ({
+  useConfirm: () => ({ state: { value: { open: false } }, confirm: confirmMock }),
+}));
+vi.mock("../composables/useToast", () => ({
+  useToast: () => ({ success: toastSuccess, error: toastError, info: vi.fn(), warning: vi.fn() }),
+}));
+
 const SettingsView = (await import("../views/SettingsView.vue")).default;
 
 function mountWith(currentId: string) {
@@ -64,11 +77,23 @@ function mountWith(currentId: string) {
   return mount(SettingsView);
 }
 
+// The redesign hides devices behind the "设备" segmented tab; switch to it
+// before assertions so the devices card is rendered.
+async function switchToDevices(w: ReturnType<typeof mount>) {
+  const tabBtn = w.findAll("button").find((b) => b.text() === "设备");
+  await tabBtn?.trigger("click");
+  await flushPromises();
+}
+
 describe("SettingsView Devices card", () => {
   beforeEach(() => {
     listMock.mockReset();
     revokeMock.mockReset();
     logoutMock.mockReset();
+    confirmMock.mockReset();
+    toastSuccess.mockReset();
+    toastError.mockReset();
+    confirmMock.mockResolvedValue(true);
   });
 
   it("marks the current device and renders revoke for others", async () => {
@@ -78,18 +103,19 @@ describe("SettingsView Devices card", () => {
     ]);
     const w = mountWith("cur");
     await flushPromises();
+    await switchToDevices(w);
 
     const text = w.text();
     expect(text).toContain("Chrome · macOS");
-    expect(text).toContain("Current device");
+    expect(text).toContain("当前设备");
     expect(text).toContain("Firefox · Windows");
 
     const labels = w.findAll("button").map((b) => b.text());
-    expect(labels).toContain("Sign out");
-    expect(labels).toContain("Revoke");
+    expect(labels).toContain("退出登录");
+    expect(labels).toContain("吊销");
   });
 
-  it("clicking Revoke calls devicesApi.revoke and refetches the list", async () => {
+  it("clicking 吊销 calls devicesApi.revoke, refetches, and toasts success", async () => {
     listMock.mockResolvedValueOnce([
       { id: "cur",   name: "A", last_seen_at: null, created_at: "t" },
       { id: "other", name: "B", last_seen_at: null, created_at: "t" },
@@ -101,14 +127,34 @@ describe("SettingsView Devices card", () => {
 
     const w = mountWith("cur");
     await flushPromises();
+    await switchToDevices(w);
 
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
-    const revokeBtn = w.findAll("button").find((b) => b.text() === "Revoke");
+    const revokeBtn = w.findAll("button").find((b) => b.text() === "吊销");
     await revokeBtn?.trigger("click");
     await flushPromises();
 
+    expect(confirmMock).toHaveBeenCalledWith(expect.objectContaining({ danger: true, confirmText: "吊销" }));
     expect(revokeMock).toHaveBeenCalledWith("other");
     expect(listMock).toHaveBeenCalledTimes(2);
-    confirmSpy.mockRestore();
+    expect(toastSuccess).toHaveBeenCalledWith("已吊销");
+  });
+
+  it("canceling the confirm dialog leaves the device list untouched", async () => {
+    listMock.mockResolvedValueOnce([
+      { id: "cur",   name: "A", last_seen_at: null, created_at: "t" },
+      { id: "other", name: "B", last_seen_at: null, created_at: "t" },
+    ]);
+    confirmMock.mockResolvedValueOnce(false);
+
+    const w = mountWith("cur");
+    await flushPromises();
+    await switchToDevices(w);
+
+    const revokeBtn = w.findAll("button").find((b) => b.text() === "吊销");
+    await revokeBtn?.trigger("click");
+    await flushPromises();
+
+    expect(revokeMock).not.toHaveBeenCalled();
+    expect(toastSuccess).not.toHaveBeenCalled();
   });
 });
