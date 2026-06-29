@@ -2,6 +2,10 @@
 -- The server is zero-trust: it stores NO plaintext file names, paths, keys,
 -- or passwords. Every column below is either public metadata (sizes, indices),
 -- an opaque encrypted blob, or a server-side hash of a client-derived verifier.
+--
+-- This file is the consolidated initial schema: it folds in every migration up
+-- to and including the P4 device-revocation work (username rename, per-file
+-- file_key, encrypted folder tree, device-column cleanup).
 
 PRAGMA foreign_keys = ON;
 
@@ -10,7 +14,8 @@ PRAGMA foreign_keys = ON;
 -- =============================================================================
 CREATE TABLE users (
     id                          TEXT PRIMARY KEY,
-    email                       TEXT NOT NULL UNIQUE,
+    -- Identity column (P1 auth milestone renamed this from `email`).
+    username                    TEXT NOT NULL UNIQUE,
     -- Per-user client KDF salt (hex). Used by the browser to derive password_key.
     kdf_salt                    TEXT NOT NULL,
     -- Server-side Argon2id salt (hex) used to hash auth_verifier.
@@ -24,22 +29,19 @@ CREATE TABLE users (
     updated_at                  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX idx_users_email ON users(email);
+CREATE INDEX idx_users_username ON users(username);
 
 -- =============================================================================
 -- Devices (for device-level keys & revocation)
 -- =============================================================================
+-- Device revocation is a hard DELETE, so there is no revoked_at column. The
+-- per-browser device_key is an IndexedDB-only concept, so the server stores no
+-- device_wrap; pubkey (reserved X25519 device auth) is likewise unused.
 CREATE TABLE devices (
     id                          TEXT PRIMARY KEY,
     user_id                     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     name                        TEXT NOT NULL,
-    -- Optional device public key (X25519) for future device-to-device operations.
-    pubkey                      TEXT,
-    -- master_key wrapped by device_key (base64 AES-GCM).
-    device_wrap                 TEXT,
-    device_wrap_nonce           TEXT,
     last_seen_at                TEXT,
-    revoked_at                  TEXT,
     created_at                  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -59,6 +61,13 @@ CREATE TABLE files (
     encrypted_manifest              BLOB,
     encrypted_manifest_nonce        TEXT,
     client_version                  INTEGER NOT NULL DEFAULT 1,
+    -- Per-file file_key, wrapped by the user's master_key. Written by `create`
+    -- at upload start, so non-null for any ready file.
+    encrypted_file_key              TEXT,
+    encrypted_file_key_nonce        TEXT,
+    -- Encrypted parent folder pointer (AES-GCM with master_key); NULL ≡ root.
+    encrypted_parent_id             TEXT,
+    encrypted_parent_id_nonce       TEXT,
     created_at                      TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at                      TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -80,6 +89,31 @@ CREATE TABLE file_chunks (
 );
 
 CREATE INDEX idx_chunks_file ON file_chunks(file_id);
+
+-- =============================================================================
+-- Folders (P3: encrypted folder tree)
+-- =============================================================================
+-- The server stores only opaque rows: it cannot read folder names (encrypted
+-- with the folder's own folder_key) and cannot see the tree structure
+-- (parent_id is encrypted with the user's master_key).
+CREATE TABLE folders (
+    id                          TEXT PRIMARY KEY,
+    owner_id                    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    -- Parent folder id, AES-GCM-encrypted with the user's master_key. NULL ≡ root.
+    encrypted_parent_id         TEXT,
+    encrypted_parent_id_nonce   TEXT,
+    -- This folder's folder_key, wrapped by the PARENT's folder_key
+    -- (or by master_key when encrypted_parent_id is NULL).
+    encrypted_folder_key        TEXT NOT NULL,
+    encrypted_folder_key_nonce  TEXT NOT NULL,
+    -- Folder name, encrypted with this folder's OWN folder_key.
+    encrypted_name              TEXT NOT NULL,
+    encrypted_name_nonce        TEXT NOT NULL,
+    created_at                  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at                  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX idx_folders_owner ON folders(owner_id);
 
 -- =============================================================================
 -- Public link shares
