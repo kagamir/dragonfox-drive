@@ -153,17 +153,62 @@ hard-block chunks. `download_count` increments once per key disclosure.
 
 ## Threat model
 
-| Adversary                | What they can learn                          |
-|--------------------------|----------------------------------------------|
-| Server operator (online) | Account existence, file sizes, chunk count,  |
-|                          | access timestamps, approximate upload times. |
-| Server operator (DB leak)| Same as above + Argon2id hashes of auth      |
-|                          | verifiers (offline brute force possible).    |
-| Network MITM             | Nothing beyond the above (TLS).              |
-| Compromised browser      | Full plaintext (same as any E2EE scheme).    |
+| Adversary                  | What they can learn                          |
+|----------------------------|----------------------------------------------|
+| Storage provider / DB+disk | Account existence, file sizes, chunk count,  |
+| leak (data at rest)        | timestamps, folder/file *counts*. **Never**  |
+|                            | file contents, names, or tree structure.     |
+| Server operator (passive,  | Same as above + access timestamps/patterns + |
+| honest-but-curious online) | Argon2id hashes of auth verifiers (offline   |
+|                            | brute force possible against weak passwords).|
+| Server operator (active /  | **Can obtain plaintext.** The server ships    |
+| compromised — serves code) | the client JS on every load; a malicious or  |
+|                            | backdoored bundle can capture the password / |
+|                            | `master_key` in the browser. Out of scope.   |
+| Network MITM               | Nothing beyond the passive row (TLS).        |
+| Compromised browser        | Full plaintext (same as any E2EE scheme).    |
 
-The server **cannot** decrypt file contents or file names even with full
-database and disk access. The user's password is the sole secret.
+**What the guarantee covers.** Against a **storage provider** and any party
+that only sees data at rest or in transit (DB dumps, disk images, backups,
+TLS-wire taps), the design is genuinely zero-knowledge: file contents, file
+names, folder names, and the folder tree are all opaque ciphertext, and the
+only password-derived material the server holds is a triple-Argon2id hash. The
+user's password is the sole secret and is never sent.
+
+**What it does NOT cover.** Because the application is delivered *by the same
+server* on every visit and there is no out-of-band code integrity (no SRI /
+code signing), an **active** operator who controls the served bundle is in a
+position to exfiltrate secrets at will. This is the standard limitation of all
+browser-delivered E2EE: confidentiality holds against a passive/curious server
+and against storage compromise, but not against a server that actively serves
+malicious code. Treat "zero-knowledge" as a property of the **stored data and
+the protocol**, not an absolute claim about a fully malicious live operator.
+
+## Guarantee toward the storage service provider
+
+The party that *hosts the encrypted blobs and the database* — the storage
+service provider, plus anyone with operational access to disks, backups, or a
+leaked dump — **cannot read**:
+
+- file contents (per-chunk AES-256-GCM under a random per-file `file_key`);
+- file names, MIME types, sizes-in-name, or any manifest field (the manifest
+  is an opaque AES-GCM blob under `file_key`, and names are length-padded so
+  even the *length* of a name does not leak);
+- folder names (AES-GCM under each folder's own `folder_key`);
+- the folder tree / parent-child structure (parent pointers are AES-GCM under
+  `master_key`).
+
+All key material reaching the server is either wrapped ciphertext
+(`encrypted_master_key`, `encrypted_file_key`, `encrypted_folder_key`) or a
+one-way hash of a client-derived verifier. No code path on the server performs
+symmetric decryption of user data — the server has no key with which to do so.
+This holds for the **honest-but-curious provider and for full DB+disk leak**;
+see the active-operator caveat in the threat model above for the one case it
+does not cover.
+
+> **Transport note:** HSTS is intentionally *not* emitted by the app server
+> (it would self-lock plaintext dev). Terminate TLS at a reverse proxy and add
+> `Strict-Transport-Security` there in production.
 
 ## Crypto libraries
 

@@ -21,6 +21,7 @@ onMounted(() => {
   const buf = createChunkBuffer({
     fileKey: props.payload.fileKey,
     ivBase: props.payload.ivBase,
+    contentId: props.payload.contentId,
     chunkSize: props.payload.chunkSize,
     totalSize: props.payload.totalSize,
     fetchChunk: props.payload.fetchChunk,

@@ -10,8 +10,9 @@ describe("crypto worker api", () => {
   });
 
   it("derives a deterministic 32-byte password key", async () => {
-    const a = await api.derivePasswordKey("pw", "u@x.com");
-    const b = await api.derivePasswordKey("pw", "u@x.com");
+    const salt = new Uint8Array(16).fill(3);
+    const a = await api.derivePasswordKey("pw", salt);
+    const b = await api.derivePasswordKey("pw", salt);
     expect(Array.from(a)).toEqual(Array.from(b));
     expect(a.length).toBe(32);
   });

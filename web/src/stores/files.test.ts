@@ -64,7 +64,7 @@ vi.mock("@/workers/crypto", () => ({
     encryptChunk: vi.fn().mockResolvedValue(new Uint8Array([5])),
     decryptManifestWithKey: vi.fn().mockResolvedValue({
       name: "dl.txt", mime: "text/plain", size: 2,
-      iv_base: "iv==", chunk_size: 4 * 1024 * 1024,
+      iv_base: "iv==", content_id: "ab".repeat(16), chunk_size: 4 * 1024 * 1024,
     }),
     unwrap: vi.fn().mockResolvedValue(new Uint8Array(32)),
     decryptChunk: vi.fn().mockResolvedValue(new Uint8Array([9, 9])),
@@ -257,7 +257,7 @@ describe("files store", () => {
     // decryptManifestWithKey mock returns size: 2; force it over the text cap
     (cryptoApi.decryptManifestWithKey as any).mockResolvedValueOnce({
       name: "big.txt", mime: "text/plain", size: 3 * 1024 * 1024,
-      iv_base: "iv==", chunk_size: 4 * 1024 * 1024,
+      iv_base: "iv==", content_id: "ab".repeat(16), chunk_size: 4 * 1024 * 1024,
     });
     const meta = {
       id: "f1", owner_id: "u", status: "ready" as const,
@@ -277,7 +277,7 @@ describe("files store", () => {
     vi.stubGlobal("URL", { createObjectURL: vi.fn(), revokeObjectURL: vi.fn() });
     (cryptoApi.decryptManifestWithKey as any).mockResolvedValueOnce({
       name: "doc.pdf", mime: "application/pdf", size: 100,
-      iv_base: "iv==", chunk_size: 4 * 1024 * 1024,
+      iv_base: "iv==", content_id: "ab".repeat(16), chunk_size: 4 * 1024 * 1024,
     });
     const files = useFilesStore();
     const meta = {
@@ -339,7 +339,7 @@ describe("files store", () => {
     auth.masterKey = new Uint8Array(32) as any;
     (cryptoApi.decryptManifestWithKey as any).mockResolvedValue({
       name: "clip.mp4", mime: "video/mp4", size: 5 * 1024 * 1024 * 1024,
-      iv_base: "iv==", chunk_size: 4 * 1024 * 1024,
+      iv_base: "iv==", content_id: "ab".repeat(16), chunk_size: 4 * 1024 * 1024,
     });
     const files = useFilesStore();
     const meta = {
@@ -370,7 +370,7 @@ describe("files store", () => {
     });
     (cryptoApi.decryptManifestWithKey as any).mockResolvedValue({
       name: "clip.webm", mime: "video/webm", size: 1000,
-      iv_base: "iv==", chunk_size: 4 * 1024 * 1024,
+      iv_base: "iv==", content_id: "ab".repeat(16), chunk_size: 4 * 1024 * 1024,
     });
     const files = useFilesStore();
     const meta = {

@@ -76,22 +76,20 @@ describe("wrapMasterKey [property]", () => {
 });
 
 describe("wrapWithPassword / unwrapWithPassword", () => {
+  const salt = new Uint8Array(16).fill(7);
+
   it("round-trip", async () => {
     const master = generateMasterKey();
-    const wrapped = await wrapWithPassword(master, "correct horse", "alice");
+    const wrapped = await wrapWithPassword(master, "correct horse", salt);
     expect(
-      Array.from(await unwrapWithPassword(wrapped, "correct horse", "alice")),
+      Array.from(await unwrapWithPassword(wrapped, "correct horse", salt)),
     ).toEqual(Array.from(master));
   });
 
   it("throws with the wrong password", async () => {
-    const wrapped = await wrapWithPassword(
-      generateMasterKey(),
-      "right",
-      "alice",
-    );
+    const wrapped = await wrapWithPassword(generateMasterKey(), "right", salt);
     await expect(
-      unwrapWithPassword(wrapped, "wrong", "alice"),
+      unwrapWithPassword(wrapped, "wrong", salt),
     ).rejects.toThrow();
   });
 });

@@ -20,8 +20,26 @@ import {
   type WrappedKey,
 } from "./keys";
 import { randomBytes, type RawKey } from "./kdf";
+import { pad, unpad } from "./pad";
 
 export const FILE_CHUNK_SIZE = 4 * 1024 * 1024;
+
+/**
+ * Block size (bytes) for manifest padding. The manifest carries the file name,
+ * so its ciphertext length would otherwise leak the name length. 256 covers a
+ * typical manifest (≈150–250 B) in one or two buckets.
+ */
+const MANIFEST_PAD_BLOCK = 256;
+
+/** JSON-serialize + length-pad a manifest for sealing. */
+export function serializeManifest(manifest: Manifest): Uint8Array {
+  return pad(new TextEncoder().encode(JSON.stringify(manifest)), MANIFEST_PAD_BLOCK);
+}
+
+/** Reverse {@link serializeManifest}: unpad + JSON-parse decrypted bytes. */
+export function parseManifest(plain: Uint8Array): Manifest {
+  return JSON.parse(new TextDecoder().decode(unpad(plain))) as Manifest;
+}
 
 export interface Manifest {
   version: number;
@@ -30,8 +48,30 @@ export interface Manifest {
   size: number;
   chunk_size: number;
   iv_base: string; // base64 of the 12-byte iv_base
+  /**
+   * Random per-file content identity (hex, 16 bytes). Bound into every chunk's
+   * AES-GCM AAD so the server cannot splice a chunk from a different file (with
+   * a different content_id) into this file's stream. The client reads it from
+   * the decrypted manifest before decrypting any chunk.
+   */
+  content_id: string;
   plaintext_sha256?: string; // hex; omitted for multi-chunk P2a uploads
   created_at: string; // RFC-3339
+}
+
+/**
+ * Additional-authenticated-data for chunk `index` of a file identified by
+ * `contentId`. Binding (content_id, index) into the GCM tag means a chunk only
+ * verifies in its own file at its own position. Index alone is already implied
+ * by the IV; content_id is the part the server cannot forge or cross-wire.
+ */
+export function chunkAad(contentId: string, index: number): Uint8Array {
+  return new TextEncoder().encode(`${contentId}:${index}`);
+}
+
+/** Generate a fresh random content_id (hex, 16 bytes). */
+export function newContentId(): string {
+  return toHex(randomBytes(16));
 }
 
 /** Wire-format payload returned by encryptFile (base64 for server columns). */
@@ -76,7 +116,13 @@ export async function encryptFile(
 ): Promise<EncryptedFilePayload> {
   const fileKey = generateFileKey();
   const ivBase = randomBytes(12);
-  const ciphertext = await encryptChunk(fileKey, chunkIv(ivBase, 0), plaintext);
+  const contentId = newContentId();
+  const ciphertext = await encryptChunk(
+    fileKey,
+    chunkIv(ivBase, 0),
+    plaintext,
+    chunkAad(contentId, 0),
+  );
 
   const wrapped: WrappedKey = await wrapMasterKey(fileKey, masterKey);
 
@@ -90,10 +136,11 @@ export async function encryptFile(
     size: plaintext.length,
     chunk_size: FILE_CHUNK_SIZE,
     iv_base: toBase64(ivBase),
+    content_id: contentId,
     plaintext_sha256: toHex(sha),
     created_at: new Date().toISOString(),
   };
-  const manifestBytes = new TextEncoder().encode(JSON.stringify(manifest));
+  const manifestBytes = serializeManifest(manifest);
   const encManifest = await encrypt(fileKey, manifestBytes);
 
   return {
@@ -121,7 +168,7 @@ export async function decryptManifest(
     fromBase64(encryptedManifest),
     fromBase64(encryptedManifestNonce),
   );
-  return JSON.parse(new TextDecoder().decode(plain)) as Manifest;
+  return parseManifest(plain);
 }
 
 /** Like decryptManifest, but the file_key has already been unwrapped by the
@@ -137,7 +184,7 @@ export async function decryptManifestWithKey(
     fromBase64(encryptedManifest),
     fromBase64(encryptedManifestNonce),
   );
-  return JSON.parse(new TextDecoder().decode(plain)) as Manifest;
+  return parseManifest(plain);
 }
 
 export async function decryptFile(
@@ -157,7 +204,12 @@ export async function decryptFile(
     masterKey,
   );
   const ivBase = fromBase64(manifest.iv_base);
-  const plaintext = await decryptChunk(fileKey, chunkIv(ivBase, 0), ciphertext);
+  const plaintext = await decryptChunk(
+    fileKey,
+    chunkIv(ivBase, 0),
+    ciphertext,
+    chunkAad(manifest.content_id, 0),
+  );
   return { plaintext, manifest };
 }
 

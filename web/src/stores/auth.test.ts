@@ -6,7 +6,7 @@ vi.mock("@/crypto/kdf", () => ({
   normaliseUsername: (s: string) => s.trim().toLowerCase(),
   derivePasswordKey: vi.fn(async () => new Uint8Array(32)),
   deriveAuthVerifier: vi.fn(() => new Uint8Array(32)),
-  usernameToSalt: vi.fn(async () => new Uint8Array(16)),
+  KDF_SALT_BYTES: 16,
   randomBytes: vi.fn(() => new Uint8Array(16)),
 }));
 vi.mock("@/crypto/keys", () => ({

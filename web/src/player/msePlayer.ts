@@ -299,6 +299,7 @@ export function playMp4(
 export interface PlayerPayload {
   fileKey: Uint8Array;
   ivBase: Uint8Array;
+  contentId: string;
   chunkSize: number;
   totalSize: number;
   fetchChunk: (idx: number) => Promise<Uint8Array>;

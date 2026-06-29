@@ -26,7 +26,7 @@ const preview = ref<{
   kind: FileKind;
   url: string;
   name: string;
-  player?: { fileKey: Uint8Array; ivBase: Uint8Array; chunkSize: number; totalSize: number; fetchChunk: (i: number) => Promise<Uint8Array> } | null;
+  player?: { fileKey: Uint8Array; ivBase: Uint8Array; contentId: string; chunkSize: number; totalSize: number; fetchChunk: (i: number) => Promise<Uint8Array> } | null;
 } | null>(null);
 const downloading = ref(false);
 
@@ -123,7 +123,7 @@ async function openPreview() {
   if (kind === "video" && ["video/mp4", "video/quicktime", "video/x-m4v"].includes(m.mime) && typeof MediaSource !== "undefined") {
     preview.value = {
       kind, url: "", name: m.name,
-      player: { fileKey: fileKey.value, ivBase, chunkSize: FILE_CHUNK_SIZE, totalSize: m.size, fetchChunk: fetchChunk },
+      player: { fileKey: fileKey.value, ivBase, contentId: m.content_id, chunkSize: FILE_CHUNK_SIZE, totalSize: m.size, fetchChunk: fetchChunk },
     };
     return;
   }
@@ -131,7 +131,7 @@ async function openPreview() {
   const parts = new Array<Uint8Array>(n);
   for (let i = 0; i < n; i++) {
     const cipher = await fetchChunk(i);
-    parts[i] = await cryptoApi.decryptChunk(fileKey.value, ivBase, i, cipher);
+    parts[i] = await cryptoApi.decryptChunk(fileKey.value, ivBase, i, cipher, m.content_id);
   }
   const url = URL.createObjectURL(new Blob(parts as BlobPart[], { type: m.mime }));
   if (preview.value && !preview.value.player && preview.value.url.startsWith("blob:")) {
@@ -150,7 +150,7 @@ async function download() {
     const parts = new Array<Uint8Array>(n);
     for (let i = 0; i < n; i++) {
       const cipher = await fetchChunk(i);
-      parts[i] = await cryptoApi.decryptChunk(fileKey.value, ivBase, i, cipher);
+      parts[i] = await cryptoApi.decryptChunk(fileKey.value, ivBase, i, cipher, m.content_id);
     }
     const url = URL.createObjectURL(new Blob(parts as BlobPart[], { type: m.mime }));
     const a = document.createElement("a");

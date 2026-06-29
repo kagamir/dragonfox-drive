@@ -7,7 +7,7 @@ import type { FileMeta } from "@/api/types";
 import { cryptoApi, ensureCryptoReady } from "@/workers/crypto";
 import { useAuthStore } from "./auth";
 import { useFoldersStore } from "./folders";
-import { FILE_CHUNK_SIZE, chunkCount, toBase64, fromBase64, type Manifest } from "@/crypto/file";
+import { FILE_CHUNK_SIZE, chunkCount, newContentId, serializeManifest, toBase64, fromBase64, type Manifest } from "@/crypto/file";
 import { kindOf, canPreview, PREVIEW_CAPS, type FileKind } from "@/crypto/preview";
 import type { WrappedKey } from "@/crypto/keys";
 
@@ -75,7 +75,7 @@ export const useFilesStore = defineStore("files", () => {
     url: string;
     kind: FileKind;
     name: string;
-    player?: { fileKey: Uint8Array; ivBase: Uint8Array; chunkSize: number; totalSize: number; fetchChunk: (idx: number) => Promise<Uint8Array> } | null;
+    player?: { fileKey: Uint8Array; ivBase: Uint8Array; contentId: string; chunkSize: number; totalSize: number; fetchChunk: (idx: number) => Promise<Uint8Array> } | null;
   } | null>(null);
 
   function masterKey(): Uint8Array {
@@ -244,6 +244,7 @@ export const useFilesStore = defineStore("files", () => {
       });
       fileParents.value[id] = parentId;
 
+      const contentId = newContentId();
       const manifestObj = {
         version: 1,
         name: file.name,
@@ -251,9 +252,10 @@ export const useFilesStore = defineStore("files", () => {
         size: total,
         chunk_size: FILE_CHUNK_SIZE,
         iv_base: toBase64(ivBase),
+        content_id: contentId,
         created_at: new Date().toISOString(),
       };
-      const manifestBytes = new TextEncoder().encode(JSON.stringify(manifestObj));
+      const manifestBytes = serializeManifest(manifestObj);
       const em = await cryptoApi.seal(fileKey, manifestBytes);
       await filesApi.putManifest(id, {
         encrypted_manifest: toBase64(em.ciphertext),
@@ -282,7 +284,7 @@ export const useFilesStore = defineStore("files", () => {
         let attempt = 0;
         let refreshed = false;
         while (true) {
-          const ciphertext = await cryptoApi.encryptChunk(fileKey, ivBase, i, plaintext);
+          const ciphertext = await cryptoApi.encryptChunk(fileKey, ivBase, i, plaintext, contentId);
           try {
             await filesApi.putChunk(
               id, i, ciphertext,
@@ -368,7 +370,7 @@ export const useFilesStore = defineStore("files", () => {
           if (session.abort.signal.aborted) return;
           const resp = await filesApi.getChunk(meta.id, i, session.abort.signal);
           const cipher = new Uint8Array(await resp.arrayBuffer());
-          parts[i] = await cryptoApi.decryptChunk(fileKey, ivBase, i, cipher);
+          parts[i] = await cryptoApi.decryptChunk(fileKey, ivBase, i, cipher, manifest.content_id);
           done.add(i);
           session.progress = done.size / n;
         },
@@ -469,7 +471,7 @@ export const useFilesStore = defineStore("files", () => {
       if (!meta) throw new Error("file not found");
       const { fileKey, manifest } = await unlockFile(meta);
       const nextManifest: Manifest = { ...manifest, name: newName };
-      const manifestBytes = new TextEncoder().encode(JSON.stringify(nextManifest));
+      const manifestBytes = serializeManifest(nextManifest);
       const em = await cryptoApi.seal(fileKey, manifestBytes);
       await filesApi.putManifest(id, {
         encrypted_manifest: toBase64(em.ciphertext),
@@ -508,6 +510,7 @@ export const useFilesStore = defineStore("files", () => {
         player: {
           fileKey,
           ivBase,
+          contentId: manifest.content_id,
           chunkSize: FILE_CHUNK_SIZE,
           totalSize: manifest.size,
           fetchChunk: async (i: number) => {
@@ -529,7 +532,7 @@ export const useFilesStore = defineStore("files", () => {
         async (i) => {
           const resp = await filesApi.getChunk(meta.id, i);
           const cipher = new Uint8Array(await resp.arrayBuffer());
-          parts[i] = await cryptoApi.decryptChunk(fileKey, ivBase, i, cipher);
+          parts[i] = await cryptoApi.decryptChunk(fileKey, ivBase, i, cipher, manifest.content_id);
         },
       );
       const blob = new Blob(parts as BlobPart[], { type: manifest.mime });
@@ -573,7 +576,7 @@ export const useFilesStore = defineStore("files", () => {
         async (i) => {
           const resp = await filesApi.getChunk(meta.id, i);
           const cipher = new Uint8Array(await resp.arrayBuffer());
-          parts[i] = await cryptoApi.decryptChunk(fileKey, ivBase, i, cipher);
+          parts[i] = await cryptoApi.decryptChunk(fileKey, ivBase, i, cipher, manifest.content_id);
         },
       );
       const blob = new Blob(parts as BlobPart[], { type: manifest.mime });

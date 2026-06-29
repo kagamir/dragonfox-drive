@@ -3,8 +3,16 @@
 A high-performance **end-to-end encrypted** cloud drive with a **zero-trust** backend.
 
 - Browser-first: users access everything via a web UI.
-- All encryption happens in the browser - the server only stores opaque
-  encrypted blobs and never sees plaintext, file names, or keys.
+- All encryption happens in the browser. The **storage provider** (the host of
+  the blobs + database, including backups and any DB/disk leak) only ever sees
+  opaque ciphertext — never plaintext, file names, folder names, the folder
+  tree, or keys. See [docs/crypto-design.md](docs/crypto-design.md) for the
+  exact guarantee.
+- Trust boundary: because the client code is served by the same server on every
+  visit (no SRI / code signing), the guarantee holds against a *passive /
+  curious* server and against storage compromise, **not** against an *active*
+  server that deliberately serves backdoored JS — the inherent limit of all
+  browser-delivered E2EE.
 - Stream large videos with seek support via HTTP Range + Media Source Extensions.
 - Backend written in Rust; frontend is Vue 3 + TypeScript.
 

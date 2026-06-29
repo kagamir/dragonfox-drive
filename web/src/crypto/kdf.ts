@@ -2,9 +2,11 @@
  * Key Derivation Functions.
  *
  * `derivePasswordKey`: master KDF from the user's password. Uses Argon2id with
- *   high memory cost (64 MiB) so brute-force is expensive. The salt is derived
- *   from the username so the same password+username always produces the same key
- *   (allowing re-derivation on new devices).
+ *   high memory cost (64 MiB) so brute-force is expensive. The caller supplies a
+ *   random per-user `kdf_salt` (generated at registration, fetched via
+ *   `/api/auth/prelogin` on login) so the salt carries real per-user entropy —
+ *   unlike a username-derived salt, it cannot be precomputed against a known
+ *   username. The salt is non-secret and stored server-side.
  *
  * `deriveAuthVerifier`: a second Argon2id pass over `password_key` with a
  *   server-provided salt. The output is what the server stores (after its own
@@ -22,30 +24,28 @@ export const KEY_BYTES = 32;
 
 export type RawKey = Uint8Array;
 
-/** Normalise a username for use as KDF salt source (lowercased, trimmed). */
+/** Normalise a username for use as the account identifier (lowercased, trimmed). */
 export function normaliseUsername(username: string): string {
   return username.trim().toLowerCase();
 }
 
-/** Derive a deterministic Argon2id salt (16 bytes) from the username. */
-export async function usernameToSalt(username: string): Promise<Uint8Array> {
-  const hash = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(normaliseUsername(username)) as BufferSource,
-  );
-  return new Uint8Array(hash).slice(0, 16);
-}
+/** Length (bytes) of the random per-user KDF salt. */
+export const KDF_SALT_BYTES = 16;
 
-/** Derive the user's `password_key` (32 bytes) from password + username. */
+/**
+ * Derive the user's `password_key` (32 bytes) from the password and a random
+ * per-user `salt`. The salt must be the value stored for this account (random
+ * 16 B from registration); pass the bytes returned by `/api/auth/prelogin`.
+ */
 export async function derivePasswordKey(
   password: string,
-  username: string,
+  salt: Uint8Array,
 ): Promise<RawKey> {
   assertCryptoReady();
-  const salt = await usernameToSalt(username);
-  // Extend salt to pwhash_SALTBYTES (16 bytes) by padding with zeros.
+  // Extend/clamp to pwhash_SALTBYTES (16 bytes): pad short salts with zeros,
+  // truncate longer ones. Registration always supplies exactly 16 bytes.
   const fullSalt = new Uint8Array(sodium.crypto_pwhash_SALTBYTES);
-  fullSalt.set(salt);
+  fullSalt.set(salt.subarray(0, sodium.crypto_pwhash_SALTBYTES));
   return sodium.crypto_pwhash(
     KEY_BYTES,
     password,

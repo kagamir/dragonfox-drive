@@ -55,7 +55,7 @@ describe("createChunkBuffer.fetchRange", () => {
   it("fetches covering chunks via the injected fetchChunk, decrypts, slices, assembles the exact range", async () => {
     // 2 chunks of 4 bytes; file size 8. Request [2..5].
     const buf = createChunkBuffer({
-      fileKey: KEY, ivBase: IV, chunkSize: 4, totalSize: 8, fetchChunk: fetchChunkMock,
+      fileKey: KEY, ivBase: IV, contentId: "cid", chunkSize: 4, totalSize: 8, fetchChunk: fetchChunkMock,
     });
     // injected fetchChunk returns ENCRYPTED bytes (here just [idx]); decrypt yields plaintext per idx.
     fetchChunkMock.mockImplementation((idx: number) => Promise.resolve(new Uint8Array([idx])));
@@ -70,7 +70,7 @@ describe("createChunkBuffer.fetchRange", () => {
 
   it("caches decrypted chunks across range calls", async () => {
     const buf = createChunkBuffer({
-      fileKey: KEY, ivBase: IV, chunkSize: 4, totalSize: 8, fetchChunk: fetchChunkMock,
+      fileKey: KEY, ivBase: IV, contentId: "cid", chunkSize: 4, totalSize: 8, fetchChunk: fetchChunkMock,
     });
     fetchChunkMock.mockResolvedValue(new Uint8Array([0]));
     decryptMock.mockResolvedValue(new Uint8Array([1, 2, 3, 4]));
@@ -81,7 +81,7 @@ describe("createChunkBuffer.fetchRange", () => {
 
   it("clamps end to totalSize - 1 (short tail chunk)", async () => {
     const buf = createChunkBuffer({
-      fileKey: KEY, ivBase: IV, chunkSize: 4, totalSize: 6, fetchChunk: fetchChunkMock,
+      fileKey: KEY, ivBase: IV, contentId: "cid", chunkSize: 4, totalSize: 6, fetchChunk: fetchChunkMock,
     });
     fetchChunkMock.mockImplementation(() => Promise.resolve(new Uint8Array([0])));
     // tail chunk idx 1 has 2 bytes

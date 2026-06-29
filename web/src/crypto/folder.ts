@@ -15,7 +15,11 @@
 
 import { encrypt, decrypt } from "./symmetric";
 import { randomBytes, type RawKey } from "./kdf";
+import { pad, unpad } from "./pad";
 import type { WrappedKey } from "./keys";
+
+/** Block size (bytes) for name padding — hides exact name length. */
+const NAME_PAD_BLOCK = 32;
 
 export interface EncryptedFieldRaw {
   ciphertext: Uint8Array;
@@ -30,7 +34,10 @@ export async function encryptFolderName(
   folderKey: RawKey,
   name: string,
 ): Promise<EncryptedFieldRaw> {
-  const enc = await encrypt(folderKey, new TextEncoder().encode(name));
+  // Pad before encrypting so the ciphertext length only reveals the 32-byte
+  // bucket the name falls into, not its exact length.
+  const padded = pad(new TextEncoder().encode(name), NAME_PAD_BLOCK);
+  const enc = await encrypt(folderKey, padded);
   return { ciphertext: enc.ciphertext, iv: enc.iv };
 }
 
@@ -40,7 +47,7 @@ export async function decryptFolderName(
   iv: Uint8Array,
 ): Promise<string> {
   const plain = await decrypt(folderKey, ciphertext, iv);
-  return new TextDecoder().decode(plain);
+  return new TextDecoder().decode(unpad(plain));
 }
 
 export async function encryptParentId(

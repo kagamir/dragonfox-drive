@@ -75,6 +75,8 @@ export class LruCache {
 export interface ChunkBufferOptions {
   fileKey: Uint8Array;
   ivBase: Uint8Array;
+  /** Per-file content identity, bound into each chunk's AES-GCM AAD. */
+  contentId: string;
   chunkSize: number;
   totalSize: number;
   /** Fetch the encrypted bytes of chunk `idx` (owner or public share source). */
@@ -99,7 +101,7 @@ export function createChunkBuffer(opts: ChunkBufferOptions): ChunkBuffer {
         let pt = cache.get(key);
         if (!pt) {
           const cipher = await opts.fetchChunk(idx);
-          pt = await cryptoApi.decryptChunk(opts.fileKey, opts.ivBase, idx, cipher);
+          pt = await cryptoApi.decryptChunk(opts.fileKey, opts.ivBase, idx, cipher, opts.contentId);
           cache.set(key, pt);
         }
         const slice = chunkSlice(pt, idx, opts.chunkSize, start, e);

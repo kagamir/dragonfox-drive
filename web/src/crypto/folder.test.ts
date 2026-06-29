@@ -33,6 +33,21 @@ describe("folder crypto", () => {
     await expect(decryptFolderName(newFolderKey(), enc.ciphertext, enc.iv)).rejects.toThrow();
   });
 
+  it("pads names so short names of different length share a ciphertext length", async () => {
+    const fk = newFolderKey();
+    const a = await encryptFolderName(fk, "a");
+    const b = await encryptFolderName(fk, "a-longer-folder-name");
+    // Both ≤ 28 bytes → same 32-byte padding bucket → equal ciphertext length.
+    expect(a.ciphertext.length).toBe(b.ciphertext.length);
+  });
+
+  it("round-trips a multibyte unicode name (padding is byte-based)", async () => {
+    const fk = newFolderKey();
+    const name = "项目-📁-2026";
+    const enc = await encryptFolderName(fk, name);
+    expect(await decryptFolderName(fk, enc.ciphertext, enc.iv)).toBe(name);
+  });
+
   it("encryptParentId returns null for a root (null) parent", async () => {
     const mk = generateMasterKey();
     expect(await encryptParentId(mk, null)).toBeNull();

@@ -20,7 +20,7 @@ import {
   derivePasswordKey,
   normaliseUsername,
   randomBytes,
-  usernameToSalt,
+  KDF_SALT_BYTES,
   type RawKey,
 } from "@/crypto/kdf";
 import {
@@ -111,7 +111,11 @@ export const useAuthStore = defineStore("auth", () => {
     await ensureCryptoReady();
     const normalised = normaliseUsername(p.username);
 
-    const passwordKey = await derivePasswordKey(p.password, normalised);
+    // Random per-user KDF salt (non-secret, stored server-side). Carries real
+    // per-user entropy so the password hash can't be precomputed against a
+    // known username — unlike the previous username-derived salt.
+    const kdfSalt = randomBytes(KDF_SALT_BYTES);
+    const passwordKey = await derivePasswordKey(p.password, kdfSalt);
     const serverSalt = randomBytes(16);
     const authVerifier = deriveAuthVerifier(passwordKey, serverSalt);
 
@@ -126,7 +130,7 @@ export const useAuthStore = defineStore("auth", () => {
     const res = await authApi.register({
       username: normalised,
       auth_verifier: toHex(authVerifier),
-      kdf_salt: toHex(await usernameToSalt(normalised)),
+      kdf_salt: toHex(kdfSalt),
       server_salt: toHex(serverSalt),
       encrypted_master_key: toBase64(ciphertext),
       encrypted_master_key_nonce: toBase64(iv),
@@ -143,7 +147,7 @@ export const useAuthStore = defineStore("auth", () => {
     const normalised = normaliseUsername(p.username);
 
     const pre = await authApi.prelogin(normalised);
-    const passwordKey = await derivePasswordKey(p.password, normalised);
+    const passwordKey = await derivePasswordKey(p.password, fromHex(pre.kdf_salt));
     const authVerifier = deriveAuthVerifier(passwordKey, fromHex(pre.server_salt));
 
     const res = await authApi.login({

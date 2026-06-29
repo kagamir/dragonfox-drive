@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll } from "vitest";
 
-import { encryptFile, decryptFile, decryptManifest, chunkCount, encryptFileChunk, decryptFileChunk, FILE_CHUNK_SIZE } from "./file";
+import { encryptFile, decryptFile, decryptManifest, chunkCount, chunkAad, encryptFileChunk, decryptFileChunk, FILE_CHUNK_SIZE } from "./file";
+import { chunkIv, encryptChunk, decryptChunk } from "./symmetric";
 import { generateMasterKey } from "./keys";
 import { initCrypto } from "./index";
 
@@ -25,6 +26,31 @@ describe("file crypto", () => {
     expect(manifest.name).toBe("note.txt");
     expect(manifest.mime).toBe("text/plain");
     expect(manifest.size).toBe(pt.length);
+    // content_id is a 32-hex-char (16-byte) per-file identity bound into chunk AAD.
+    expect(manifest.content_id).toMatch(/^[0-9a-f]{32}$/);
+  });
+
+  it("chunkAad is distinct per (content_id, index) — binds a chunk to its slot", () => {
+    const a = chunkAad("aa".repeat(16), 0);
+    expect(Array.from(chunkAad("aa".repeat(16), 0))).toEqual(Array.from(a)); // stable
+    expect(Array.from(chunkAad("aa".repeat(16), 1))).not.toEqual(Array.from(a)); // index
+    expect(Array.from(chunkAad("bb".repeat(16), 0))).not.toEqual(Array.from(a)); // content_id
+  });
+
+  it("a chunk only decrypts under its own content_id (AAD binding)", async () => {
+    const fileKey = generateMasterKey();
+    const ivBase = crypto.getRandomValues(new Uint8Array(12));
+    const pt = new TextEncoder().encode("bound");
+    const iv = chunkIv(ivBase, 0);
+    const ct = await encryptChunk(fileKey, iv, pt, chunkAad("aa".repeat(16), 0));
+    // Right content_id → ok.
+    expect(
+      Array.from(await decryptChunk(fileKey, iv, ct, chunkAad("aa".repeat(16), 0))),
+    ).toEqual(Array.from(pt));
+    // Different content_id → GCM tag fails.
+    await expect(
+      decryptChunk(fileKey, iv, ct, chunkAad("bb".repeat(16), 0)),
+    ).rejects.toThrow();
   });
 
   it("round-trips an empty file", async () => {

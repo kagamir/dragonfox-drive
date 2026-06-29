@@ -4,13 +4,16 @@ import fc from "fast-check";
 import { bytes, shortString } from "@/__tests__/fc-arbitrary";
 import {
   normaliseUsername,
-  usernameToSalt,
   derivePasswordKey,
   deriveAuthVerifier,
   deriveSubkey,
   randomBytes,
   KEY_BYTES,
+  KDF_SALT_BYTES,
 } from "./kdf";
+
+const SALT_A = new Uint8Array(KDF_SALT_BYTES).fill(0xa1);
+const SALT_B = new Uint8Array(KDF_SALT_BYTES).fill(0xb2);
 
 describe("normaliseUsername", () => {
   it("trims and lowercases", () => {
@@ -22,39 +25,23 @@ describe("normaliseUsername", () => {
   });
 });
 
-describe("usernameToSalt", () => {
-  it("is deterministic", async () => {
-    expect(Array.from(await usernameToSalt("alice"))).toEqual(
-      Array.from(await usernameToSalt("alice")),
-    );
-  });
-  it("produces 16 bytes", async () => {
-    expect((await usernameToSalt("alice")).length).toBe(16);
-  });
-  it("differs for different usernames", async () => {
-    expect(Array.from(await usernameToSalt("alice"))).not.toEqual(
-      Array.from(await usernameToSalt("bob")),
-    );
-  });
-});
-
 describe("derivePasswordKey", () => {
-  it("is deterministic", async () => {
-    expect(Array.from(await derivePasswordKey("pw", "alice"))).toEqual(
-      Array.from(await derivePasswordKey("pw", "alice")),
+  it("is deterministic for the same (password, salt)", async () => {
+    expect(Array.from(await derivePasswordKey("pw", SALT_A))).toEqual(
+      Array.from(await derivePasswordKey("pw", SALT_A)),
     );
   });
   it("produces 32 bytes", async () => {
-    expect((await derivePasswordKey("pw", "alice")).length).toBe(KEY_BYTES);
+    expect((await derivePasswordKey("pw", SALT_A)).length).toBe(KEY_BYTES);
   });
   it("differs for different passwords", async () => {
-    expect(Array.from(await derivePasswordKey("pw1", "alice"))).not.toEqual(
-      Array.from(await derivePasswordKey("pw2", "alice")),
+    expect(Array.from(await derivePasswordKey("pw1", SALT_A))).not.toEqual(
+      Array.from(await derivePasswordKey("pw2", SALT_A)),
     );
   });
-  it("differs for different usernames", async () => {
-    expect(Array.from(await derivePasswordKey("pw", "alice"))).not.toEqual(
-      Array.from(await derivePasswordKey("pw", "bob")),
+  it("differs for different salts (same password)", async () => {
+    expect(Array.from(await derivePasswordKey("pw", SALT_A))).not.toEqual(
+      Array.from(await derivePasswordKey("pw", SALT_B)),
     );
   });
 });

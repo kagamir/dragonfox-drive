@@ -2,21 +2,8 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <script>
-      (function () {
-        try {
-          var t = localStorage.getItem("df-theme");
-          var sys = window.matchMedia("(prefers-color-scheme: dark)").matches;
-          if ((t === "dark" || (!t || t === "auto") && sys) && t !== "light") {
-            document.documentElement.classList.add("dark");
-          }
-          var l = localStorage.getItem("df-lang");
-          var nl = (navigator.language || "en").toLowerCase();
-          var loc = (l === "en" || l === "zh") ? l : (nl.indexOf("zh") === 0 ? "zh" : "en");
-          document.documentElement.lang = loc;
-        } catch (e) {}
-      })();
-    </script>
+    <!-- External (not inline) so CSP can stay `script-src 'self'`; render-blocking to avoid FOUC. -->
+    <script src="/theme-init.js"></script>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta

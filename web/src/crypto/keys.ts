@@ -81,23 +81,23 @@ export async function unwrapMasterKey(
   return decrypt(wrapper, wrapped.ciphertext, wrapped.iv);
 }
 
-/** Wrap `master_key` with the password-derived key. */
+/** Wrap `master_key` with the password-derived key (random per-user `salt`). */
 export async function wrapWithPassword(
   masterKey: RawKey,
   password: string,
-  username: string,
+  salt: Uint8Array,
 ): Promise<WrappedKey> {
-  const passwordKey = await derivePasswordKey(password, username);
+  const passwordKey = await derivePasswordKey(password, salt);
   return wrapMasterKey(masterKey, passwordKey);
 }
 
-/** Unwrap `master_key` using password (login flow). */
+/** Unwrap `master_key` using password + the account's `salt` (login flow). */
 export async function unwrapWithPassword(
   wrapped: WrappedKey,
   password: string,
-  username: string,
+  salt: Uint8Array,
 ): Promise<RawKey> {
-  const passwordKey = await derivePasswordKey(password, username);
+  const passwordKey = await derivePasswordKey(password, salt);
   return unwrapMasterKey(wrapped, passwordKey);
 }
 

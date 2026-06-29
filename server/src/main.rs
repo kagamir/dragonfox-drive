@@ -15,8 +15,11 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use axum::http::{header, HeaderName, HeaderValue};
 use axum::{extract::DefaultBodyLimit, serve, Router};
-use tower_http::{compression::CompressionLayer, cors::CorsLayer, trace::TraceLayer};
+use tower_http::{
+    compression::CompressionLayer, set_header::SetResponseHeaderLayer, trace::TraceLayer,
+};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use crate::config::Settings;
@@ -80,17 +83,50 @@ fn init_tracing() {
         .init();
 }
 
+/// Content-Security-Policy for the SPA. The app is served same-origin, so
+/// `'self'` covers scripts/styles/assets/XHR. The two non-obvious allowances:
+///   - `script-src 'wasm-unsafe-eval'` — libsodium runs as WebAssembly, which
+///     CSP gates behind this token (without it `WebAssembly.instantiate` fails).
+///   - `blob:` in `media-src`/`img-src`/`worker-src` — file previews use
+///     `URL.createObjectURL(blob)` and the crypto worker may be a blob URL.
+/// `style-src 'unsafe-inline'` accommodates Vue/Vite's injected styles.
+const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; \
+    script-src 'self' 'wasm-unsafe-eval'; \
+    style-src 'self' 'unsafe-inline'; \
+    img-src 'self' blob: data:; \
+    media-src 'self' blob:; \
+    connect-src 'self'; \
+    worker-src 'self' blob:; \
+    object-src 'none'; \
+    base-uri 'self'; \
+    frame-ancestors 'none'";
+
 fn build_router(state: AppState) -> Router {
-    let cors = CorsLayer::very_permissive();
     let compression = CompressionLayer::new().br(true);
     let max_body = state.settings.limits.max_chunk_bytes as usize;
+
+    // Fixed, same-origin security posture. No CORS layer: the SPA and API share
+    // an origin (in dev, Vite proxies /api → :8080, so the browser still sees a
+    // single origin), so cross-origin access is simply not enabled. HSTS is
+    // intentionally omitted — terminate TLS at a reverse proxy and add
+    // `Strict-Transport-Security` there so plaintext dev isn't self-locked.
+    let sec = |name: HeaderName, value: &'static str| {
+        SetResponseHeaderLayer::if_not_present(name, HeaderValue::from_static(value))
+    };
 
     Router::new()
         .merge(api::routes())
         .fallback(api::assets::fallback)
         .layer(DefaultBodyLimit::max(max_body))
         .layer(TraceLayer::new_for_http())
-        .layer(cors)
+        .layer(sec(header::CONTENT_SECURITY_POLICY, CONTENT_SECURITY_POLICY))
+        .layer(sec(header::X_CONTENT_TYPE_OPTIONS, "nosniff"))
+        .layer(sec(header::X_FRAME_OPTIONS, "DENY"))
+        .layer(sec(header::REFERRER_POLICY, "no-referrer"))
+        .layer(sec(
+            HeaderName::from_static("cross-origin-opener-policy"),
+            "same-origin",
+        ))
         .layer(compression)
         .with_state(state)
 }
@@ -159,6 +195,46 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn responses_carry_fixed_security_headers() {
+        let (app, _state) = test_router(104857600).await;
+        let res = app
+            .oneshot(Request::builder().uri("/api/health").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let h = res.headers();
+        let csp = h
+            .get("content-security-policy")
+            .expect("CSP header present")
+            .to_str()
+            .unwrap();
+        assert!(csp.contains("default-src 'self'"));
+        assert!(csp.contains("wasm-unsafe-eval"), "CSP must allow libsodium WASM");
+        assert!(csp.contains("frame-ancestors 'none'"));
+        assert_eq!(h.get("x-content-type-options").unwrap(), "nosniff");
+        assert_eq!(h.get("x-frame-options").unwrap(), "DENY");
+        assert_eq!(h.get("referrer-policy").unwrap(), "no-referrer");
+        assert_eq!(h.get("cross-origin-opener-policy").unwrap(), "same-origin");
+    }
+
+    #[tokio::test]
+    async fn no_permissive_cors_header_is_emitted() {
+        // Regression guard: the old `CorsLayer::very_permissive()` reflected any
+        // origin. With it removed, no ACAO header should appear on API responses.
+        let (app, _state) = test_router(104857600).await;
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/health")
+                    .header("origin", "https://evil.example")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(res.headers().get("access-control-allow-origin").is_none());
     }
 
     /// Regression guard for the 413-on-prelogin incident: a normal-sized auth

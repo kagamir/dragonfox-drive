@@ -30,6 +30,7 @@ import {
   decryptManifest as decryptManifestPayload,
   decryptManifestWithKey as decryptManifestWithKeyPayload,
   encryptFile as encryptFilePayload,
+  chunkAad,
   type EncryptedFilePayload,
   type Manifest,
 } from "@/crypto/file";
@@ -61,8 +62,8 @@ export const api = {
 
   // --- KDF --------------------------------------------------------------
 
-  async derivePasswordKey(password: string, username: string): Promise<RawKey> {
-    return derivePasswordKey(password, username);
+  async derivePasswordKey(password: string, salt: Uint8Array): Promise<RawKey> {
+    return derivePasswordKey(password, salt);
   },
 
   async deriveAuthVerifier(
@@ -97,9 +98,11 @@ export const api = {
     ivBase: RawKey,
     chunkIndex: number,
     plaintext: RawKey,
+    contentId?: string,
   ): Promise<Uint8Array> {
     const iv = chunkIv(ivBase, chunkIndex);
-    return encryptChunk(key, iv, plaintext);
+    const aad = contentId ? chunkAad(contentId, chunkIndex) : undefined;
+    return encryptChunk(key, iv, plaintext, aad);
   },
 
   async decryptChunk(
@@ -107,9 +110,11 @@ export const api = {
     ivBase: RawKey,
     chunkIndex: number,
     ciphertext: Uint8Array,
+    contentId?: string,
   ): Promise<Uint8Array> {
     const iv = chunkIv(ivBase, chunkIndex);
-    return decryptChunk(key, iv, ciphertext);
+    const aad = contentId ? chunkAad(contentId, chunkIndex) : undefined;
+    return decryptChunk(key, iv, ciphertext, aad);
   },
 
   /** Fresh per-file key material: random fileKey + random iv_base. */
