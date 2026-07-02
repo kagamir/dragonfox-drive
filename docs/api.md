@@ -230,6 +230,38 @@ partial chunk fetches.
 Marks the file as `ready` after all chunks have been uploaded. Server verifies
 the expected chunk count.
 
+### `PUT /api/files/:id/content`
+
+Atomically replace a **ready, single-chunk** file's content in place (used by
+the web client's text editor). The client re-encrypts from scratch — new
+file_key, iv_base and content_id — and submits everything in one request, so
+the file id (and any shares pointing at it) survives the edit.
+
+Request body (JSON):
+
+```json
+{
+  "total_size": 1234,
+  "encrypted_file_key": "base64",
+  "encrypted_file_key_nonce": "base64",
+  "encrypted_manifest": "base64",
+  "encrypted_manifest_nonce": "base64",
+  "chunk": "base64 ciphertext of the single chunk",
+  "expected_updated_at": "RFC-3339 stamp the client last saw"
+}
+```
+
+Response: `{ "ok": true, "updated_at": "<new RFC-3339 stamp>" }`.
+
+Errors: `404` unknown/non-owned id; `400` file not ready, not single-chunk,
+`total_size` 0, or invalid base64; `409` `expected_updated_at` no longer
+matches (edited elsewhere — reload and retry); `413` `total_size` over the
+2 MiB replace cap or ciphertext over `max_chunk_bytes`.
+
+The server stages the new ciphertext beside the live chunk, swaps the DB row
+in one transaction, then renames the staged file over the live chunk — a
+failure at any step leaves the previous content fully readable.
+
 ### `DELETE /api/files/:id`
 
 **Hard** delete: removes the file's metadata row and all of its chunks on

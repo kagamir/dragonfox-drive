@@ -39,6 +39,10 @@ pub fn routes() -> Router<AppState> {
         .route("/api/files/:id/chunks", get(files::list_chunks))
         .route("/api/files/:id/finalize", post(files::finalize))
         .route(
+            "/api/files/:id/content",
+            axum::routing::put(files::replace_content),
+        )
+        .route(
             "/api/files/:id",
             axum::routing::patch(files::patch_move).delete(files::delete),
         )

@@ -336,6 +336,110 @@ pub async fn patch_move(
     Ok(Json(json!({ "ok": true })))
 }
 
+/// Max plaintext bytes accepted by `replace_content`. Mirrors the web
+/// client's editable-text cap (`PREVIEW_CAPS.text`) and, being < the 4 MiB
+/// chunk size, guarantees the replacement is always exactly one chunk.
+const REPLACE_MAX_PLAINTEXT_BYTES: u64 = 2 * 1024 * 1024;
+
+#[derive(Debug, Deserialize)]
+pub struct ReplaceContentRequest {
+    pub total_size: u64,
+    pub encrypted_file_key: String,
+    pub encrypted_file_key_nonce: String,
+    pub encrypted_manifest: String,
+    pub encrypted_manifest_nonce: String,
+    /// base64 ciphertext of the single replacement chunk
+    pub chunk: String,
+    /// Optimistic-concurrency guard: must equal the row's current updated_at.
+    pub expected_updated_at: String,
+}
+
+/// Atomically replace a ready single-chunk file's content in place.
+///
+/// Order matters for crash-safety: the new ciphertext is staged next to the
+/// live chunk, the DB row is swapped in one transaction (re-checking
+/// updated_at against concurrent replaces), and only after commit is the
+/// staged file renamed over the live chunk. A failure at any step leaves the
+/// old content readable.
+pub async fn replace_content(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<String>,
+    Json(req): Json<ReplaceContentRequest>,
+) -> ApiResult<Json<Value>> {
+    let row: Option<(String, String, i32)> = sqlx::query_as(
+        "SELECT status, updated_at, chunk_count FROM files WHERE id = ? AND owner_id = ?")
+        .bind(&id).bind(&user.user_id)
+        .fetch_optional(&state.db).await?;
+    let (status, updated_at, chunk_count) = match row {
+        None => return Err(ApiError::NotFound),
+        Some(r) => r,
+    };
+    if status != "ready" {
+        return Err(ApiError::BadRequest("file is not ready".into()));
+    }
+    if chunk_count != 1 {
+        return Err(ApiError::BadRequest(
+            "only single-chunk files can be replaced".into()));
+    }
+    if req.expected_updated_at != updated_at {
+        return Err(ApiError::Conflict(
+            "file was modified since it was loaded".into()));
+    }
+    if req.total_size == 0 {
+        return Err(ApiError::BadRequest("total_size must be > 0".into()));
+    }
+    if req.total_size > REPLACE_MAX_PLAINTEXT_BYTES {
+        return Err(ApiError::PayloadTooLarge);
+    }
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(&req.chunk)
+        .map_err(|_| ApiError::BadRequest("chunk is not valid base64".into()))?;
+    let max = state.settings.limits.max_chunk_bytes;
+    if max > 0 && (bytes.len() as u64) > max {
+        return Err(ApiError::PayloadTooLarge);
+    }
+
+    storage::stage_chunk(&state, &id, 0, &bytes).await?;
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let path = storage::chunk_path(&state.settings.storage.data_dir, &id, 0);
+    let mut tx = state.db.begin().await?;
+    let res = sqlx::query(
+        "UPDATE files SET total_size = ?, chunk_count = 1, \
+         encrypted_file_key = ?, encrypted_file_key_nonce = ?, \
+         encrypted_manifest = ?, encrypted_manifest_nonce = ?, updated_at = ? \
+         WHERE id = ? AND owner_id = ? AND updated_at = ?")
+        .bind(req.total_size as i64)
+        .bind(&req.encrypted_file_key)
+        .bind(&req.encrypted_file_key_nonce)
+        .bind(&req.encrypted_manifest)
+        .bind(&req.encrypted_manifest_nonce)
+        .bind(&now)
+        .bind(&id).bind(&user.user_id).bind(&req.expected_updated_at)
+        .execute(&mut *tx).await?;
+    if res.rows_affected() == 0 {
+        // Lost a race with a concurrent replace between the SELECT and here.
+        return Err(ApiError::Conflict(
+            "file was modified since it was loaded".into()));
+    }
+    sqlx::query(
+        "INSERT INTO file_chunks (file_id, idx, cipher_size, storage_path) \
+         VALUES (?, 0, ?, ?) \
+         ON CONFLICT(file_id, idx) DO UPDATE SET \
+            cipher_size = excluded.cipher_size, \
+            storage_path = excluded.storage_path")
+        .bind(&id)
+        .bind(bytes.len() as i64)
+        .bind(path.to_string_lossy().to_string())
+        .execute(&mut *tx).await?;
+    tx.commit().await?;
+
+    storage::promote_staged_chunk(&state, &id, 0).await?;
+    Ok(Json(json!({ "ok": true, "updated_at": now })))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -731,5 +835,171 @@ mod tests {
         let row: (String,) = sqlx::query_as("SELECT status FROM files WHERE id = 'f1'")
             .fetch_one(&state.db).await.unwrap();
         assert_eq!(row.0, "ready");
+    }
+
+    /// Seed a ready single-chunk file with a live chunk on disk + row,
+    /// returning its updated_at (needed for expected_updated_at).
+    async fn seed_replaceable_file(state: &AppState, id: &str, owner: &str) -> String {
+        sqlx::query(
+            "INSERT INTO files (id, owner_id, status, total_size, chunk_count, \
+             encrypted_file_key, encrypted_file_key_nonce, \
+             encrypted_manifest, encrypted_manifest_nonce) \
+             VALUES (?, ?, 'ready', 3, 1, 'oldK', 'oldKn', 'oldM', 'oldMn')",
+        )
+        .bind(id).bind(owner).execute(&state.db).await.unwrap();
+        storage::write_chunk(state, id, 0, b"old").await.unwrap();
+        sqlx::query(
+            "INSERT INTO file_chunks (file_id, idx, cipher_size, storage_path) \
+             VALUES (?, 0, 3, 'p')",
+        )
+        .bind(id).execute(&state.db).await.unwrap();
+        let (updated_at,): (String,) =
+            sqlx::query_as("SELECT updated_at FROM files WHERE id = ?")
+                .bind(id).fetch_one(&state.db).await.unwrap();
+        updated_at
+    }
+
+    fn replace_req(expected_updated_at: &str) -> ReplaceContentRequest {
+        use base64::Engine as _;
+        ReplaceContentRequest {
+            total_size: 5,
+            encrypted_file_key: "newK".into(),
+            encrypted_file_key_nonce: "newKn".into(),
+            encrypted_manifest: "newM".into(),
+            encrypted_manifest_nonce: "newMn".into(),
+            chunk: base64::engine::general_purpose::STANDARD.encode(b"fresh"),
+            expected_updated_at: expected_updated_at.into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn replace_content_swaps_row_and_chunk() {
+        let (state, _guard) = files_state().await;
+        seed_user(&state, "u1").await;
+        let stamp = seed_replaceable_file(&state, "f1", "u1").await;
+        let res = replace_content(
+            State(state.clone()), auth("u1"), Path("f1".into()),
+            Json(replace_req(&stamp)),
+        ).await.unwrap();
+        assert_eq!(res.0["ok"], true);
+        let new_stamp = res.0["updated_at"].as_str().unwrap();
+        assert_ne!(new_stamp, stamp);
+
+        let row: (i64, i32, String, String, String) = sqlx::query_as(
+            "SELECT total_size, chunk_count, encrypted_file_key, \
+             encrypted_manifest, updated_at FROM files WHERE id = 'f1'")
+            .fetch_one(&state.db).await.unwrap();
+        assert_eq!(row.0, 5);
+        assert_eq!(row.1, 1);
+        assert_eq!(row.2, "newK");
+        assert_eq!(row.3, "newM");
+        assert_eq!(row.4, new_stamp);
+        assert_eq!(
+            storage::read_chunk(&state, "f1", 0).await.unwrap(),
+            Some(b"fresh".to_vec())
+        );
+        let (cipher_size,): (i64,) = sqlx::query_as(
+            "SELECT cipher_size FROM file_chunks WHERE file_id = 'f1' AND idx = 0")
+            .fetch_one(&state.db).await.unwrap();
+        assert_eq!(cipher_size, 5);
+    }
+
+    #[tokio::test]
+    async fn replace_content_returns_404_for_non_owner() {
+        let (state, _guard) = files_state().await;
+        seed_user(&state, "u1").await;
+        seed_user(&state, "u2").await;
+        let stamp = seed_replaceable_file(&state, "f1", "u1").await;
+        let err = replace_content(
+            State(state.clone()), auth("u2"), Path("f1".into()),
+            Json(replace_req(&stamp)),
+        ).await.unwrap_err();
+        assert!(matches!(err, ApiError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn replace_content_rejects_non_ready_file() {
+        let (state, _guard) = files_state().await;
+        seed_user(&state, "u1").await;
+        seed_ready_file(&state, "f1", "u1").await; // helper seeds status='pending'
+        let err = replace_content(
+            State(state.clone()), auth("u1"), Path("f1".into()),
+            Json(replace_req("whatever")),
+        ).await.unwrap_err();
+        assert!(matches!(err, ApiError::BadRequest(_)));
+    }
+
+    #[tokio::test]
+    async fn replace_content_rejects_multi_chunk_file() {
+        let (state, _guard) = files_state().await;
+        seed_user(&state, "u1").await;
+        let stamp = seed_replaceable_file(&state, "f1", "u1").await;
+        sqlx::query("UPDATE files SET chunk_count = 2 WHERE id = 'f1'")
+            .execute(&state.db).await.unwrap();
+        let err = replace_content(
+            State(state.clone()), auth("u1"), Path("f1".into()),
+            Json(replace_req(&stamp)),
+        ).await.unwrap_err();
+        assert!(matches!(err, ApiError::BadRequest(_)));
+    }
+
+    #[tokio::test]
+    async fn replace_content_returns_409_on_stale_stamp_and_keeps_old_content() {
+        let (state, _guard) = files_state().await;
+        seed_user(&state, "u1").await;
+        seed_replaceable_file(&state, "f1", "u1").await;
+        let err = replace_content(
+            State(state.clone()), auth("u1"), Path("f1".into()),
+            Json(replace_req("2000-01-01T00:00:00+00:00")),
+        ).await.unwrap_err();
+        assert!(matches!(err, ApiError::Conflict(_)));
+        // old content untouched on every failure path
+        assert_eq!(
+            storage::read_chunk(&state, "f1", 0).await.unwrap(),
+            Some(b"old".to_vec())
+        );
+        let (key,): (String,) = sqlx::query_as(
+            "SELECT encrypted_file_key FROM files WHERE id = 'f1'")
+            .fetch_one(&state.db).await.unwrap();
+        assert_eq!(key, "oldK");
+    }
+
+    #[tokio::test]
+    async fn replace_content_rejects_zero_total_size() {
+        let (state, _guard) = files_state().await;
+        seed_user(&state, "u1").await;
+        let stamp = seed_replaceable_file(&state, "f1", "u1").await;
+        let mut req = replace_req(&stamp);
+        req.total_size = 0;
+        let err = replace_content(
+            State(state.clone()), auth("u1"), Path("f1".into()), Json(req),
+        ).await.unwrap_err();
+        assert!(matches!(err, ApiError::BadRequest(_)));
+    }
+
+    #[tokio::test]
+    async fn replace_content_returns_413_over_cap() {
+        let (state, _guard) = files_state().await;
+        seed_user(&state, "u1").await;
+        let stamp = seed_replaceable_file(&state, "f1", "u1").await;
+        let mut req = replace_req(&stamp);
+        req.total_size = REPLACE_MAX_PLAINTEXT_BYTES + 1;
+        let err = replace_content(
+            State(state.clone()), auth("u1"), Path("f1".into()), Json(req),
+        ).await.unwrap_err();
+        assert!(matches!(err, ApiError::PayloadTooLarge));
+    }
+
+    #[tokio::test]
+    async fn replace_content_rejects_invalid_base64() {
+        let (state, _guard) = files_state().await;
+        seed_user(&state, "u1").await;
+        let stamp = seed_replaceable_file(&state, "f1", "u1").await;
+        let mut req = replace_req(&stamp);
+        req.chunk = "!!! not base64 !!!".into();
+        let err = replace_content(
+            State(state.clone()), auth("u1"), Path("f1".into()), Json(req),
+        ).await.unwrap_err();
+        assert!(matches!(err, ApiError::BadRequest(_)));
     }
 }
