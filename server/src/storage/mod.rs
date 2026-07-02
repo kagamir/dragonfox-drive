@@ -93,6 +93,47 @@ pub async fn delete_file_chunks(state: &AppState, file_id: &str) -> Result<()> {
     }
 }
 
+/// Stage a replacement for chunk `chunk_index`: write the bytes to a sibling
+/// `.staged` file (fsync'd) WITHOUT touching the live chunk. The caller
+/// promotes it with `promote_staged_chunk` after its DB transaction commits,
+/// so a failure at any earlier point leaves the old content intact.
+pub async fn stage_chunk(
+    state: &AppState,
+    file_id: &str,
+    chunk_index: u32,
+    bytes: &[u8],
+) -> Result<()> {
+    let path = chunk_path(&state.settings.storage.data_dir, file_id, chunk_index);
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .with_context(|| format!("creating chunk directory {}", parent.display()))?;
+    }
+    let staged = path.with_extension("staged");
+    let mut file = tokio::fs::File::create(&staged)
+        .await
+        .with_context(|| format!("creating staged file {}", staged.display()))?;
+    file.write_all(bytes)
+        .await
+        .with_context(|| format!("writing staged chunk {}", chunk_index))?;
+    file.sync_all().await?;
+    Ok(())
+}
+
+/// Atomically promote a previously staged chunk over the live one.
+pub async fn promote_staged_chunk(
+    state: &AppState,
+    file_id: &str,
+    chunk_index: u32,
+) -> Result<()> {
+    let path = chunk_path(&state.settings.storage.data_dir, file_id, chunk_index);
+    let staged = path.with_extension("staged");
+    tokio::fs::rename(&staged, &path)
+        .await
+        .with_context(|| format!("promoting staged chunk {}", staged.display()))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,5 +259,45 @@ mod tests {
             prop_assert!(s.contains(&chunk_name));
             prop_assert!(s.contains(&id));
         }
+    }
+
+    #[tokio::test]
+    async fn stage_chunk_leaves_live_chunk_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = test_state(dir.path()).await;
+        write_chunk(&state, "file-1", 0, b"old").await.unwrap();
+        stage_chunk(&state, "file-1", 0, b"new").await.unwrap();
+        assert_eq!(
+            read_chunk(&state, "file-1", 0).await.unwrap(),
+            Some(b"old".to_vec()),
+            "staging must not overwrite the live chunk"
+        );
+    }
+
+    #[tokio::test]
+    async fn promote_staged_chunk_replaces_live_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = test_state(dir.path()).await;
+        write_chunk(&state, "file-1", 0, b"old").await.unwrap();
+        stage_chunk(&state, "file-1", 0, b"new").await.unwrap();
+        promote_staged_chunk(&state, "file-1", 0).await.unwrap();
+        assert_eq!(
+            read_chunk(&state, "file-1", 0).await.unwrap(),
+            Some(b"new".to_vec())
+        );
+        let staged = chunk_path(&state.settings.storage.data_dir, "file-1", 0)
+            .with_extension("staged");
+        assert!(!staged.exists(), "staged file must be renamed away");
+    }
+
+    #[tokio::test]
+    async fn stage_chunk_works_without_existing_directory() {
+        // A replace can race a fresh state where the blob dir was never
+        // created; stage_chunk must create parents like write_chunk does.
+        let dir = tempfile::tempdir().unwrap();
+        let state = test_state(dir.path()).await;
+        stage_chunk(&state, "file-9", 0, b"x").await.unwrap();
+        promote_staged_chunk(&state, "file-9", 0).await.unwrap();
+        assert_eq!(read_chunk(&state, "file-9", 0).await.unwrap(), Some(b"x".to_vec()));
     }
 }
