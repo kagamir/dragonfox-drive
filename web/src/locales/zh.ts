@@ -32,6 +32,8 @@ export default {
     deleteFile: "删除“{name}”？",
     deleteBulk: "删除选中的 {n} 项？此操作无法撤销。",
     createFolderTitle: "新建文件夹", renameTitle: "重命名", create: "创建",
+    edit: "编辑",
+    discardEdits: "放弃未保存的修改？",
   },
   share: {
     share: "分享", shares: "分享", shareTitle: "分享“{name}”",

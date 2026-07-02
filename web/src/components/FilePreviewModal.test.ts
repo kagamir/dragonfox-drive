@@ -96,3 +96,103 @@ describe("FilePreviewModal", () => {
     vi.unstubAllGlobals();
   });
 });
+
+describe("FilePreviewModal text editing", () => {
+  function stubFetch(body: string) {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(body)));
+  }
+
+  it("shows an edit button for text kind only when onSave is provided", async () => {
+    stubFetch("hello");
+    const w = mountAttached({ kind: "text", url: "blob:t", name: "a.txt", onSave: async () => {} });
+    await flushPromises();
+    expect(document.body.querySelector('[data-testid="edit-btn"]')).toBeTruthy();
+    w.unmount();
+    const w2 = mountAttached({ kind: "text", url: "blob:t", name: "a.txt" });
+    await flushPromises();
+    expect(document.body.querySelector('[data-testid="edit-btn"]')).toBeFalsy();
+    w2.unmount();
+    vi.unstubAllGlobals();
+  });
+
+  it("edit switches to a textarea seeded with the loaded text", async () => {
+    stubFetch("hello");
+    const w = mountAttached({ kind: "text", url: "blob:t", name: "a.txt", onSave: async () => {} });
+    await vi.waitFor(() => {
+      expect(document.body.querySelector("pre")?.textContent).toBe("hello");
+    });
+    (document.body.querySelector('[data-testid="edit-btn"]') as HTMLButtonElement).click();
+    await flushPromises();
+    const ta = document.body.querySelector('[data-testid="text-editor"]') as HTMLTextAreaElement;
+    expect(ta).toBeTruthy();
+    expect(ta.value).toBe("hello");
+    expect(document.body.querySelector("pre")).toBeFalsy();
+    w.unmount();
+    vi.unstubAllGlobals();
+  });
+
+  it("save calls onSave with the draft and exits edit mode on resolve", async () => {
+    stubFetch("hello");
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    const w = mountAttached({ kind: "text", url: "blob:t", name: "a.txt", onSave });
+    await vi.waitFor(() => {
+      expect(document.body.querySelector("pre")?.textContent).toBe("hello");
+    });
+    (document.body.querySelector('[data-testid="edit-btn"]') as HTMLButtonElement).click();
+    await flushPromises();
+    const ta = document.body.querySelector('[data-testid="text-editor"]') as HTMLTextAreaElement;
+    ta.value = "changed";
+    ta.dispatchEvent(new Event("input"));
+    await flushPromises();
+    (document.body.querySelector('[data-testid="edit-save-btn"]') as HTMLButtonElement).click();
+    await flushPromises();
+    expect(onSave).toHaveBeenCalledWith("changed");
+    // back to view mode, showing the saved draft
+    await vi.waitFor(() => {
+      expect(document.body.querySelector('[data-testid="text-editor"]')).toBeFalsy();
+      expect(document.body.querySelector("pre")?.textContent).toBe("changed");
+    });
+    w.unmount();
+    vi.unstubAllGlobals();
+  });
+
+  it("stays in edit mode when onSave rejects", async () => {
+    stubFetch("hello");
+    const onSave = vi.fn().mockRejectedValue(new Error("boom"));
+    const w = mountAttached({ kind: "text", url: "blob:t", name: "a.txt", onSave });
+    await vi.waitFor(() => {
+      expect(document.body.querySelector("pre")?.textContent).toBe("hello");
+    });
+    (document.body.querySelector('[data-testid="edit-btn"]') as HTMLButtonElement).click();
+    await flushPromises();
+    const ta = document.body.querySelector('[data-testid="text-editor"]') as HTMLTextAreaElement;
+    ta.value = "changed";
+    ta.dispatchEvent(new Event("input"));
+    await flushPromises();
+    (document.body.querySelector('[data-testid="edit-save-btn"]') as HTMLButtonElement).click();
+    await flushPromises();
+    expect(document.body.querySelector('[data-testid="text-editor"]')).toBeTruthy();
+    expect((document.body.querySelector('[data-testid="text-editor"]') as HTMLTextAreaElement).value).toBe("changed");
+    w.unmount();
+    vi.unstubAllGlobals();
+  });
+
+  it("disables save while the draft is empty", async () => {
+    const w = mountAttached({ kind: "text", url: "", name: "new.txt", onSave: async () => {}, startEditing: true });
+    await flushPromises();
+    const btn = document.body.querySelector('[data-testid="edit-save-btn"]') as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    w.unmount();
+  });
+
+  it("startEditing opens directly in edit mode without fetching", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const w = mountAttached({ kind: "text", url: "", name: "new.txt", onSave: async () => {}, startEditing: true });
+    await flushPromises();
+    expect(document.body.querySelector('[data-testid="text-editor"]')).toBeTruthy();
+    expect(fetchMock).not.toHaveBeenCalled();
+    w.unmount();
+    vi.unstubAllGlobals();
+  });
+});

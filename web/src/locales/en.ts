@@ -32,6 +32,8 @@ export default {
     deleteFile: "Delete \"{name}\"?",
     deleteBulk: "Delete {n} selected items? This cannot be undone.",
     createFolderTitle: "New folder", renameTitle: "Rename", create: "Create",
+    edit: "Edit",
+    discardEdits: "Discard unsaved changes?",
   },
   share: {
     share: "Share", shares: "Shares", shareTitle: "Share \"{name}\"",
