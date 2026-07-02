@@ -676,10 +676,11 @@ describe("files store", () => {
     return files;
   }
 
-  it("saveTextFile re-encrypts and calls replaceContent with the old stamp", async () => {
+  it("saveTextFile keeps the file's existing file_key so share links survive", async () => {
     const auth = useAuthStore();
     auth.masterKey = new Uint8Array(32) as any;
     const files = seedTextFile();
+    (cryptoApi.wrap as any).mockClear();
     await files.saveTextFile("fid", "hello");
     expect(replaceContentMock).toHaveBeenCalledTimes(1);
     const [id, body] = replaceContentMock.mock.calls[0]!;
@@ -688,9 +689,12 @@ describe("files store", () => {
     expect(body.expected_updated_at).toBe("2026-07-02T00:00:00+00:00");
     // chunk is the (mocked) encryptChunk output [5]
     expect(body.chunk).toBe(toBase64(new Uint8Array([5])));
-    // fresh key material was wrapped: wrap mock returns ct [9] / iv [8]
-    expect(body.encrypted_file_key).toBe(toBase64(new Uint8Array([9])));
-    expect(body.encrypted_file_key_nonce).toBe(toBase64(new Uint8Array([8])));
+    // The file's ORIGINAL wrapped key is sent back unchanged — never rewrapped
+    // — which is what keeps any existing share links (holding the same
+    // file_key wrapped with a share-derived key) working after the edit.
+    expect(body.encrypted_file_key).toBe(toBase64(new Uint8Array([3])));
+    expect(body.encrypted_file_key_nonce).toBe(toBase64(new Uint8Array([4])));
+    expect(cryptoApi.wrap).not.toHaveBeenCalled();
     // manifest sealed with seal mock ct [7] / iv [6]
     expect(body.encrypted_manifest).toBe(toBase64(new Uint8Array([7])));
     expect(body.encrypted_manifest_nonce).toBe(toBase64(new Uint8Array([6])));
@@ -702,7 +706,7 @@ describe("files store", () => {
     expect(contentId).not.toBe("ab".repeat(16));
   });
 
-  it("saveTextFile syncs the local row on success", async () => {
+  it("saveTextFile syncs the local row on success, keeping the same file_key", async () => {
     const auth = useAuthStore();
     auth.masterKey = new Uint8Array(32) as any;
     const files = seedTextFile();
@@ -710,7 +714,9 @@ describe("files store", () => {
     const row = files.files[0]!;
     expect(row.total_size).toBe(5);
     expect(row.updated_at).toBe("2026-07-02T01:00:00+00:00");
-    expect(row.encrypted_file_key).toBe(toBase64(new Uint8Array([9])));
+    // file_key/nonce are untouched — same as the seeded meta's original values.
+    expect(row.encrypted_file_key).toBe(toBase64(new Uint8Array([3])));
+    expect(row.encrypted_file_key_nonce).toBe(toBase64(new Uint8Array([4])));
     expect(row.encrypted_manifest).toBe(toBase64(new Uint8Array([7])));
   });
 

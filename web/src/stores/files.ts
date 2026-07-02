@@ -498,10 +498,11 @@ export const useFilesStore = defineStore("files", () => {
   }
 
   /**
-   * Replace a text file's content in place. Treated as a fresh encryption:
-   * new file_key + iv_base + content_id (never reuse an IV), re-wrapped with
-   * the parent folder key (or master_key at root). The old `updated_at` is
-   * sent as the optimistic-concurrency stamp — a 409 means another device
+   * Replace a text file's content in place. Keeps the file's existing
+   * file_key so any outstanding share links (which hold that key wrapped
+   * with a share-derived key the server never sees) keep working — only
+   * `iv_base` and `content_id` are refreshed per save. The old `updated_at`
+   * is sent as the optimistic-concurrency stamp — a 409 means another device
    * saved first.
    */
   async function saveTextFile(id: string, text: string): Promise<void> {
@@ -513,10 +514,14 @@ export const useFilesStore = defineStore("files", () => {
       const plaintext = new TextEncoder().encode(text);
       if (plaintext.length === 0) throw new Error("content must not be empty");
       if (plaintext.length > PREVIEW_CAPS.text) throw new Error("file too large to save");
-      const { manifest } = await unlockFile(meta);
-      const { fileKey, ivBase } = await cryptoApi.newFileKeyMaterial();
+      const { fileKey, manifest } = await unlockFile(meta);
+      // Discard the fileKey from newFileKeyMaterial — we only want its fresh
+      // 96-bit ivBase. A new random iv_base per save makes IV reuse under the
+      // retained file_key probabilistically impossible even across many edits.
+      const { ivBase } = await cryptoApi.newFileKeyMaterial();
+      // A fresh content_id (used as AAD) prevents splicing chunks/manifests
+      // between old and new versions of the file.
       const contentId = newContentId();
-      const wrapped: WrappedKey = await cryptoApi.wrap(fileKey, wrapKeyForFile(id));
       const sha = new Uint8Array(
         await crypto.subtle.digest("SHA-256", plaintext as BufferSource),
       );
@@ -529,24 +534,25 @@ export const useFilesStore = defineStore("files", () => {
       };
       const em = await cryptoApi.seal(fileKey, serializeManifest(nextManifest));
       const ciphertext = await cryptoApi.encryptChunk(fileKey, ivBase, 0, plaintext, contentId);
+      // Send the file's existing wrapped key back unchanged — never rewrap,
+      // never rotate. unlockFile already validated these are non-null.
       const res = await filesApi.replaceContent(id, {
         total_size: plaintext.length,
-        encrypted_file_key: toBase64(wrapped.ciphertext),
-        encrypted_file_key_nonce: toBase64(wrapped.iv),
+        encrypted_file_key: meta.encrypted_file_key!,
+        encrypted_file_key_nonce: meta.encrypted_file_key_nonce!,
         encrypted_manifest: toBase64(em.ciphertext),
         encrypted_manifest_nonce: toBase64(em.iv),
         chunk: toBase64(ciphertext),
         expected_updated_at: meta.updated_at,
       });
-      // Keep the local cache in sync so a follow-up save/preview uses the new
-      // key material and stamp without a refetch.
+      // Keep the local cache in sync: encrypted_file_key/nonce are untouched
+      // (same key as before), only the manifest ciphertext, size and stamp
+      // change.
       files.value = files.value.map((f) =>
         f.id === id
           ? {
               ...f,
               total_size: plaintext.length,
-              encrypted_file_key: toBase64(wrapped.ciphertext),
-              encrypted_file_key_nonce: toBase64(wrapped.iv),
               encrypted_manifest: toBase64(em.ciphertext),
               encrypted_manifest_nonce: toBase64(em.iv),
               updated_at: res.updated_at,

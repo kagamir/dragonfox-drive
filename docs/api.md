@@ -233,9 +233,9 @@ the expected chunk count.
 ### `PUT /api/files/:id/content`
 
 Atomically replace a **ready, single-chunk** file's content in place (used by
-the web client's text editor). The client re-encrypts from scratch — new
-file_key, iv_base and content_id — and submits everything in one request, so
-the file id (and any shares pointing at it) survives the edit.
+the web client's text editor). The client re-encrypts with a fresh iv_base
+and content_id under the file's existing file_key, and submits everything in
+one request, so the file id **and existing share links** survive the edit.
 
 Request body (JSON):
 
