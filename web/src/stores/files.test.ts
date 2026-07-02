@@ -10,6 +10,7 @@ const {
   removeMock,
   getChunkMock,
   getChunksMock,
+  replaceContentMock,
 } = vi.hoisted(() => ({
   createMock: vi.fn(),
   putManifestMock: vi.fn().mockResolvedValue({ ok: true }),
@@ -18,6 +19,7 @@ const {
   removeMock: vi.fn().mockResolvedValue({ ok: true }),
   getChunkMock: vi.fn().mockImplementation(() => Promise.resolve(new Response(new Uint8Array([1, 2, 3])))),
   getChunksMock: vi.fn().mockResolvedValue({ indices: [], chunk_count: 1, status: "pending" }),
+  replaceContentMock: vi.fn().mockResolvedValue({ ok: true, updated_at: "2026-07-02T01:00:00+00:00" }),
 }));
 
 const { refreshAuthTokenMock } = vi.hoisted(() => ({
@@ -86,6 +88,7 @@ vi.mock("@/api/files", () => ({
     getChunk: getChunkMock,
     getChunks: getChunksMock,
     move: filesMoveMock,
+    replaceContent: replaceContentMock,
   },
 }));
 
@@ -102,6 +105,7 @@ describe("files store", () => {
     putChunkMock.mockClear();
     finalizeMock.mockClear();
     removeMock.mockClear();
+    replaceContentMock.mockClear();
     getChunksMock.mockClear();
     getChunksMock.mockResolvedValue({ indices: [], chunk_count: 1, status: "pending" });
     refreshAuthTokenMock.mockClear();
@@ -655,6 +659,104 @@ describe("files store", () => {
     // restore default getChunk mock for subsequent tests
     getChunkMock.mockImplementation(() =>
       Promise.resolve(new Response(new Uint8Array([1, 2, 3]))),
+    );
+  });
+
+  function seedTextFile() {
+    const files = useFilesStore();
+    files.files = [{
+      id: "fid", owner_id: "u", status: "ready", total_size: 2, chunk_count: 1,
+      encrypted_manifest: toBase64(new Uint8Array([1])),
+      encrypted_manifest_nonce: toBase64(new Uint8Array([2])),
+      encrypted_file_key: toBase64(new Uint8Array([3])),
+      encrypted_file_key_nonce: toBase64(new Uint8Array([4])),
+      encrypted_parent_id: null, encrypted_parent_id_nonce: null,
+      created_at: "c", updated_at: "2026-07-02T00:00:00+00:00",
+    }];
+    return files;
+  }
+
+  it("saveTextFile re-encrypts and calls replaceContent with the old stamp", async () => {
+    const auth = useAuthStore();
+    auth.masterKey = new Uint8Array(32) as any;
+    const files = seedTextFile();
+    await files.saveTextFile("fid", "hello");
+    expect(replaceContentMock).toHaveBeenCalledTimes(1);
+    const [id, body] = replaceContentMock.mock.calls[0]!;
+    expect(id).toBe("fid");
+    expect(body.total_size).toBe(5); // "hello" is 5 utf-8 bytes
+    expect(body.expected_updated_at).toBe("2026-07-02T00:00:00+00:00");
+    // chunk is the (mocked) encryptChunk output [5]
+    expect(body.chunk).toBe(toBase64(new Uint8Array([5])));
+    // fresh key material was wrapped: wrap mock returns ct [9] / iv [8]
+    expect(body.encrypted_file_key).toBe(toBase64(new Uint8Array([9])));
+    expect(body.encrypted_file_key_nonce).toBe(toBase64(new Uint8Array([8])));
+    // manifest sealed with seal mock ct [7] / iv [6]
+    expect(body.encrypted_manifest).toBe(toBase64(new Uint8Array([7])));
+    expect(body.encrypted_manifest_nonce).toBe(toBase64(new Uint8Array([6])));
+    // a fresh content_id was passed to encryptChunk (differs from the old
+    // manifest's "ab…ab")
+    const encryptChunk = vi.mocked(cryptoApi.encryptChunk);
+    const contentId = encryptChunk.mock.calls[0]![4] as string;
+    expect(contentId).toMatch(/^[0-9a-f]{32}$/);
+    expect(contentId).not.toBe("ab".repeat(16));
+  });
+
+  it("saveTextFile syncs the local row on success", async () => {
+    const auth = useAuthStore();
+    auth.masterKey = new Uint8Array(32) as any;
+    const files = seedTextFile();
+    await files.saveTextFile("fid", "hello");
+    const row = files.files[0]!;
+    expect(row.total_size).toBe(5);
+    expect(row.updated_at).toBe("2026-07-02T01:00:00+00:00");
+    expect(row.encrypted_file_key).toBe(toBase64(new Uint8Array([9])));
+    expect(row.encrypted_manifest).toBe(toBase64(new Uint8Array([7])));
+  });
+
+  it("saveTextFile rejects empty content without calling the API", async () => {
+    const auth = useAuthStore();
+    auth.masterKey = new Uint8Array(32) as any;
+    const files = seedTextFile();
+    await expect(files.saveTextFile("fid", "")).rejects.toThrow();
+    expect(replaceContentMock).not.toHaveBeenCalled();
+  });
+
+  it("saveTextFile rejects content over 2 MiB without calling the API", async () => {
+    const auth = useAuthStore();
+    auth.masterKey = new Uint8Array(32) as any;
+    const files = seedTextFile();
+    const big = "x".repeat(2 * 1024 * 1024 + 1);
+    await expect(files.saveTextFile("fid", big)).rejects.toThrow();
+    expect(replaceContentMock).not.toHaveBeenCalled();
+  });
+
+  it("saveTextFile surfaces a 409 conflict and keeps the local row", async () => {
+    const auth = useAuthStore();
+    auth.masterKey = new Uint8Array(32) as any;
+    const files = seedTextFile();
+    replaceContentMock.mockRejectedValueOnce(new ApiError("conflict", 409));
+    await expect(files.saveTextFile("fid", "hello")).rejects.toMatchObject({ status: 409 });
+    expect(files.error).toBeTruthy();
+    expect(files.files[0]!.updated_at).toBe("2026-07-02T00:00:00+00:00");
+  });
+
+  it("upload returns the created file id", async () => {
+    const auth = useAuthStore();
+    auth.masterKey = new Uint8Array(32) as any;
+    const files = useFilesStore();
+    const file = new File([new Uint8Array([7])], "u.txt", { type: "text/plain" });
+    await expect(files.upload(file)).resolves.toBe("fid");
+  });
+
+  it("createTextFile uploads a text/plain File and returns its id", async () => {
+    const auth = useAuthStore();
+    auth.masterKey = new Uint8Array(32) as any;
+    const files = useFilesStore();
+    const id = await files.createTextFile("notes.txt", "hi");
+    expect(id).toBe("fid");
+    expect(createMock).toHaveBeenCalledWith(
+      expect.objectContaining({ total_size: 2, chunk_count: 1 }),
     );
   });
 });

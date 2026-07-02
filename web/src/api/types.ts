@@ -183,6 +183,22 @@ export interface PatchFileMoveRequest {
   encrypted_file_key_nonce: string;
 }
 
+/** Body of PUT /api/files/:id/content — atomic in-place content replace. */
+export interface ReplaceContentRequest {
+  total_size: number;
+  encrypted_file_key: string; // base64
+  encrypted_file_key_nonce: string; // base64
+  encrypted_manifest: string; // base64
+  encrypted_manifest_nonce: string; // base64
+  chunk: string; // base64 ciphertext of the single chunk
+  expected_updated_at: string; // optimistic-concurrency stamp
+}
+
+export interface ReplaceContentResponse {
+  ok: true;
+  updated_at: string;
+}
+
 // ---- Devices (P4) -------------------------------------------------------
 
 export interface DeviceItem {

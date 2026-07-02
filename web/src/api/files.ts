@@ -1,5 +1,12 @@
 import { http, getAuthToken, ApiError, request } from "./client";
-import type { CreateFileRequest, CreateFileResponse, FileMeta, ChunkIndices } from "./types";
+import type {
+  CreateFileRequest,
+  CreateFileResponse,
+  FileMeta,
+  ChunkIndices,
+  ReplaceContentRequest,
+  ReplaceContentResponse,
+} from "./types";
 
 export const filesApi = {
   list: () => http.get<{ files: FileMeta[] }>("/api/files"),
@@ -73,6 +80,10 @@ export const filesApi = {
     }),
 
   finalize: (id: string) => http.post<{ ok: true }>(`/api/files/${id}/finalize`),
+
+  /** Atomically replace a ready single-chunk file's content (text editor). */
+  replaceContent: (id: string, body: ReplaceContentRequest) =>
+    http.put<ReplaceContentResponse>(`/api/files/${id}/content`, body),
 
   move: (id: string, body: import("./types").PatchFileMoveRequest) =>
     http.patch<{ ok: true }>(`/api/files/${id}`, body),

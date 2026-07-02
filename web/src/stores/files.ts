@@ -7,7 +7,7 @@ import type { FileMeta } from "@/api/types";
 import { cryptoApi, ensureCryptoReady } from "@/workers/crypto";
 import { useAuthStore } from "./auth";
 import { useFoldersStore } from "./folders";
-import { FILE_CHUNK_SIZE, chunkCount, newContentId, serializeManifest, toBase64, fromBase64, type Manifest } from "@/crypto/file";
+import { FILE_CHUNK_SIZE, chunkCount, newContentId, serializeManifest, toBase64, fromBase64, toHex, type Manifest } from "@/crypto/file";
 import { kindOf, canPreview, PREVIEW_CAPS, type FileKind } from "@/crypto/preview";
 import type { WrappedKey } from "@/crypto/keys";
 
@@ -206,11 +206,12 @@ export const useFilesStore = defineStore("files", () => {
     return files.value.filter((f) => (fileParents.value[f.id] ?? null) === parentId);
   }
 
-  async function upload(file: File): Promise<void> {
+  async function upload(file: File): Promise<string> {
     uploading.value = true;
     uploadProgress.value = 0;
     error.value = null;
     let session: UploadSession | null = null;
+    let id = "";
     try {
       await ensureCryptoReady();
       const mk = masterKey();
@@ -230,7 +231,7 @@ export const useFilesStore = defineStore("files", () => {
       }
       const wrapped: WrappedKey = await cryptoApi.wrap(fileKey, wrapKey);
       const parentEnc = await cryptoApi.encryptParentId(mk, parentId);
-      const { id } = await filesApi.create({
+      ({ id } = await filesApi.create({
         total_size: total,
         chunk_count: n,
         encrypted_file_key: toBase64(wrapped.ciphertext),
@@ -241,7 +242,7 @@ export const useFilesStore = defineStore("files", () => {
               encrypted_parent_id_nonce: toBase64(parentEnc.iv),
             }
           : {}),
-      });
+      }));
       fileParents.value[id] = parentId;
 
       const contentId = newContentId();
@@ -307,11 +308,12 @@ export const useFilesStore = defineStore("files", () => {
         uploadProgress.value = session!.progress;
       });
 
-      if (session.abort.signal.aborted) return;
+      if (session.abort.signal.aborted) return id;
       session.phase = "finalizing";
       await filesApi.finalize(id);
       session.phase = "done";
       await refresh();
+      return id;
     } catch (e) {
       if (session) session.phase = "error";
       error.value = (e as Error).message;
@@ -495,6 +497,74 @@ export const useFilesStore = defineStore("files", () => {
     }
   }
 
+  /**
+   * Replace a text file's content in place. Treated as a fresh encryption:
+   * new file_key + iv_base + content_id (never reuse an IV), re-wrapped with
+   * the parent folder key (or master_key at root). The old `updated_at` is
+   * sent as the optimistic-concurrency stamp — a 409 means another device
+   * saved first.
+   */
+  async function saveTextFile(id: string, text: string): Promise<void> {
+    error.value = null;
+    try {
+      await ensureCryptoReady();
+      const meta = files.value.find((f) => f.id === id);
+      if (!meta) throw new Error("file not found");
+      const plaintext = new TextEncoder().encode(text);
+      if (plaintext.length === 0) throw new Error("content must not be empty");
+      if (plaintext.length > PREVIEW_CAPS.text) throw new Error("file too large to save");
+      const { manifest } = await unlockFile(meta);
+      const { fileKey, ivBase } = await cryptoApi.newFileKeyMaterial();
+      const contentId = newContentId();
+      const wrapped: WrappedKey = await cryptoApi.wrap(fileKey, wrapKeyForFile(id));
+      const sha = new Uint8Array(
+        await crypto.subtle.digest("SHA-256", plaintext as BufferSource),
+      );
+      const nextManifest: Manifest = {
+        ...manifest,
+        size: plaintext.length,
+        iv_base: toBase64(ivBase),
+        content_id: contentId,
+        plaintext_sha256: toHex(sha),
+      };
+      const em = await cryptoApi.seal(fileKey, serializeManifest(nextManifest));
+      const ciphertext = await cryptoApi.encryptChunk(fileKey, ivBase, 0, plaintext, contentId);
+      const res = await filesApi.replaceContent(id, {
+        total_size: plaintext.length,
+        encrypted_file_key: toBase64(wrapped.ciphertext),
+        encrypted_file_key_nonce: toBase64(wrapped.iv),
+        encrypted_manifest: toBase64(em.ciphertext),
+        encrypted_manifest_nonce: toBase64(em.iv),
+        chunk: toBase64(ciphertext),
+        expected_updated_at: meta.updated_at,
+      });
+      // Keep the local cache in sync so a follow-up save/preview uses the new
+      // key material and stamp without a refetch.
+      files.value = files.value.map((f) =>
+        f.id === id
+          ? {
+              ...f,
+              total_size: plaintext.length,
+              encrypted_file_key: toBase64(wrapped.ciphertext),
+              encrypted_file_key_nonce: toBase64(wrapped.iv),
+              encrypted_manifest: toBase64(em.ciphertext),
+              encrypted_manifest_nonce: toBase64(em.iv),
+              updated_at: res.updated_at,
+            }
+          : f,
+      );
+    } catch (e) {
+      error.value = (e as Error).message;
+      throw e;
+    }
+  }
+
+  /** Create a text file via the normal upload pipeline; returns the new id. */
+  async function createTextFile(name: string, text: string): Promise<string> {
+    const file = new File([new TextEncoder().encode(text)], name, { type: "text/plain" });
+    return upload(file);
+  }
+
   async function openVideo(meta: FileMeta, manifest: Manifest, fileKey: Uint8Array): Promise<void> {
     const ivBase = fromBase64(manifest.iv_base);
     const isMp4 = ["video/mp4", "video/quicktime", "video/x-m4v"].includes(manifest.mime);
@@ -624,6 +694,8 @@ export const useFilesStore = defineStore("files", () => {
     filesWithParent,
     moveFile,
     renameFile,
+    saveTextFile,
+    createTextFile,
     unlockFile,
     preview,
     openPreview,
