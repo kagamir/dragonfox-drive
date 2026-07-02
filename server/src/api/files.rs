@@ -401,42 +401,61 @@ pub async fn replace_content(
         return Err(ApiError::PayloadTooLarge);
     }
 
-    storage::stage_chunk(&state, &id, 0, &bytes).await?;
+    // Stage the ciphertext beside the live chunk under a unique name (never
+    // a fixed `chunk_0.staged`) so a concurrent replace_content call for the
+    // same file can't clobber this one's staged bytes before it promotes.
+    let staged = storage::stage_chunk(&state, &id, 0, &bytes).await?;
 
-    let now = chrono::Utc::now().to_rfc3339();
-    let path = storage::chunk_path(&state.settings.storage.data_dir, &id, 0);
-    let mut tx = state.db.begin().await?;
-    let res = sqlx::query(
-        "UPDATE files SET total_size = ?, chunk_count = 1, \
-         encrypted_file_key = ?, encrypted_file_key_nonce = ?, \
-         encrypted_manifest = ?, encrypted_manifest_nonce = ?, updated_at = ? \
-         WHERE id = ? AND owner_id = ? AND updated_at = ?")
-        .bind(req.total_size as i64)
-        .bind(&req.encrypted_file_key)
-        .bind(&req.encrypted_file_key_nonce)
-        .bind(&req.encrypted_manifest)
-        .bind(&req.encrypted_manifest_nonce)
-        .bind(&now)
-        .bind(&id).bind(&user.user_id).bind(&req.expected_updated_at)
-        .execute(&mut *tx).await?;
-    if res.rows_affected() == 0 {
-        // Lost a race with a concurrent replace between the SELECT and here.
-        return Err(ApiError::Conflict(
-            "file was modified since it was loaded".into()));
+    // Everything from here through commit is wrapped so that ANY failure —
+    // the in-tx optimistic-concurrency recheck below, or a `?`-propagated DB
+    // error — cleans up the now-orphaned staged file before returning. Only
+    // on success do we fall through to promote it over the live chunk.
+    let db_result: ApiResult<String> = async {
+        let now = chrono::Utc::now().to_rfc3339();
+        let path = storage::chunk_path(&state.settings.storage.data_dir, &id, 0);
+        let mut tx = state.db.begin().await?;
+        let res = sqlx::query(
+            "UPDATE files SET total_size = ?, chunk_count = 1, \
+             encrypted_file_key = ?, encrypted_file_key_nonce = ?, \
+             encrypted_manifest = ?, encrypted_manifest_nonce = ?, updated_at = ? \
+             WHERE id = ? AND owner_id = ? AND updated_at = ?")
+            .bind(req.total_size as i64)
+            .bind(&req.encrypted_file_key)
+            .bind(&req.encrypted_file_key_nonce)
+            .bind(&req.encrypted_manifest)
+            .bind(&req.encrypted_manifest_nonce)
+            .bind(&now)
+            .bind(&id).bind(&user.user_id).bind(&req.expected_updated_at)
+            .execute(&mut *tx).await?;
+        if res.rows_affected() == 0 {
+            // Lost a race with a concurrent replace between the SELECT and here.
+            return Err(ApiError::Conflict(
+                "file was modified since it was loaded".into()));
+        }
+        sqlx::query(
+            "INSERT INTO file_chunks (file_id, idx, cipher_size, storage_path) \
+             VALUES (?, 0, ?, ?) \
+             ON CONFLICT(file_id, idx) DO UPDATE SET \
+                cipher_size = excluded.cipher_size, \
+                storage_path = excluded.storage_path")
+            .bind(&id)
+            .bind(bytes.len() as i64)
+            .bind(path.to_string_lossy().to_string())
+            .execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(now)
     }
-    sqlx::query(
-        "INSERT INTO file_chunks (file_id, idx, cipher_size, storage_path) \
-         VALUES (?, 0, ?, ?) \
-         ON CONFLICT(file_id, idx) DO UPDATE SET \
-            cipher_size = excluded.cipher_size, \
-            storage_path = excluded.storage_path")
-        .bind(&id)
-        .bind(bytes.len() as i64)
-        .bind(path.to_string_lossy().to_string())
-        .execute(&mut *tx).await?;
-    tx.commit().await?;
+    .await;
 
-    storage::promote_staged_chunk(&state, &id, 0).await?;
+    let now = match db_result {
+        Ok(now) => now,
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&staged).await;
+            return Err(e);
+        }
+    };
+
+    storage::promote_staged_chunk(&state, &id, 0, &staged).await?;
     Ok(Json(json!({ "ok": true, "updated_at": now })))
 }
 
@@ -902,6 +921,31 @@ mod tests {
             "SELECT cipher_size FROM file_chunks WHERE file_id = 'f1' AND idx = 0")
             .fetch_one(&state.db).await.unwrap();
         assert_eq!(cipher_size, 5);
+    }
+
+    #[tokio::test]
+    async fn replace_content_leaves_no_staged_files_behind() {
+        let (state, _guard) = files_state().await;
+        seed_user(&state, "u1").await;
+        let stamp = seed_replaceable_file(&state, "f1", "u1").await;
+        replace_content(
+            State(state.clone()), auth("u1"), Path("f1".into()),
+            Json(replace_req(&stamp)),
+        ).await.unwrap();
+
+        let chunk_path = storage::chunk_path(&state.settings.storage.data_dir, "f1", 0);
+        let dir = chunk_path.parent().unwrap();
+        let mut staged_siblings = 0;
+        let mut rd = tokio::fs::read_dir(dir).await.unwrap();
+        while let Some(entry) = rd.next_entry().await.unwrap() {
+            if entry.file_name().to_string_lossy().starts_with("chunk_0.staged-") {
+                staged_siblings += 1;
+            }
+        }
+        assert_eq!(
+            staged_siblings, 0,
+            "a successful replace must rename the staged file away, leaving no siblings"
+        );
     }
 
     #[tokio::test]

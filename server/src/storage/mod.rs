@@ -93,23 +93,27 @@ pub async fn delete_file_chunks(state: &AppState, file_id: &str) -> Result<()> {
     }
 }
 
-/// Stage a replacement for chunk `chunk_index`: write the bytes to a sibling
-/// `.staged` file (fsync'd) WITHOUT touching the live chunk. The caller
-/// promotes it with `promote_staged_chunk` after its DB transaction commits,
-/// so a failure at any earlier point leaves the old content intact.
+/// Stage a replacement for chunk `chunk_index`: write the bytes to a
+/// sibling `.staged-<uuid>` file (fsync'd) WITHOUT touching the live chunk.
+/// The uuid suffix is load-bearing: two concurrent replaces for the same
+/// chunk must not share a staging file, or whichever commits/promotes last
+/// silently clobbers the other's already-promoted content with stale or
+/// undecryptable bytes. The caller promotes the returned path with
+/// `promote_staged_chunk` after its DB transaction commits, so a failure at
+/// any earlier point leaves the old content intact.
 pub async fn stage_chunk(
     state: &AppState,
     file_id: &str,
     chunk_index: u32,
     bytes: &[u8],
-) -> Result<()> {
+) -> Result<PathBuf> {
     let path = chunk_path(&state.settings.storage.data_dir, file_id, chunk_index);
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent)
             .await
             .with_context(|| format!("creating chunk directory {}", parent.display()))?;
     }
-    let staged = path.with_extension("staged");
+    let staged = path.with_extension(format!("staged-{}", uuid::Uuid::new_v4()));
     let mut file = tokio::fs::File::create(&staged)
         .await
         .with_context(|| format!("creating staged file {}", staged.display()))?;
@@ -117,18 +121,19 @@ pub async fn stage_chunk(
         .await
         .with_context(|| format!("writing staged chunk {}", chunk_index))?;
     file.sync_all().await?;
-    Ok(())
+    Ok(staged)
 }
 
-/// Atomically promote a previously staged chunk over the live one.
+/// Atomically promote a previously staged chunk (returned by `stage_chunk`)
+/// over the live one.
 pub async fn promote_staged_chunk(
     state: &AppState,
     file_id: &str,
     chunk_index: u32,
+    staged: &Path,
 ) -> Result<()> {
     let path = chunk_path(&state.settings.storage.data_dir, file_id, chunk_index);
-    let staged = path.with_extension("staged");
-    tokio::fs::rename(&staged, &path)
+    tokio::fs::rename(staged, &path)
         .await
         .with_context(|| format!("promoting staged chunk {}", staged.display()))?;
     Ok(())
@@ -266,12 +271,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let state = test_state(dir.path()).await;
         write_chunk(&state, "file-1", 0, b"old").await.unwrap();
-        stage_chunk(&state, "file-1", 0, b"new").await.unwrap();
+        let staged = stage_chunk(&state, "file-1", 0, b"new").await.unwrap();
         assert_eq!(
             read_chunk(&state, "file-1", 0).await.unwrap(),
             Some(b"old".to_vec()),
             "staging must not overwrite the live chunk"
         );
+        assert!(staged.exists());
     }
 
     #[tokio::test]
@@ -279,14 +285,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let state = test_state(dir.path()).await;
         write_chunk(&state, "file-1", 0, b"old").await.unwrap();
-        stage_chunk(&state, "file-1", 0, b"new").await.unwrap();
-        promote_staged_chunk(&state, "file-1", 0).await.unwrap();
+        let staged = stage_chunk(&state, "file-1", 0, b"new").await.unwrap();
+        promote_staged_chunk(&state, "file-1", 0, &staged).await.unwrap();
         assert_eq!(
             read_chunk(&state, "file-1", 0).await.unwrap(),
             Some(b"new".to_vec())
         );
-        let staged = chunk_path(&state.settings.storage.data_dir, "file-1", 0)
-            .with_extension("staged");
         assert!(!staged.exists(), "staged file must be renamed away");
     }
 
@@ -296,8 +300,56 @@ mod tests {
         // created; stage_chunk must create parents like write_chunk does.
         let dir = tempfile::tempdir().unwrap();
         let state = test_state(dir.path()).await;
-        stage_chunk(&state, "file-9", 0, b"x").await.unwrap();
-        promote_staged_chunk(&state, "file-9", 0).await.unwrap();
+        let staged = stage_chunk(&state, "file-9", 0, b"x").await.unwrap();
+        promote_staged_chunk(&state, "file-9", 0, &staged).await.unwrap();
         assert_eq!(read_chunk(&state, "file-9", 0).await.unwrap(), Some(b"x".to_vec()));
+    }
+
+    #[tokio::test]
+    async fn concurrent_stagers_get_distinct_files_and_first_promote_wins() {
+        // Reproduces the scenario Fix 2 closes: two concurrent replace_content
+        // calls for the same chunk must not share one staging file. With a
+        // shared fixed name, A stages → A commits+promotes → B stages
+        // (overwriting A's staged file) → A's already-committed DB row would
+        // point at bytes that no longer match what's on disk. With per-call
+        // uuid-suffixed names, both stagings coexist independently.
+        let dir = tempfile::tempdir().unwrap();
+        let state = test_state(dir.path()).await;
+        write_chunk(&state, "file-1", 0, b"old").await.unwrap();
+        let staged_a = stage_chunk(&state, "file-1", 0, b"from-a").await.unwrap();
+        let staged_b = stage_chunk(&state, "file-1", 0, b"from-b").await.unwrap();
+        assert_ne!(staged_a, staged_b, "concurrent stagers must not share a file name");
+
+        // A commits and promotes first.
+        promote_staged_chunk(&state, "file-1", 0, &staged_a).await.unwrap();
+        assert_eq!(
+            read_chunk(&state, "file-1", 0).await.unwrap(),
+            Some(b"from-a".to_vec()),
+            "A's promote must install A's bytes"
+        );
+        // B's staged file must still exist, untouched by A's promote.
+        assert_eq!(tokio::fs::read(&staged_b).await.unwrap(), b"from-b");
+        tokio::fs::remove_file(&staged_b).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn staged_file_cleanup_removes_it_without_touching_the_live_chunk() {
+        // We can't deterministically force replace_content's in-tx 409 race
+        // (rows_affected == 0) from outside without injection hooks — it
+        // requires another writer to land between the handler's initial
+        // SELECT and its transactional UPDATE, and the handler re-SELECTs
+        // internally so there's no seam to interleave through in a plain
+        // unit test. Instead this exercises the cleanup primitive the
+        // handler relies on directly: a staged file removed via best-effort
+        // `remove_file` (as replace_content does on every post-staging error
+        // path) leaves no trace and the live chunk is untouched.
+        let dir = tempfile::tempdir().unwrap();
+        let state = test_state(dir.path()).await;
+        write_chunk(&state, "file-1", 0, b"old").await.unwrap();
+        let staged = stage_chunk(&state, "file-1", 0, b"new").await.unwrap();
+        assert!(staged.exists());
+        tokio::fs::remove_file(&staged).await.unwrap();
+        assert!(!staged.exists());
+        assert_eq!(read_chunk(&state, "file-1", 0).await.unwrap(), Some(b"old".to_vec()));
     }
 }
