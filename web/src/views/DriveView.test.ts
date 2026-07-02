@@ -3,6 +3,7 @@ import { mount, flushPromises } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import DriveView from "./DriveView.vue";
 import { useConfirm } from "@/composables/useConfirm";
+import { usePrompt } from "@/composables/usePrompt";
 import { i18n } from "@/locales";
 import type { FileMeta } from "@/api/types";
 
@@ -14,6 +15,8 @@ const STUB = vi.hoisted(() => ({
   deleteFolder: vi.fn().mockResolvedValue(undefined),
   loadTree: vi.fn().mockResolvedValue(undefined),
   refresh: vi.fn().mockResolvedValue(undefined),
+  saveTextFile: vi.fn().mockResolvedValue(undefined),
+  createTextFile: vi.fn().mockResolvedValue("new-id"),
 }));
 
 vi.mock("@/workers/crypto", () => ({ cryptoApi: {}, ensureCryptoReady: vi.fn().mockResolvedValue(undefined) }));
@@ -31,6 +34,7 @@ vi.mock("@/stores/files", () => ({
     download: vi.fn().mockResolvedValue(undefined),
     remove: STUB.remove, filesWithParent: () => [], moveFile: vi.fn().mockResolvedValue(undefined),
     renameFile: vi.fn().mockResolvedValue(undefined),
+    saveTextFile: STUB.saveTextFile, createTextFile: STUB.createTextFile,
     unlockFile: vi.fn(), openPreview: vi.fn().mockResolvedValue(undefined), closePreview: vi.fn(),
   }),
 }));
@@ -50,7 +54,13 @@ vi.mock("@/stores/auth", () => ({
 }));
 
 vi.mock("@/components/MovePickerModal.vue", () => ({ default: { template: "<div />", props: ["open", "excludeIds"] } }));
-vi.mock("@/components/FilePreviewModal.vue", () => ({ default: { template: "<div />" } }));
+vi.mock("@/components/FilePreviewModal.vue", () => ({
+  default: {
+    name: "FilePreviewModal", // findComponent({ name }) 依赖它
+    template: "<div data-testid='preview-modal-stub' />",
+    props: ["kind", "url", "name", "player", "onSave", "startEditing"],
+  },
+}));
 vi.mock("@/components/ShareDialog.vue", () => ({ default: { template: "<div />" } }));
 
 function makeFile(id: string): FileMeta {
@@ -69,6 +79,8 @@ describe("DriveView", () => {
     STUB.paginatedView = [];
     STUB.remove.mockClear();
     STUB.deleteFolder.mockClear();
+    STUB.saveTextFile.mockClear();
+    STUB.createTextFile.mockClear();
   });
 
   it("renders header, breadcrumb and new-folder button at root", async () => {
@@ -132,5 +144,37 @@ describe("DriveView", () => {
       // selection preserved on cancel → bulk bar still visible
       expect(w.find('[data-testid="bulk-action-bar"]').exists()).toBe(true);
     });
+  });
+
+  it("new-text-file button prompts for a name and opens the editor modal", async () => {
+    setActivePinia(createPinia());
+    const w = mount(DriveView, { global: { stubs, plugins: [i18n] } });
+    await flushPromises();
+    await w.find('[data-testid="new-text-file-btn"]').trigger("click");
+    await flushPromises();
+    // usePrompt renders through global state; resolve it by driving the
+    // composable directly (same pattern as the rename tests).
+    const prompt = usePrompt();
+    expect(prompt.state.value.open).toBe(true);
+    prompt._submit("notes.txt");
+    await flushPromises();
+    const modal = w.findComponent({ name: "FilePreviewModal" });
+    expect(modal.exists()).toBe(true);
+    expect(modal.props("startEditing")).toBe(true);
+    expect(modal.props("name")).toBe("notes.txt");
+  });
+
+  it("the new-file editor's onSave creates the file", async () => {
+    setActivePinia(createPinia());
+    const w = mount(DriveView, { global: { stubs, plugins: [i18n] } });
+    await flushPromises();
+    await w.find('[data-testid="new-text-file-btn"]').trigger("click");
+    const prompt = usePrompt();
+    prompt._submit("notes.txt");
+    await flushPromises();
+    const modal = w.findComponent({ name: "FilePreviewModal" });
+    const onSave = modal.props("onSave") as (t: string) => Promise<void>;
+    await onSave("hello");
+    expect(STUB.createTextFile).toHaveBeenCalledWith("notes.txt", "hello");
   });
 });

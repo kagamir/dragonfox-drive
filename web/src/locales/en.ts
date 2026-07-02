@@ -34,6 +34,7 @@ export default {
     createFolderTitle: "New folder", renameTitle: "Rename", create: "Create",
     edit: "Edit",
     discardEdits: "Discard unsaved changes?",
+    newTextFile: "New text file",
   },
   share: {
     share: "Share", shares: "Shares", shareTitle: "Share \"{name}\"",
@@ -71,6 +72,9 @@ export default {
     deleteFailed: "Delete failed, please retry",
     deletedSome: "Deleted {ok}, {fail} failed", movedSome: "Moved {ok}, {fail} failed",
     copyFailed: "Copy failed",
+    saved: "Saved",
+    saveFailed: "Save failed, please retry",
+    saveConflict: "This file was changed on another device — reopen it and try again.",
   },
   dialog: { confirmTitle: "Please confirm", confirm: "Confirm", cancel: "Cancel" },
   status: { ready: "Ready", uploading: "Uploading", pending: "Pending", folder: "Folder" },

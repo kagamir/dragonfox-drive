@@ -8,6 +8,7 @@ import { useConfirm } from "@/composables/useConfirm";
 import { usePrompt } from "@/composables/usePrompt";
 import { useToast } from "@/composables/useToast";
 import type { FileMeta } from "@/api/types";
+import { ApiError } from "@/api/client";
 import AppHeader from "@/components/AppHeader.vue";
 import UploadDropzone from "@/components/UploadDropzone.vue";
 import UploadQueueDrawer from "@/components/UploadQueueDrawer.vue";
@@ -22,7 +23,7 @@ import DfContextMenu from "@/components/ui/DfContextMenu.vue";
 import FilePreviewModal from "@/components/FilePreviewModal.vue";
 import MovePickerModal from "@/components/MovePickerModal.vue";
 import ShareDialog from "@/components/ShareDialog.vue";
-import { List, LayoutGrid, FolderPlus, Search } from "lucide-vue-next";
+import { List, LayoutGrid, FolderPlus, FilePlus, Search } from "lucide-vue-next";
 
 const { t } = useI18n();
 const auth = useAuthStore();
@@ -36,6 +37,7 @@ const fileInput = ref<HTMLInputElement | null>(null);
 const moveTarget = ref<{ kind: "folder" | "file"; id: string } | null>(null);
 const bulkMoveSelection = ref<string[]>([]);
 const shareTarget = ref<FileMeta | null>(null);
+const newTextFileName = ref<string | null>(null);
 const view = ref<"list" | "grid">("list");
 const search = ref("");
 const selection = ref<string[]>([]);
@@ -63,6 +65,44 @@ async function onFileChosen(e: Event) {
 function openFile(f: FileMeta) { void files.openPreview(f).catch(() => {}); }
 function download(f: FileMeta) { void files.download(f).catch(() => {}); }
 function share(f: FileMeta) { shareTarget.value = f; }
+async function newTextFile() {
+  const name = await prompt.prompt({
+    message: t("drive.fileName"),
+    title: t("drive.newTextFile"),
+    confirmText: t("drive.create"),
+  });
+  if (name) newTextFileName.value = name;
+}
+async function saveExistingText(text: string): Promise<void> {
+  const meta = files.preview?.meta;
+  if (!meta) return;
+  try {
+    await files.saveTextFile(meta.id, text);
+    toast.success(t("toast.saved"));
+  } catch (e) {
+    toast.error(
+      e instanceof ApiError && e.status === 409
+        ? t("toast.saveConflict")
+        : t("toast.saveFailed"),
+    );
+    throw e; // keep the editor open with the draft
+  }
+}
+async function saveNewText(text: string): Promise<void> {
+  const name = newTextFileName.value;
+  if (!name) return;
+  try {
+    const id = await files.createTextFile(name, text);
+    newTextFileName.value = null;
+    toast.success(t("toast.saved"));
+    // Reopen the created file in view mode so the flow continues seamlessly.
+    const meta = files.files.find((f) => f.id === id);
+    if (meta) void files.openPreview(meta).catch(() => {});
+  } catch (e) {
+    toast.error(t("toast.saveFailed"));
+    throw e;
+  }
+}
 async function removeFile(f: FileMeta) {
   if (await confirm.confirm({ message: t("drive.deleteFile", { name: files.displayNames[f.id] ?? f.id }), danger: true, confirmText: t("common.delete") })) {
     await files.remove(f.id); await folders.loadTree(); toast.success(t("toast.deleted"));
@@ -202,6 +242,9 @@ const queueUploads = computed(() =>
           <DfButton variant="ghost" size="sm" data-testid="new-folder-btn" @click="newFolder">
             <template #icon><FolderPlus class="h-4 w-4" /></template>{{ t("drive.newFolder") }}
           </DfButton>
+          <DfButton variant="ghost" size="sm" data-testid="new-text-file-btn" @click="newTextFile">
+            <template #icon><FilePlus class="h-4 w-4" /></template>{{ t("drive.newTextFile") }}
+          </DfButton>
           <DfSegmented v-model="view" :options="[{ value: 'list', icon: List }, { value: 'grid', icon: LayoutGrid }]" />
         </div>
       </div>
@@ -260,8 +303,18 @@ const queueUploads = computed(() =>
       :url="files.preview.url"
       :name="files.preview.name"
       :player="files.preview.player"
+      :on-save="files.preview.kind === 'text' ? saveExistingText : null"
       @close="files.closePreview()"
       @error="(m: string) => (files.error = m)"
+    />
+    <FilePreviewModal
+      v-if="newTextFileName !== null"
+      kind="text"
+      url=""
+      :name="newTextFileName"
+      :start-editing="true"
+      :on-save="saveNewText"
+      @close="newTextFileName = null"
     />
     <MovePickerModal
       :open="moveTarget !== null || bulkMoving"

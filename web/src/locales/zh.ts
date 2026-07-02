@@ -34,6 +34,7 @@ export default {
     createFolderTitle: "新建文件夹", renameTitle: "重命名", create: "创建",
     edit: "编辑",
     discardEdits: "放弃未保存的修改？",
+    newTextFile: "新建文本文件",
   },
   share: {
     share: "分享", shares: "分享", shareTitle: "分享“{name}”",
@@ -71,6 +72,9 @@ export default {
     deleteFailed: "删除失败，请重试",
     deletedSome: "已删除 {ok} 项，{fail} 项失败", movedSome: "已移动 {ok} 项，{fail} 项失败",
     copyFailed: "复制失败",
+    saved: "已保存",
+    saveFailed: "保存失败，请重试",
+    saveConflict: "文件已在其他设备被修改，请重新打开后再试。",
   },
   dialog: { confirmTitle: "请确认", confirm: "确认", cancel: "取消" },
   status: { ready: "就绪", uploading: "上传中", pending: "等待", folder: "文件夹" },
