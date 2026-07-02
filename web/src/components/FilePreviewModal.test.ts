@@ -1,6 +1,7 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 import { i18n } from "@/locales";
+import { useConfirm } from "@/composables/useConfirm";
 import FilePreviewModal from "./FilePreviewModal.vue";
 import Mp4Player from "./Mp4Player.vue";
 
@@ -102,6 +103,13 @@ describe("FilePreviewModal text editing", () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(body)));
   }
 
+  // useConfirm's state is module-level global; a dialog left open by a failed
+  // assertion (or one this test intentionally opened) must not bleed into the
+  // next test, so make sure it's always resolved & closed afterward.
+  afterEach(() => {
+    if (useConfirm().state.value.open) useConfirm()._resolve(false);
+  });
+
   it("shows an edit button for text kind only when onSave is provided", async () => {
     stubFetch("hello");
     const w = mountAttached({ kind: "text", url: "blob:t", name: "a.txt", onSave: async () => {} });
@@ -192,6 +200,125 @@ describe("FilePreviewModal text editing", () => {
     await flushPromises();
     expect(document.body.querySelector('[data-testid="text-editor"]')).toBeTruthy();
     expect(fetchMock).not.toHaveBeenCalled();
+    w.unmount();
+    vi.unstubAllGlobals();
+  });
+
+  it("cancel with clean draft exits edit mode without confirm", async () => {
+    stubFetch("hello");
+    const w = mountAttached({ kind: "text", url: "blob:t", name: "a.txt", onSave: async () => {} });
+    await vi.waitFor(() => {
+      expect(document.body.querySelector("pre")?.textContent).toBe("hello");
+    });
+    (document.body.querySelector('[data-testid="edit-btn"]') as HTMLButtonElement).click();
+    await flushPromises();
+    (document.body.querySelector('[data-testid="edit-cancel-btn"]') as HTMLButtonElement).click();
+    await flushPromises();
+    expect(document.body.querySelector('[data-testid="text-editor"]')).toBeFalsy();
+    expect(useConfirm().state.value.open).toBe(false);
+    w.unmount();
+    vi.unstubAllGlobals();
+  });
+
+  it("cancel with dirty draft asks confirm; declining keeps the editor", async () => {
+    stubFetch("hello");
+    const w = mountAttached({ kind: "text", url: "blob:t", name: "a.txt", onSave: async () => {} });
+    await vi.waitFor(() => {
+      expect(document.body.querySelector("pre")?.textContent).toBe("hello");
+    });
+    (document.body.querySelector('[data-testid="edit-btn"]') as HTMLButtonElement).click();
+    await flushPromises();
+    const ta = document.body.querySelector('[data-testid="text-editor"]') as HTMLTextAreaElement;
+    ta.value = "changed";
+    ta.dispatchEvent(new Event("input"));
+    await flushPromises();
+    (document.body.querySelector('[data-testid="edit-cancel-btn"]') as HTMLButtonElement).click();
+    await flushPromises();
+    expect(useConfirm().state.value.open).toBe(true);
+
+    useConfirm()._resolve(false);
+    await flushPromises();
+    const ta2 = document.body.querySelector('[data-testid="text-editor"]') as HTMLTextAreaElement;
+    expect(ta2).toBeTruthy();
+    expect(ta2.value).toBe("changed");
+    w.unmount();
+    vi.unstubAllGlobals();
+  });
+
+  it("cancel with dirty draft + confirm accept discards and exits", async () => {
+    stubFetch("hello");
+    const w = mountAttached({ kind: "text", url: "blob:t", name: "a.txt", onSave: async () => {} });
+    await vi.waitFor(() => {
+      expect(document.body.querySelector("pre")?.textContent).toBe("hello");
+    });
+    (document.body.querySelector('[data-testid="edit-btn"]') as HTMLButtonElement).click();
+    await flushPromises();
+    const ta = document.body.querySelector('[data-testid="text-editor"]') as HTMLTextAreaElement;
+    ta.value = "changed";
+    ta.dispatchEvent(new Event("input"));
+    await flushPromises();
+    (document.body.querySelector('[data-testid="edit-cancel-btn"]') as HTMLButtonElement).click();
+    await flushPromises();
+    expect(useConfirm().state.value.open).toBe(true);
+
+    useConfirm()._resolve(true);
+    await flushPromises();
+    expect(document.body.querySelector('[data-testid="text-editor"]')).toBeFalsy();
+    expect(document.body.querySelector("pre")?.textContent).toBe("hello");
+    w.unmount();
+    vi.unstubAllGlobals();
+  });
+
+  it("close with dirty draft asks confirm and only emits close when accepted", async () => {
+    stubFetch("hello");
+    const w = mountAttached({ kind: "text", url: "blob:t", name: "a.txt", onSave: async () => {} });
+    await vi.waitFor(() => {
+      expect(document.body.querySelector("pre")?.textContent).toBe("hello");
+    });
+    (document.body.querySelector('[data-testid="edit-btn"]') as HTMLButtonElement).click();
+    await flushPromises();
+    const ta = document.body.querySelector('[data-testid="text-editor"]') as HTMLTextAreaElement;
+    ta.value = "changed";
+    ta.dispatchEvent(new Event("input"));
+    await flushPromises();
+
+    (document.body.querySelector('button[aria-label="Close"]') as HTMLButtonElement).click();
+    await flushPromises();
+    expect(useConfirm().state.value.open).toBe(true);
+    expect(w.emitted("close")).toBeFalsy();
+
+    useConfirm()._resolve(false);
+    await flushPromises();
+    expect(useConfirm().state.value.open).toBe(false);
+    expect(w.emitted("close")).toBeFalsy();
+
+    (document.body.querySelector('button[aria-label="Close"]') as HTMLButtonElement).click();
+    await flushPromises();
+    useConfirm()._resolve(true);
+    await flushPromises();
+    expect(w.emitted("close")).toBeTruthy();
+    w.unmount();
+    vi.unstubAllGlobals();
+  });
+
+  it("after a rejected onSave the save button is re-enabled", async () => {
+    stubFetch("hello");
+    const onSave = vi.fn().mockRejectedValue(new Error("boom"));
+    const w = mountAttached({ kind: "text", url: "blob:t", name: "a.txt", onSave });
+    await vi.waitFor(() => {
+      expect(document.body.querySelector("pre")?.textContent).toBe("hello");
+    });
+    (document.body.querySelector('[data-testid="edit-btn"]') as HTMLButtonElement).click();
+    await flushPromises();
+    const ta = document.body.querySelector('[data-testid="text-editor"]') as HTMLTextAreaElement;
+    ta.value = "changed";
+    ta.dispatchEvent(new Event("input"));
+    await flushPromises();
+    (document.body.querySelector('[data-testid="edit-save-btn"]') as HTMLButtonElement).click();
+    await flushPromises();
+    const saveBtn = document.body.querySelector('[data-testid="edit-save-btn"]') as HTMLButtonElement;
+    expect(saveBtn.disabled).toBe(false);
+    expect((document.body.querySelector('[data-testid="text-editor"]') as HTMLTextAreaElement).value).toBe("changed");
     w.unmount();
     vi.unstubAllGlobals();
   });
