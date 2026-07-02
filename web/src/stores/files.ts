@@ -560,6 +560,14 @@ export const useFilesStore = defineStore("files", () => {
           : f,
       );
     } catch (e) {
+      if (e instanceof ApiError && e.status === 409) {
+        // The local row's key material may now be stale relative to the
+        // server (another device saved first): refresh so a reopen-and-retry
+        // decrypts the new chunk with the right key instead of failing.
+        // Fired before setting error.value below, since refresh() itself
+        // resets error.value synchronously at its start.
+        void refresh();
+      }
       error.value = (e as Error).message;
       throw e;
     }

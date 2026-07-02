@@ -95,6 +95,7 @@ vi.mock("@/api/files", () => ({
 import { useFilesStore } from "./files";
 import { useAuthStore } from "./auth";
 import { cryptoApi } from "@/workers/crypto";
+import { filesApi } from "@/api/files";
 import { ApiError } from "@/api/client";
 
 describe("files store", () => {
@@ -737,14 +738,29 @@ describe("files store", () => {
     expect(replaceContentMock).not.toHaveBeenCalled();
   });
 
-  it("saveTextFile surfaces a 409 conflict and keeps the local row", async () => {
+  it("saveTextFile surfaces a 409 conflict", async () => {
     const auth = useAuthStore();
     auth.masterKey = new Uint8Array(32) as any;
     const files = seedTextFile();
     replaceContentMock.mockRejectedValueOnce(new ApiError("conflict", 409));
     await expect(files.saveTextFile("fid", "hello")).rejects.toMatchObject({ status: 409 });
     expect(files.error).toBeTruthy();
-    expect(files.files[0]!.updated_at).toBe("2026-07-02T00:00:00+00:00");
+    // Note: the local row is no longer asserted to stay byte-for-byte the
+    // same here — a 409 now fires a best-effort refresh() (see the next
+    // test), which legitimately replaces the cache with the server's view.
+  });
+
+  it("saveTextFile refreshes local state after a 409 so reopen-and-retry works", async () => {
+    const auth = useAuthStore();
+    auth.masterKey = new Uint8Array(32) as any;
+    const files = seedTextFile();
+    replaceContentMock.mockRejectedValueOnce(new ApiError("conflict", 409));
+    const listMock = vi.mocked(filesApi.list);
+    listMock.mockClear();
+    await expect(files.saveTextFile("fid", "hello")).rejects.toMatchObject({ status: 409 });
+    // best-effort refresh() was fired so the local key material / manifest
+    // catch up with the server before the user retries.
+    expect(listMock).toHaveBeenCalled();
   });
 
   it("upload returns the created file id", async () => {
