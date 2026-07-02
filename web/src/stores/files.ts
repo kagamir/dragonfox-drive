@@ -575,7 +575,10 @@ export const useFilesStore = defineStore("files", () => {
 
   /** Create a text file via the normal upload pipeline; returns the new id. */
   async function createTextFile(name: string, text: string): Promise<string> {
-    const file = new File([new TextEncoder().encode(text)], name, { type: "text/plain" });
+    const bytes = new TextEncoder().encode(text);
+    if (bytes.length === 0) throw new Error("content must not be empty");
+    if (bytes.length > PREVIEW_CAPS.text) throw new Error("file too large to save");
+    const file = new File([bytes], name, { type: "text/plain" });
     return upload(file);
   }
 

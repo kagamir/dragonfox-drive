@@ -781,4 +781,23 @@ describe("files store", () => {
       expect.objectContaining({ total_size: 2, chunk_count: 1 }),
     );
   });
+
+  it("createTextFile rejects empty content without calling create", async () => {
+    const auth = useAuthStore();
+    auth.masterKey = new Uint8Array(32) as any;
+    const files = useFilesStore();
+    createMock.mockClear();
+    await expect(files.createTextFile("notes.txt", "")).rejects.toThrow();
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it("createTextFile rejects content over 2 MiB without calling create", async () => {
+    const auth = useAuthStore();
+    auth.masterKey = new Uint8Array(32) as any;
+    const files = useFilesStore();
+    createMock.mockClear();
+    const big = "x".repeat(2 * 1024 * 1024 + 1);
+    await expect(files.createTextFile("notes.txt", big)).rejects.toThrow();
+    expect(createMock).not.toHaveBeenCalled();
+  });
 });

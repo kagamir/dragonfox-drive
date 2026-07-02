@@ -442,6 +442,13 @@ pub async fn replace_content(
             .bind(bytes.len() as i64)
             .bind(path.to_string_lossy().to_string())
             .execute(&mut *tx).await?;
+        // Robustness: a replace always leaves exactly one chunk (idx 0).
+        // Normally there is nothing to delete here (replace_content only
+        // ever runs against single-chunk files), but this guards against
+        // any stray higher-index rows left by an earlier bug or manual edit.
+        sqlx::query("DELETE FROM file_chunks WHERE file_id = ? AND idx >= 1")
+            .bind(&id)
+            .execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(now)
     }
@@ -896,6 +903,16 @@ mod tests {
         let (state, _guard) = files_state().await;
         seed_user(&state, "u1").await;
         let stamp = seed_replaceable_file(&state, "f1", "u1").await;
+        // A stray idx-1 chunk row (e.g. left over from a bug, or a file that
+        // was replaced before it was ever multi-chunk in some odd history).
+        // chunk_count stays 1 so the pre-check still passes; replace_content
+        // must clean this up regardless.
+        sqlx::query(
+            "INSERT INTO file_chunks (file_id, idx, cipher_size, storage_path) \
+             VALUES ('f1', 1, 9, 'stray')",
+        )
+        .execute(&state.db).await.unwrap();
+
         let res = replace_content(
             State(state.clone()), auth("u1"), Path("f1".into()),
             Json(replace_req(&stamp)),
@@ -921,6 +938,10 @@ mod tests {
             "SELECT cipher_size FROM file_chunks WHERE file_id = 'f1' AND idx = 0")
             .fetch_one(&state.db).await.unwrap();
         assert_eq!(cipher_size, 5);
+        let stray: Option<(i32,)> = sqlx::query_as(
+            "SELECT idx FROM file_chunks WHERE file_id = 'f1' AND idx = 1")
+            .fetch_optional(&state.db).await.unwrap();
+        assert!(stray.is_none(), "the stray idx-1 row must be deleted by the replace");
     }
 
     #[tokio::test]

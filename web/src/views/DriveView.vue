@@ -75,7 +75,7 @@ async function newTextFile() {
 }
 async function saveExistingText(text: string): Promise<void> {
   const meta = files.preview?.meta;
-  if (!meta) return;
+  if (!meta) throw new Error("no file is open for preview");
   try {
     await files.saveTextFile(meta.id, text);
     toast.success(t("toast.saved"));
