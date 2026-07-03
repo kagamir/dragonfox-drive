@@ -89,6 +89,38 @@ Then run the binary - it serves both the API and the SPA on the same port.
 Configuration: edit `server/config.toml` or set `DRAGONFOX__*` environment
 variables (e.g. `DRAGONFOX__JWT__SECRET=...`).
 
+## Deploy with Docker
+
+A prebuilt image is published to the GitHub Container Registry:
+
+```bash
+docker pull ghcr.io/kagamir/dragonfox-drive:latest
+```
+
+Quick run (API + SPA on port 8080, data persisted to a volume):
+
+```bash
+docker run -d \
+  --name dragonfox-drive \
+  --restart unless-stopped \
+  -p 8080:8080 \
+  -v dragonfox-data:/app/data \
+  -e RUST_LOG=info,dragonfox_drive=debug \
+  -e DRAGONFOX__SECURITY__ALLOW_REGISTRATION=true \
+  ghcr.io/kagamir/dragonfox-drive:latest
+```
+
+Or with `docker-compose.yml` (already in this repo) after swapping the `image:`
+line to `ghcr.io/kagamir/dragonfox-drive:latest` and dropping the `build:`
+block:
+
+```bash
+docker compose up -d
+```
+
+Then open `http://<host>:8080`, register the first (operator) account, and flip
+`DRAGONFOX__SECURITY__ALLOW_REGISTRATION` to `false` to lock the instance down.
+
 ## Status
 
 | Phase | Scope | Status |
