@@ -54,15 +54,20 @@ jobs:
         shell: bash
         run: |
           HASH=$(jq -r .buildHash web/dist/sw-manifest.json)
+          SW_HASH=$(sha256sum web/dist/sw.js | cut -d' ' -f1)
           echo "Frontend build hash: \`$HASH\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Service Worker (sw.js) hash: \`$SW_HASH\`" >> "$GITHUB_STEP_SUMMARY"
           cp web/dist/sw-manifest.json sw-manifest.json
+          cp web/dist/sw.js sw.js
 
       - name: Upload frontend manifest
         if: matrix.target == 'x86_64-unknown-linux-musl'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: frontend-manifest
-          path: sw-manifest.json
+          path: |
+            sw-manifest.json
+            sw.js
           if-no-files-found: error
 
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
@@ -140,8 +145,13 @@ jobs:
       - name: Extract frontend build hash
         run: |
           HASH=$(jq -r .buildHash artifacts/sw-manifest.json)
-          echo "$HASH" > FRONTEND-BUILDHASH.txt
+          SW_HASH=$(sha256sum artifacts/sw.js | cut -d' ' -f1)
+          {
+            echo "build-hash: $HASH"
+            echo "sw.js-sha256: $SW_HASH"
+          } > FRONTEND-BUILDHASH.txt
           echo "Frontend build hash: \`$HASH\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "Service Worker (sw.js) hash: \`$SW_HASH\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Attach to GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
