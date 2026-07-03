@@ -61,6 +61,17 @@ pub async fn fallback(uri: Uri) -> Response {
         .into_response()
 }
 
+/// Files that must never be immutably cached: the SPA shell, the service
+/// worker script (so browsers see logic changes), and the version manifest
+/// (the frontend's update signal). Everything else is content-hashed and
+/// safe to cache forever.
+fn cache_control_for(path: &str) -> &'static str {
+    match path {
+        "index.html" | "sw.js" | "sw-manifest.json" => "no-store",
+        _ => "public, max-age=31536000, immutable",
+    }
+}
+
 #[cfg(not(debug_assertions))]
 fn serve_asset(path: &str, asset: EmbeddedFile) -> Response {
     let mime = mime_guess::from_path(path).first_or_octet_stream();
@@ -69,11 +80,29 @@ fn serve_asset(path: &str, asset: EmbeddedFile) -> Response {
     response
         .headers_mut()
         .insert(header::CONTENT_TYPE, HeaderValue::from_str(mime.essence_str()).unwrap());
-    if path != "index.html" {
-        response.headers_mut().insert(
-            header::CACHE_CONTROL,
-            HeaderValue::from_static("public, max-age=31536000, immutable"),
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static(cache_control_for(path)),
+    );
+    response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cache_control_for;
+
+    #[test]
+    fn dynamic_files_are_not_immutably_cached() {
+        assert_eq!(cache_control_for("sw.js"), "no-store");
+        assert_eq!(cache_control_for("sw-manifest.json"), "no-store");
+        assert_eq!(cache_control_for("index.html"), "no-store");
+    }
+
+    #[test]
+    fn hashed_assets_are_immutable() {
+        assert_eq!(
+            cache_control_for("assets/index-abc123.js"),
+            "public, max-age=31536000, immutable"
         );
     }
-    response
 }
