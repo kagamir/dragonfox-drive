@@ -3,6 +3,14 @@ import { fileURLToPath, URL } from "node:url";
 import { defineConfig, type Plugin } from "vite";
 import vue from "@vitejs/plugin-vue";
 import tailwindcss from "@tailwindcss/vite";
+import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { join, relative, sep } from "node:path";
+import { buildManifest } from "./build/sw-manifest";
+import type { HashEntry } from "./src/sw/hash";
+
+const pkgVersion = JSON.parse(
+  readFileSync(fileURLToPath(new URL("./package.json", import.meta.url)), "utf8"),
+).version as string;
 
 /**
  * libsodium.js ships a broken ESM import: `libsodium-wrappers-sumo` imports
@@ -30,12 +38,45 @@ function fixLibsodiumImport(): Plugin {
   };
 }
 
+/**
+ * After the bundle is written, scan dist/ and emit sw-manifest.json listing
+ * every cacheable asset plus a deterministic buildHash. Excludes source maps,
+ * the SW script itself, and the manifest.
+ */
+function swManifestPlugin(): Plugin {
+  const EXCLUDE = /(\.map$)|(^sw\.js$)|(^sw-manifest\.json$)/;
+  return {
+    name: "sw-manifest",
+    apply: "build",
+    async closeBundle() {
+      const dist = fileURLToPath(new URL("./dist", import.meta.url));
+      const entries: HashEntry[] = [];
+      const walk = (dir: string) => {
+        for (const dirent of readdirSync(dir, { withFileTypes: true })) {
+          const full = join(dir, dirent.name);
+          if (dirent.isDirectory()) {
+            walk(full);
+            continue;
+          }
+          const rel = relative(dist, full).split(sep).join("/");
+          if (EXCLUDE.test(rel)) continue;
+          entries.push({ path: "/" + rel, bytes: new Uint8Array(readFileSync(full)) });
+        }
+      };
+      walk(dist);
+      const manifest = await buildManifest(pkgVersion, entries);
+      writeFileSync(join(dist, "sw-manifest.json"), JSON.stringify(manifest));
+    },
+  };
+}
+
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [
     fixLibsodiumImport(),
     tailwindcss(),
     vue(),
+    swManifestPlugin(),
   ],
   resolve: {
     alias: {
@@ -71,7 +112,12 @@ export default defineConfig({
     sourcemap: true,
     chunkSizeWarningLimit: 2048,
     rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL("./index.html", import.meta.url)),
+        sw: fileURLToPath(new URL("./src/sw/sw.ts", import.meta.url)),
+      },
       output: {
+        entryFileNames: (chunk) => (chunk.name === "sw" ? "sw.js" : "assets/[name]-[hash].js"),
         manualChunks: {
           // Split heavy crypto WASM libs into their own chunk so the rest of
           // the app can load fast on first paint.
@@ -84,7 +130,7 @@ export default defineConfig({
     environment: "happy-dom",
     globals: true,
     setupFiles: ["./src/__tests__/setup.ts"],
-    include: ["src/**/*.test.ts"],
+    include: ["src/**/*.test.ts", "build/**/*.test.ts"],
     server: {
       deps: {
         // Process libsodium-wrappers-sumo through the Vite plugin pipeline so

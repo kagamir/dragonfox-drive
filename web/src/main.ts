@@ -6,6 +6,7 @@ import { router } from "./router";
 import { initCrypto } from "./crypto";
 import { i18n } from "./locales";
 import { useAuthStore } from "./stores/auth";
+import { useIntegrityStore } from "./stores/integrity";
 
 import "./styles/main.css";
 
@@ -25,6 +26,10 @@ async function bootstrap() {
   useAuthStore().ensureSessionRestored();
 
   app.mount("#app");
+
+  // Register the frontend-pinning service worker after mount so it never
+  // blocks first paint. Failures degrade silently to a normal direct load.
+  void useIntegrityStore().register();
 }
 
 bootstrap().catch((err) => {
