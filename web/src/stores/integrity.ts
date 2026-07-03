@@ -9,6 +9,7 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import type { SwManifest } from "@/sw/pinning";
+import { sha256Hex } from "@/sw/hash";
 
 const IGNORED_KEY = "df.integrity.ignored";
 const MANIFEST_URL = "/sw-manifest.json";
@@ -67,6 +68,7 @@ export const useIntegrityStore = defineStore("integrity", () => {
   const lastChecked = ref<number | null>(null);
   const applying = ref(false);
   const firstPin = ref(false); // true right after the very first pin in this browser
+  const swScriptHash = ref<string | null>(null); // SHA-256 of the served /sw.js, for out-of-band verification
 
   let reg: ServiceWorkerRegistration | null = null;
 
@@ -123,6 +125,19 @@ export const useIntegrityStore = defineStore("integrity", () => {
     }
   }
 
+  /** Fetch the currently-served /sw.js and hash its raw bytes so users can
+   *  compare it against the value CI publishes for each release, catching a
+   *  server that silently swaps the script for a malicious one. */
+  async function computeSwScriptHash(): Promise<void> {
+    try {
+      const res = await fetch("/sw.js", { cache: "no-store" });
+      if (!res.ok) return;
+      swScriptHash.value = await sha256Hex(new Uint8Array(await res.arrayBuffer()));
+    } catch {
+      /* offline: leave as-is */
+    }
+  }
+
   async function register(): Promise<void> {
     if (!("serviceWorker" in navigator)) return;
     try {
@@ -141,6 +156,7 @@ export const useIntegrityStore = defineStore("integrity", () => {
       if (!hadController) firstPin.value = true;
       await refreshPinned();
       await checkForUpdate();
+      await computeSwScriptHash();
     } catch {
       enabled.value = false;
     }
@@ -183,9 +199,11 @@ export const useIntegrityStore = defineStore("integrity", () => {
     lastChecked,
     applying,
     firstPin,
+    swScriptHash,
     register,
     checkForUpdate,
     applyUpdate,
     ignoreVersion,
+    computeSwScriptHash,
   };
 });

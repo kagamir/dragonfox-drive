@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { setActivePinia, createPinia } from "pinia";
 import { useIntegrityStore, SW_REPLY_TIMEOUT_MS } from "./integrity";
 import type { SwManifest } from "@/sw/pinning";
+import { sha256Hex } from "@/sw/hash";
 
 const mk = (hash: string): SwManifest => ({ version: "v", buildHash: hash, assets: [] });
 
@@ -63,5 +64,14 @@ describe("integrity store update detection", () => {
       vi.unstubAllGlobals();
       vi.useRealTimers();
     }
+  });
+
+  it("computes the served sw.js script hash", async () => {
+    const store = useIntegrityStore();
+    const bytes = new TextEncoder().encode("self.addEventListener('install', ()=>{})");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(bytes)));
+    await store.computeSwScriptHash();
+    expect(store.swScriptHash).toBe(await sha256Hex(bytes));
+    vi.unstubAllGlobals();
   });
 });

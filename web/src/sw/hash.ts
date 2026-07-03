@@ -17,6 +17,10 @@ function u32(n: number): Uint8Array {
   return a;
 }
 
+function bytesToHex(buf: ArrayBuffer): string {
+  return [...new Uint8Array(buf)].map((x) => x.toString(16).padStart(2, "0")).join("");
+}
+
 export async function computeBuildHash(entries: HashEntry[]): Promise<string> {
   const sorted = [...entries].sort((x, y) => (x.path < y.path ? -1 : x.path > y.path ? 1 : 0));
   const enc = new TextEncoder();
@@ -32,6 +36,11 @@ export async function computeBuildHash(entries: HashEntry[]): Promise<string> {
     buf.set(c, off);
     off += c.length;
   }
-  const digest = await crypto.subtle.digest("SHA-256", buf);
-  return [...new Uint8Array(digest)].map((x) => x.toString(16).padStart(2, "0")).join("");
+  return bytesToHex(await crypto.subtle.digest("SHA-256", buf));
+}
+
+/** Plain SHA-256 of raw bytes, hex — matches `sha256sum <file>`. Used to hash
+ *  the served sw.js so users can compare it against the published release value. */
+export async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  return bytesToHex(await crypto.subtle.digest("SHA-256", bytes));
 }

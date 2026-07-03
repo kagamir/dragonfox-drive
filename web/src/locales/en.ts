@@ -100,5 +100,7 @@ export default {
     never: "Never",
     checkNow: "Check for updates",
     noUpdate: "You are running the latest pinned version.",
+    swScriptHash: "Service Worker script hash",
+    verifyHint: "To verify integrity, compare both hashes against the values published on the official releases page.",
   },
 };

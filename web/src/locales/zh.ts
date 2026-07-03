@@ -100,5 +100,7 @@ export default {
     never: "从未",
     checkNow: "检查更新",
     noUpdate: "你正在运行最新的已固定版本。",
+    swScriptHash: "Service Worker 脚本 hash",
+    verifyHint: "如需核对完整性，请将这两个 hash 与官方发布页公布的值逐一比对。",
   },
 };

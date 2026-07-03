@@ -24,7 +24,7 @@ const router = useRouter();
 const confirm = useConfirm();
 const toast = useToast();
 const integrity = useIntegrityStore();
-const { enabled: integrityEnabled, pinned, lastChecked, updateAvailable } = storeToRefs(integrity);
+const { enabled: integrityEnabled, pinned, lastChecked, updateAvailable, swScriptHash } = storeToRefs(integrity);
 
 const tab = ref<"account" | "devices" | "integrity">("account");
 const devices = ref<DeviceItem[]>([]);
@@ -36,7 +36,7 @@ const checking = ref(false);
 async function onCheckForUpdate(): Promise<void> {
   checking.value = true;
   try {
-    await integrity.checkForUpdate();
+    await Promise.all([integrity.checkForUpdate(), integrity.computeSwScriptHash()]);
   } finally {
     checking.value = false;
   }
@@ -155,9 +155,14 @@ onMounted(async () => {
               <dt class="text-fg-muted">{{ t("integrity.lastChecked") }}</dt>
               <dd class="text-fg">{{ lastChecked ? relativeTime(new Date(lastChecked).toISOString()) : t("integrity.never") }}</dd>
             </div>
+            <div class="flex justify-between gap-4">
+              <dt class="text-fg-muted">{{ t("integrity.swScriptHash") }}</dt>
+              <dd class="font-mono text-fg break-all">{{ swScriptHash ?? "—" }}</dd>
+            </div>
           </dl>
           <p v-if="!updateAvailable" class="mb-4 text-sm text-fg-muted">{{ t("integrity.noUpdate") }}</p>
           <DfButton :loading="checking" @click="onCheckForUpdate">{{ t("integrity.checkNow") }}</DfButton>
+          <p class="mt-3 text-sm text-fg-muted">{{ t("integrity.verifyHint") }}</p>
         </DfCard>
       </div>
     </main>
