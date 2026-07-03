@@ -1,16 +1,27 @@
 <script setup lang="ts">
-import { onMounted } from "vue";
+import { onMounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { storeToRefs } from "pinia";
 import { useAuthStore } from "@/stores/auth";
 import { useConfigStore } from "@/stores/config";
 import { onSessionLost } from "@/api/client";
+import { useToast } from "@/composables/useToast";
+import { useIntegrityStore } from "@/stores/integrity";
 import DfToastContainer from "@/components/ui/DfToastContainer.vue";
 import DfConfirmDialog from "@/components/ui/DfConfirmDialog.vue";
 import DfPromptDialog from "@/components/ui/DfPromptDialog.vue";
+import UpdatePrompt from "@/components/UpdatePrompt.vue";
 
 const { t } = useI18n();
 const auth = useAuthStore();
 const config = useConfigStore();
+
+const integrity = useIntegrityStore();
+const toast = useToast();
+const { firstPin } = storeToRefs(integrity);
+watch(firstPin, (v) => {
+  if (v) toast.info(t("integrity.pinnedToast"), 8000);
+});
 
 onMounted(() => {
   // Register the session-lost handler first, before any auth work, so a
@@ -36,5 +47,6 @@ onMounted(() => {
     <DfToastContainer />
     <DfConfirmDialog />
     <DfPromptDialog />
+    <UpdatePrompt />
   </template>
 </template>

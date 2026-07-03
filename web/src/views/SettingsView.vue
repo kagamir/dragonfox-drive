@@ -2,7 +2,9 @@
 import { onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
+import { storeToRefs } from "pinia";
 import { useAuthStore } from "@/stores/auth";
+import { useIntegrityStore } from "@/stores/integrity";
 import { authApi } from "@/api/auth";
 import { devicesApi } from "@/api/devices";
 import type { DeviceItem } from "@/api/types";
@@ -21,8 +23,10 @@ const auth = useAuthStore();
 const router = useRouter();
 const confirm = useConfirm();
 const toast = useToast();
+const integrity = useIntegrityStore();
+const { enabled: integrityEnabled, pinned, lastChecked, updateAvailable } = storeToRefs(integrity);
 
-const tab = ref<"account" | "devices">("account");
+const tab = ref<"account" | "devices" | "integrity">("account");
 const devices = ref<DeviceItem[]>([]);
 const devicesError = ref<string | null>(null);
 const busyId = ref<string | null>(null);
@@ -77,6 +81,7 @@ onMounted(async () => {
         :options="[
           { value: 'account', label: t('settings.account') },
           { value: 'devices', label: t('settings.devices') },
+          { value: 'integrity', label: t('integrity.tab') },
         ]"
         class="mb-4"
       />
@@ -124,6 +129,27 @@ onMounted(async () => {
           </li>
         </ul>
       </DfCard>
+
+      <div v-if="tab === 'integrity'">
+        <DfCard>
+          <h2 class="mb-2 text-base font-semibold text-fg">{{ t("integrity.panelHeading") }}</h2>
+          <p class="mb-4 text-sm" :class="integrityEnabled ? 'text-green-500' : 'text-fg-muted'">
+            {{ integrityEnabled ? t("integrity.statusEnabled") : t("integrity.statusDisabled") }}
+          </p>
+          <dl class="mb-4 space-y-2 text-sm">
+            <div class="flex justify-between gap-4">
+              <dt class="text-fg-muted">{{ t("integrity.currentVersion") }}</dt>
+              <dd class="font-mono text-fg break-all">{{ pinned?.buildHash ?? "—" }}</dd>
+            </div>
+            <div class="flex justify-between gap-4">
+              <dt class="text-fg-muted">{{ t("integrity.lastChecked") }}</dt>
+              <dd class="text-fg">{{ lastChecked ? relativeTime(new Date(lastChecked).toISOString()) : t("integrity.never") }}</dd>
+            </div>
+          </dl>
+          <p v-if="!updateAvailable" class="mb-4 text-sm text-fg-muted">{{ t("integrity.noUpdate") }}</p>
+          <DfButton @click="integrity.checkForUpdate()">{{ t("integrity.checkNow") }}</DfButton>
+        </DfCard>
+      </div>
     </main>
   </div>
 </template>
