@@ -21,6 +21,15 @@ const MANIFEST_URL = "/sw-manifest.json";
 export const SW_REPLY_TIMEOUT_MS = 10_000;
 
 /**
+ * How long to wait for `navigator.serviceWorker.ready` to resolve during
+ * registration. If SW install fails permanently, `ready` never resolves, so
+ * without a timeout `register()` would hang forever. On timeout we leave
+ * `enabled` false and return -- same degraded-but-working outcome as any
+ * other registration failure.
+ */
+export const SW_READY_TIMEOUT_MS = 15_000;
+
+/**
  * Post `message` to `sw` and wait for a matching reply. `onReply` inspects each
  * incoming message and returns true once it has handled a terminal reply; that
  * (or the timeout) tears down the listener and clears the timer exactly once.
@@ -119,7 +128,15 @@ export const useIntegrityStore = defineStore("integrity", () => {
     try {
       const hadController = !!navigator.serviceWorker.controller;
       reg = await navigator.serviceWorker.register("/sw.js", { type: "module" });
-      await navigator.serviceWorker.ready;
+      const timedOut = Symbol("sw-ready-timeout");
+      const timeout = new Promise<typeof timedOut>((resolve) =>
+        setTimeout(() => resolve(timedOut), SW_READY_TIMEOUT_MS),
+      );
+      const result = await Promise.race([navigator.serviceWorker.ready, timeout]);
+      if (result === timedOut) {
+        enabled.value = false;
+        return;
+      }
       enabled.value = true;
       if (!hadController) firstPin.value = true;
       await refreshPinned();

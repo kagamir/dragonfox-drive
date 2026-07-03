@@ -82,7 +82,6 @@ export default {
   theme: { light: "浅色", dark: "深色", auto: "跟随系统", toggle: "切换主题（当前：{mode}）" },
   notFound: { title: "走丢了", desc: "这个页面不存在，或已被移除。", back: "返回网盘" },
   integrity: {
-    title: "前端完整性",
     tab: "完整性",
     pinnedToast: "当前前端版本已固定在你的浏览器中。可在“设置 → 完整性”核对其 hash。",
     updateTitle: "有新的前端版本",
@@ -96,7 +95,7 @@ export default {
     updateFailed: "更新失败——仍在使用已固定版本。",
     panelHeading: "前端完整性保护",
     statusEnabled: "已启用——此前端已固定",
-    statusDisabled: "未启用（此浏览器不支持 Service Worker）",
+    statusDisabled: "未启用（Service Worker 不可用，或固定失败）",
     lastChecked: "上次检查",
     never: "从未",
     checkNow: "检查更新",

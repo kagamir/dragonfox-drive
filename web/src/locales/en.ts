@@ -82,7 +82,6 @@ export default {
   theme: { light: "light", dark: "dark", auto: "auto", toggle: "Theme: {mode}" },
   notFound: { title: "Lost in the woods", desc: "This page doesn't exist or was removed.", back: "Back to drive" },
   integrity: {
-    title: "Frontend integrity",
     tab: "Integrity",
     pinnedToast: "This frontend version is now pinned in your browser. You can verify its hash in Settings → Integrity.",
     updateTitle: "A new frontend version is available",
@@ -96,7 +95,7 @@ export default {
     updateFailed: "Update failed — still running the pinned version.",
     panelHeading: "Frontend integrity protection",
     statusEnabled: "Enabled — this frontend is pinned",
-    statusDisabled: "Not enabled (service workers unavailable in this browser)",
+    statusDisabled: "Not enabled (service workers unavailable, or pinning failed)",
     lastChecked: "Last checked",
     never: "Never",
     checkNow: "Check for updates",

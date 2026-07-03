@@ -9,10 +9,20 @@ export interface SwManifest {
 /** Sentinel URL under which the pinned manifest is stored inside the cache. */
 export const PINNED_MANIFEST_URL = "/__df_pinned_manifest__";
 
+/** Minimal shape guard: is `v` a plausible `SwManifest`? */
+function isSwManifest(v: unknown): v is SwManifest {
+  if (!v || typeof v !== "object") return false;
+  const m = v as Record<string, unknown>;
+  return typeof m.version === "string" && typeof m.buildHash === "string" && Array.isArray(m.assets);
+}
+
 export async function readPinnedManifest(cache: Cache): Promise<SwManifest | null> {
   const res = await cache.match(PINNED_MANIFEST_URL);
   if (!res) return null;
-  return (await res.json()) as SwManifest;
+  const parsed: unknown = await res.json();
+  // Treat a corrupt/foreign value as un-pinned rather than propagating it.
+  if (!isSwManifest(parsed)) return null;
+  return parsed;
 }
 
 export async function writePinnedManifest(cache: Cache, m: SwManifest): Promise<void> {
@@ -52,6 +62,10 @@ export async function commitSnapshot(
   items: Array<{ path: string; response: Response }>,
   m: SwManifest,
 ): Promise<void> {
+  // Intentionally fail-safe: the pinned manifest is written LAST. If a
+  // mid-loop `cache.put` fails, the pin still points at the previous good
+  // snapshot (or none), so a retry re-pins cleanly instead of leaving a
+  // manifest that references partially-cached assets.
   for (const { path, response } of items) await cache.put(path, response);
   await writePinnedManifest(cache, m);
 }

@@ -9,6 +9,22 @@ import {
 
 declare const self: ServiceWorkerGlobalScope;
 
+// Update model (do not conflate these two paths):
+//  (a) Frontend *asset-snapshot* updates are user-consented: the page shows a
+//      dialog with old/new build hashes and only re-pins when the user sends
+//      APPLY_UPDATE (see the message handler below).
+//  (b) `sw.js` *script* updates are NOT gated by that dialog. They follow the
+//      browser's native Service Worker lifecycle: since we never call
+//      `skipWaiting()`, a new SW version installs and sits `waiting` until all
+//      tabs controlled by the old SW are closed, at which point it activates
+//      on its own. This is intentional and accepted (see design doc §1).
+//  (c) CACHE_NAME must NOT be bumped without a migration path. `pinIfNeeded`
+//      re-pins whenever no pinned manifest is found under the current cache
+//      name. If CACHE_NAME changed, a freshly-activated SW would find no
+//      pinned manifest and silently TOFU whatever the server happens to be
+//      serving at that moment -- outside the consent dialog entirely. Keep
+//      this a single constant; any future migration needs an explicit,
+//      reviewed plan for carrying the old pin forward.
 const CACHE_NAME = "df-frontend-pin-v1";
 const MANIFEST_URL = "/sw-manifest.json";
 
@@ -17,6 +33,7 @@ async function pinIfNeeded(): Promise<void> {
   // Keep an existing pinned snapshot: don't silently re-pin on SW reinstall.
   if (await readPinnedManifest(cache)) return;
   const res = await fetch(MANIFEST_URL, { cache: "no-store" });
+  if (!res.ok) throw new Error(`manifest fetch failed: HTTP ${res.status}`);
   const manifest = (await res.json()) as SwManifest;
   const items = await fetchAndVerifySnapshot(manifest, fetch);
   await commitSnapshot(cache, items, manifest);
@@ -66,6 +83,7 @@ self.addEventListener("message", (event) => {
         try {
           const cache = await caches.open(CACHE_NAME);
           const res = await fetch(MANIFEST_URL, { cache: "no-store" });
+          if (!res.ok) throw new Error(`manifest fetch failed: HTTP ${res.status}`);
           const manifest = (await res.json()) as SwManifest;
           const items = await fetchAndVerifySnapshot(manifest, fetch);
           await commitSnapshot(cache, items, manifest);

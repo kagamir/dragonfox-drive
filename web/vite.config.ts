@@ -3,9 +3,10 @@ import { fileURLToPath, URL } from "node:url";
 import { defineConfig, type Plugin } from "vite";
 import vue from "@vitejs/plugin-vue";
 import tailwindcss from "@tailwindcss/vite";
-import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { buildManifest } from "./build/sw-manifest";
+import type { HashEntry } from "./src/sw/hash";
 
 const pkgVersion = JSON.parse(
   readFileSync(fileURLToPath(new URL("./package.json", import.meta.url)), "utf8"),
@@ -49,11 +50,11 @@ function swManifestPlugin(): Plugin {
     apply: "build",
     async closeBundle() {
       const dist = fileURLToPath(new URL("./dist", import.meta.url));
-      const entries: { path: string; bytes: Uint8Array }[] = [];
+      const entries: HashEntry[] = [];
       const walk = (dir: string) => {
-        for (const name of readdirSync(dir)) {
-          const full = join(dir, name);
-          if (statSync(full).isDirectory()) {
+        for (const dirent of readdirSync(dir, { withFileTypes: true })) {
+          const full = join(dir, dirent.name);
+          if (dirent.isDirectory()) {
             walk(full);
             continue;
           }

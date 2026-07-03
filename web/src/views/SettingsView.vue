@@ -31,6 +31,16 @@ const devices = ref<DeviceItem[]>([]);
 const devicesError = ref<string | null>(null);
 const busyId = ref<string | null>(null);
 const busySignOut = ref(false);
+const checking = ref(false);
+
+async function onCheckForUpdate(): Promise<void> {
+  checking.value = true;
+  try {
+    await integrity.checkForUpdate();
+  } finally {
+    checking.value = false;
+  }
+}
 
 async function refreshDevices(): Promise<void> {
   try {
@@ -147,7 +157,7 @@ onMounted(async () => {
             </div>
           </dl>
           <p v-if="!updateAvailable" class="mb-4 text-sm text-fg-muted">{{ t("integrity.noUpdate") }}</p>
-          <DfButton @click="integrity.checkForUpdate()">{{ t("integrity.checkNow") }}</DfButton>
+          <DfButton :loading="checking" @click="onCheckForUpdate">{{ t("integrity.checkNow") }}</DfButton>
         </DfCard>
       </div>
     </main>
