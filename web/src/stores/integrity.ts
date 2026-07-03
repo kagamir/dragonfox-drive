@@ -13,6 +13,43 @@ import type { SwManifest } from "@/sw/pinning";
 const IGNORED_KEY = "df.integrity.ignored";
 const MANIFEST_URL = "/sw-manifest.json";
 
+/**
+ * How long to wait for a reply to a message posted to the service worker
+ * before giving up. Without this, a registered-but-unresponsive SW would leave
+ * the awaiting promise pending forever, stranding the integrity UI.
+ */
+export const SW_REPLY_TIMEOUT_MS = 10_000;
+
+/**
+ * Post `message` to `sw` and wait for a matching reply. `onReply` inspects each
+ * incoming message and returns true once it has handled a terminal reply; that
+ * (or the timeout) tears down the listener and clears the timer exactly once.
+ * `onTimeout` runs only when the SW never answers in time.
+ */
+function postAndWait(
+  sw: ServiceWorker,
+  message: unknown,
+  onReply: (e: MessageEvent) => boolean,
+  onTimeout: () => void,
+): void {
+  let settled = false;
+  const finish = () => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    navigator.serviceWorker.removeEventListener("message", onMsg);
+  };
+  const onMsg = (e: MessageEvent) => {
+    if (onReply(e)) finish();
+  };
+  const timer = setTimeout(() => {
+    finish();
+    onTimeout();
+  }, SW_REPLY_TIMEOUT_MS);
+  navigator.serviceWorker.addEventListener("message", onMsg);
+  sw.postMessage(message);
+}
+
 export const useIntegrityStore = defineStore("integrity", () => {
   const enabled = ref(false); // SW registered & controlling this page
   const pinned = ref<SwManifest | null>(null);
@@ -47,15 +84,20 @@ export const useIntegrityStore = defineStore("integrity", () => {
     return new Promise((resolve) => {
       const sw = activeWorker();
       if (!sw) return resolve();
-      const onMsg = (e: MessageEvent) => {
-        if (e.data?.type === "PINNED") {
-          pinned.value = e.data.manifest ?? null;
-          navigator.serviceWorker.removeEventListener("message", onMsg);
-          resolve();
-        }
-      };
-      navigator.serviceWorker.addEventListener("message", onMsg);
-      sw.postMessage({ type: "GET_PINNED" });
+      postAndWait(
+        sw,
+        { type: "GET_PINNED" },
+        (e) => {
+          if (e.data?.type === "PINNED") {
+            pinned.value = e.data.manifest ?? null;
+            resolve();
+            return true;
+          }
+          return false;
+        },
+        // Non-fatal: leave `pinned` as-is; a later manual check can retry.
+        () => resolve(),
+      );
     });
   }
 
@@ -92,19 +134,27 @@ export const useIntegrityStore = defineStore("integrity", () => {
       const sw = activeWorker();
       if (!sw) return reject(new Error("no active service worker"));
       applying.value = true;
-      const onMsg = (e: MessageEvent) => {
-        if (e.data?.type === "UPDATE_DONE") {
-          navigator.serviceWorker.removeEventListener("message", onMsg);
-          window.location.reload();
-          resolve();
-        } else if (e.data?.type === "UPDATE_FAILED") {
-          navigator.serviceWorker.removeEventListener("message", onMsg);
+      postAndWait(
+        sw,
+        { type: "APPLY_UPDATE" },
+        (e) => {
+          if (e.data?.type === "UPDATE_DONE") {
+            window.location.reload();
+            resolve();
+            return true;
+          }
+          if (e.data?.type === "UPDATE_FAILED") {
+            applying.value = false;
+            reject(new Error(e.data.error));
+            return true;
+          }
+          return false;
+        },
+        () => {
           applying.value = false;
-          reject(new Error(e.data.error));
-        }
-      };
-      navigator.serviceWorker.addEventListener("message", onMsg);
-      sw.postMessage({ type: "APPLY_UPDATE" });
+          reject(new Error("service worker did not respond"));
+        },
+      );
     });
   }
 
