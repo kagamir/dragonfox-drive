@@ -175,6 +175,9 @@ Only opaque metadata; the manifest itself is encrypted.
 }
 ```
 
+For a zero-byte file, send `total_size: 0` and `chunk_count: 1`.
+Upload its authenticated empty ciphertext to chunk 0 before finalizing.
+
 Response:
 ```json
 { "id": "uuid", "upload_url": "/api/files/uuid/chunks/{idx}" }

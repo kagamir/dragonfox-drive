@@ -92,8 +92,8 @@ pub async fn create(
     if req.chunk_count == 0 {
         return Err(ApiError::BadRequest("chunk_count must be >= 1".into()));
     }
-    if req.total_size == 0 {
-        return Err(ApiError::BadRequest("total_size must be > 0".into()));
+    if req.total_size == 0 && req.chunk_count != 1 {
+        return Err(ApiError::BadRequest("an empty file requires exactly one encrypted chunk".into()));
     }
     let max = state.settings.limits.max_file_bytes;
     if max > 0 && req.total_size > max {
@@ -553,6 +553,29 @@ mod tests {
             .bind(&id).fetch_one(&state.db).await.unwrap();
         assert_eq!(row.0, "pending");
         assert_eq!(row.1, 123);
+    }
+
+    #[tokio::test]
+    async fn empty_file_requires_one_authenticated_chunk() {
+        let (state, _guard) = files_state().await;
+        seed_user(&state, "u1").await;
+        let request = |chunk_count| CreateFileRequest {
+            total_size: 0, chunk_count,
+            encrypted_file_key: "k".into(), encrypted_file_key_nonce: "kn".into(),
+            encrypted_parent_id: None, encrypted_parent_id_nonce: None,
+        };
+        assert!(matches!(create(State(state.clone()), auth("u1"), Json(request(2))).await,
+            Err(ApiError::BadRequest(_))));
+        let res = create(State(state.clone()), auth("u1"), Json(request(1))).await.unwrap();
+        let id = res.0["id"].as_str().unwrap().to_owned();
+        assert!(finalize(State(state.clone()), auth("u1"), Path(id.clone())).await.is_err());
+        // An AES-GCM tag remains even when the plaintext is empty.
+        let _ = put_chunk(State(state.clone()), auth("u1"), Path((id.clone(), 0)), Bytes::from(vec![0; 16]))
+            .await.unwrap();
+        let _ = finalize(State(state.clone()), auth("u1"), Path(id.clone())).await.unwrap();
+        let row: (String, i64) = sqlx::query_as("SELECT status, total_size FROM files WHERE id = ?")
+            .bind(id).fetch_one(&state.db).await.unwrap();
+        assert_eq!(row, ("ready".into(), 0));
     }
 
     #[tokio::test]

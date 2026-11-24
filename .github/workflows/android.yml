@@ -1,0 +1,158 @@
+name: Android client
+
+on:
+  pull_request:
+    paths: ['android/**', '.github/workflows/android.yml']
+  push:
+    branches: [master]
+    tags: ['android-v*']
+    paths: ['android/**', '.github/workflows/android.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      publish: ${{ steps.version.outputs.publish }}
+      tag: ${{ steps.version.outputs.tag }}
+      variant: ${{ steps.version.outputs.variant }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      - name: Select APK and release channel
+        id: version
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^versionName=//p' android/version.properties)
+          preview=$(sed -n 's/^preview=//p' android/version.properties)
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$preview" =~ ^[0-9]+$ ]]
+          publish=false
+          variant=preview
+          tag="android-v$version-preview.$preview"
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            [[ "$GITHUB_REF_NAME" == "android-v$version" ]]
+            variant=release
+            tag="$GITHUB_REF_NAME"
+            publish=true
+          elif [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF_NAME" == master ]]; then
+            if [[ "$BEFORE" =~ ^0+$ ]] || ! git diff --quiet "$BEFORE" "$GITHUB_SHA" -- android/version.properties; then
+              publish=true
+            fi
+          fi
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "variant=$variant" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Build Rust API server for interoperability tests
+        run: |
+          cargo build --locked --manifest-path server/Cargo.toml
+      - name: Run unit tests and build instrumentation package
+        env:
+          DRAGONFOX_TEST_BINARY: ${{ github.workspace }}/server/target/debug/dragonfox-drive
+        working-directory: android
+        run: bash gradlew testDebugUnitTest assembleDebug assembleDebugAndroidTest
+      - name: Run instrumentation tests on Android 35
+        working-directory: android
+        run: |
+          set -euo pipefail
+          sudo chmod 666 /dev/kvm
+          sdkmanager 'platform-tools' 'emulator' 'system-images;android-35;google_apis;x86_64'
+          echo no | avdmanager create avd -n dragonfox -k 'system-images;android-35;google_apis;x86_64' --force
+          "$ANDROID_HOME/emulator/emulator" -avd dragonfox -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect > "$RUNNER_TEMP/emulator.log" 2>&1 &
+          emulator_pid=$!
+          trap 'kill "$emulator_pid" 2>/dev/null || true' EXIT
+          if ! timeout 360 bash -c 'adb wait-for-device && until [[ $(adb shell getprop sys.boot_completed 2>/dev/null | tr -d "\r") == 1 ]]; do sleep 3; done'; then
+            tail -80 "$RUNNER_TEMP/emulator.log"
+            exit 1
+          fi
+          adb shell input keyevent 82
+          server_dir=$(mktemp -d)
+          (
+            cd "$server_dir"
+            export DRAGONFOX__SERVER__HOST=127.0.0.1 DRAGONFOX__SERVER__PORT=18080 DRAGONFOX__SECURITY__ALLOW_REGISTRATION=true
+            exec "$GITHUB_WORKSPACE/server/target/debug/dragonfox-drive"
+          ) > "$RUNNER_TEMP/android-test-server.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$emulator_pid" "$server_pid" 2>/dev/null || true' EXIT
+          curl --retry 15 --retry-connrefused --retry-delay 1 --fail --silent http://127.0.0.1:18080/api/health
+          adb reverse tcp:18080 tcp:18080
+          bash gradlew connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.syncServer=http://127.0.0.1:18080
+      - name: Package preview APK
+        if: steps.version.outputs.variant == 'preview'
+        working-directory: android
+        run: bash gradlew assemblePreview
+      - name: Sign distribution APK
+        if: steps.version.outputs.variant == 'release'
+        working-directory: android
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          : "${KEYSTORE_BASE64:?Configure ANDROID_KEYSTORE_BASE64}" "${ANDROID_KEYSTORE_PASSWORD:?}" "${ANDROID_KEY_ALIAS:?}" "${ANDROID_KEY_PASSWORD:?}"
+          umask 077
+          export ANDROID_KEYSTORE_PATH="$RUNNER_TEMP/android-release.jks"
+          trap 'rm -f "$ANDROID_KEYSTORE_PATH"' EXIT
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$ANDROID_KEYSTORE_PATH"
+          bash gradlew --no-daemon assembleRelease
+      - name: Verify APK and compute checksum
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          VARIANT: ${{ steps.version.outputs.variant }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          output="DragonFox-Drive-$TAG.apk"
+          cp "android/app/build/outputs/apk/$VARIANT/app-$VARIANT.apk" "dist/$output"
+          cd dist
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose --print-certs "$output"
+          sha256sum "$output" > SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: android-apk
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: needs.build.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: android-apk
+          path: dist
+      - name: Publish Android download
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.build.outputs.tag }}
+          VARIANT: ${{ needs.build.outputs.variant }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists. Its signed assets are immutable."
+            exit 0
+          fi
+          if [[ "$VARIANT" == preview ]]; then
+            flags=(--prerelease --target "$GITHUB_SHA")
+            notes='Install the preview APK on Android 11 or newer. This separate preview package is signed with a build-specific test key. To install a later preview signed by another key, uninstall the previous preview and configure sync again.'
+          else
+            flags=(--verify-tag)
+            notes='Signed Android release for Android 11 or newer.'
+          fi
+          gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" "${flags[@]}" --latest=false --title "DragonFox Drive $TAG" --notes "$notes"

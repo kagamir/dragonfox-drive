@@ -7,6 +7,19 @@
 
 A self-hosted, end-to-end encrypted cloud drive. Organize files, share links, and stream video in your browser.
 
+## Android auto-sync
+
+The native Kotlin client runs on Android 11 and later. [Download the Android APK from the preview release](https://github.com/kagamir/dragonfox-drive/releases/tag/android-v0.1.0-preview.1). The preview installs alongside the production app. Preview builds can have different signing certificates, so installing a later preview may require uninstalling the previous one and selecting the folders again.
+
+1. Open the app, enter the HTTPS address of your DragonFox server, and sign in or register.
+2. Grant **All files access** in Android settings. Under **Photos and videos**, select from folders containing media. Under **All files**, browse storage and select any folders you want to back up.
+3. Choose a cloud destination and enable auto-sync. The client scans selected folders recursively and preserves their storage-relative paths under the destination. Media mode checks the filename extension against Android MIME types and supported camera formats for every upload, including files added later.
+4. Keep the app open to follow scan and upload progress. It pauses when offline or in the background and checks again when you return. The number of concurrent uploads adapts to network metering and estimated upstream bandwidth.
+
+Sync uploads missing content. Deleting a local file leaves the cloud copy in place. Deleting a cloud copy while the local file is still selected makes it eligible for upload again. A server built with zero-byte upload support is required to sync empty files.
+
+[Build, test, and sign the Android client](android/README.md).
+
 ## Screenshots
 
 ![Desktop file list showing folders, an encrypted PDF, and other sample files alongside search and upload controls](docs/screenshots/drive-list.webp)
