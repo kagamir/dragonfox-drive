@@ -28,10 +28,9 @@ jobs:
           distribution: temurin
           java-version: '17'
           cache: gradle
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
       - name: Select APK and release channel
         id: version
-        env:
-          BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
           version=$(sed -n 's/^versionName=//p' android/version.properties)
@@ -46,9 +45,7 @@ jobs:
             tag="$GITHUB_REF_NAME"
             publish=true
           elif [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF_NAME" == master ]]; then
-            if [[ "$BEFORE" =~ ^0+$ ]] || ! git diff --quiet "$BEFORE" "$GITHUB_SHA" -- android/version.properties; then
-              publish=true
-            fi
+            publish=true
           fi
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
           echo "variant=$variant" >> "$GITHUB_OUTPUT"
