@@ -121,9 +121,20 @@ jobs:
           path: ${{ env.BINARY_NAME }}-*-${{ matrix.target }}.*
           if-no-files-found: error
 
+  android:
+    name: Build signed Android APK
+    permissions:
+      contents: read
+    uses: ./.github/workflows/build-android.yml
+    secrets:
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
   release:
     name: Publish release
-    needs: build
+    needs: [build, android]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -140,7 +151,9 @@ jobs:
 
       - name: Generate SHA256SUMS
         working-directory: artifacts
-        run: sha256sum * > ../SHA256SUMS
+        run: |
+          test -s "DragonFox-Drive-${GITHUB_REF_NAME}.apk"
+          sha256sum * > ../SHA256SUMS
 
       - name: Extract frontend build hash
         run: |

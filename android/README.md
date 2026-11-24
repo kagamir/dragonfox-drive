@@ -13,6 +13,9 @@ Set `DRAGONFOX_TEST_BINARY` to the absolute path of a compiled DragonFox server 
 ## Publishing APKs
 
 - **Preview** — increase `versionCode` and update `versionName` or `preview` in [version.properties](version.properties) on `master`. After the tests pass, the Android workflow publishes an `android-vX.Y.Z-preview.N` prerelease with an APK and its SHA-256 checksum. The preview application ID is `dev.dragonfox.drive.preview`. Each CI build uses a temporary Android test key, so moving between previews may require uninstalling the old app and configuring sync again.
-- **Production** — maintain a backed-up signing keystore and configure repository secrets `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and `ANDROID_KEY_PASSWORD`. Push an `android-vX.Y.Z` tag matching `versionName`. Use a higher `versionCode` and the same key for each upgrade. The application ID is `dev.dragonfox.drive`.
+- **Project release** — push the usual project tag (for example, `v0.3.2`). CI tests and signs the Android app from the tagged commit, then publishes `DragonFox-Drive-v0.3.2.apk` alongside the server archives. The project release waits for both builds and includes the APK in its shared `SHA256SUMS`.
+- **Android-only release** — push an `android-vX.Y.Z` tag matching the app’s `versionName` to publish a standalone signed APK.
 
-Both channels publish APKs and `SHA256SUMS` as GitHub Release assets. From the download directory, run `sha256sum -c SHA256SUMS` to check the APK.
+Both production paths use the application ID `dev.dragonfox.drive` and the same four repository secrets: `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and `ANDROID_KEY_PASSWORD`. The installed app version comes from [version.properties](version.properties). Increase `versionCode` when shipping an updated client and keep the same signing key.
+
+To verify a downloaded APK against the release manifest on Linux, run `sha256sum --ignore-missing -c SHA256SUMS` in the directory containing the APK and the manifest.

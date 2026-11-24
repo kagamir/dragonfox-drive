@@ -1,0 +1,154 @@
+name: Build Android APK
+
+on:
+  workflow_call:
+    outputs:
+      tag:
+        description: Tag used in the APK filename
+        value: ${{ jobs.build.outputs.tag }}
+      variant:
+        description: Android build type
+        value: ${{ jobs.build.outputs.variant }}
+    secrets:
+      ANDROID_KEYSTORE_BASE64:
+        required: false
+      ANDROID_KEYSTORE_PASSWORD:
+        required: false
+      ANDROID_KEY_ALIAS:
+        required: false
+      ANDROID_KEY_PASSWORD:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      variant: ${{ steps.version.outputs.variant }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+      - name: Select APK and release channel
+        id: version
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^versionName=//p' android/version.properties)
+          preview=$(sed -n 's/^preview=//p' android/version.properties)
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$preview" =~ ^[0-9]+$ ]]
+          variant=preview
+          tag="android-v$version-preview.$preview"
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            # Android-only releases use the app version; project releases use the server tag.
+            [[ "$GITHUB_REF_NAME" == v* || "$GITHUB_REF_NAME" == "android-v$version" ]]
+            variant=release
+            tag="$GITHUB_REF_NAME"
+          fi
+          echo "variant=$variant" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Build Rust API server for interoperability tests
+        run: |
+          cargo build --locked --manifest-path server/Cargo.toml
+      - name: Run unit tests and build instrumentation package
+        env:
+          DRAGONFOX_TEST_BINARY: ${{ github.workspace }}/server/target/debug/dragonfox-drive
+        working-directory: android
+        run: bash gradlew testDebugUnitTest assembleDebug assembleDebugAndroidTest
+      - name: Run instrumentation tests on Android 35
+        working-directory: android
+        run: |
+          set -euo pipefail
+          sudo chmod 666 /dev/kvm
+          sdkmanager 'platform-tools' 'emulator' 'system-images;android-35;google_apis;x86_64'
+          export ANDROID_AVD_HOME="$RUNNER_TEMP/avd"
+          mkdir -p "$ANDROID_AVD_HOME"
+          avdmanager create avd --force -n dragonfox -p "$ANDROID_AVD_HOME/dragonfox.avd" -d pixel_2 -k 'system-images;android-35;google_apis;x86_64' </dev/null
+          test -f "$ANDROID_AVD_HOME/dragonfox.avd/config.ini"
+          printf 'avd.ini.encoding=UTF-8\npath=%s\ntarget=android-35\n' "$ANDROID_AVD_HOME/dragonfox.avd" > "$ANDROID_AVD_HOME/dragonfox.ini"
+          "$ANDROID_HOME/emulator/emulator" -list-avds | grep -Fx dragonfox
+          "$ANDROID_HOME/emulator/emulator" -avd dragonfox -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect > "$RUNNER_TEMP/emulator.log" 2>&1 &
+          emulator_pid=$!
+          trap 'kill "$emulator_pid" 2>/dev/null || true' EXIT
+          deadline=$((SECONDS + 360))
+          until [[ $(timeout 5 adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r') == 1 ]]; do
+            if ! kill -0 "$emulator_pid" 2>/dev/null || (( SECONDS >= deadline )); then
+              tail -80 "$RUNNER_TEMP/emulator.log"
+              exit 1
+            fi
+            sleep 3
+          done
+          adb shell input keyevent 82
+          server_dir=$(mktemp -d)
+          (
+            cd "$server_dir"
+            export DRAGONFOX__SERVER__HOST=127.0.0.1 DRAGONFOX__SERVER__PORT=18080 DRAGONFOX__SECURITY__ALLOW_REGISTRATION=true
+            exec "$GITHUB_WORKSPACE/server/target/debug/dragonfox-drive"
+          ) > "$RUNNER_TEMP/android-test-server.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$emulator_pid" "$server_pid" 2>/dev/null || true' EXIT
+          curl --retry 15 --retry-connrefused --retry-delay 1 --fail --silent http://127.0.0.1:18080/api/health
+          adb reverse tcp:18080 tcp:18080
+          adb install -r app/build/outputs/apk/debug/app-debug.apk
+          adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+          adb shell appops set --uid dev.dragonfox.drive.debug MANAGE_EXTERNAL_STORAGE allow
+          # Changing this permission can restart the target process. Grant it before launching the test runner.
+          adb shell am instrument -w -e syncServer http://127.0.0.1:18080 \
+            dev.dragonfox.drive.debug.test/androidx.test.runner.AndroidJUnitRunner | tee "$RUNNER_TEMP/instrumentation.txt"
+          if ! grep -Eq '^OK \([1-9][0-9]* tests?\)' "$RUNNER_TEMP/instrumentation.txt"; then
+            adb logcat -d -b crash | tail -100
+            exit 1
+          fi
+      - name: Package preview APK
+        if: steps.version.outputs.variant == 'preview'
+        working-directory: android
+        run: bash gradlew assemblePreview
+      - name: Sign distribution APK
+        if: steps.version.outputs.variant == 'release'
+        working-directory: android
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          : "${KEYSTORE_BASE64:?Configure ANDROID_KEYSTORE_BASE64}" "${ANDROID_KEYSTORE_PASSWORD:?}" "${ANDROID_KEY_ALIAS:?}" "${ANDROID_KEY_PASSWORD:?}"
+          umask 077
+          export ANDROID_KEYSTORE_PATH="$RUNNER_TEMP/android-release.jks"
+          trap 'rm -f "$ANDROID_KEYSTORE_PATH"' EXIT
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$ANDROID_KEYSTORE_PATH"
+          bash gradlew --no-daemon assembleRelease
+      - name: Verify APK and compute checksum
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          VARIANT: ${{ steps.version.outputs.variant }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          output="DragonFox-Drive-$TAG.apk"
+          cp "android/app/build/outputs/apk/$VARIANT/app-$VARIANT.apk" "dist/$output"
+          cd dist
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose --print-certs "$output"
+          # The project publisher computes one checksum manifest across all platforms.
+          if [[ "$TAG" == android-v* ]]; then
+            sha256sum "$output" > SHA256SUMS
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: android-apk
+          path: dist/
+          if-no-files-found: error

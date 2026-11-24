@@ -9,7 +9,7 @@ A self-hosted, end-to-end encrypted cloud drive. Organize files, share links, an
 
 ## Android auto-sync
 
-The native Kotlin client runs on Android 11 and later. [Download the Android APK from the preview release](https://github.com/kagamir/dragonfox-drive/releases/tag/android-v0.1.0-preview.1). The preview installs alongside the production app. Preview builds can have different signing certificates, so installing a later preview may require uninstalling the previous one and selecting the folders again.
+The native Kotlin client runs on Android 11 and later. Project releases built with Android support include a signed APK alongside the server binaries on the [Releases page](https://github.com/kagamir/dragonfox-drive/releases). [Download the standalone preview APK](https://github.com/kagamir/dragonfox-drive/releases/tag/android-v0.1.0-preview.1). The preview installs alongside the production app. Preview builds can have different signing certificates, so installing a later preview may require uninstalling the previous one and selecting the folders again.
 
 1. Open the app, enter the HTTPS address of your DragonFox server, and sign in or register.
 2. Grant **All files access** in Android settings. Under **Photos and videos**, select from folders containing media. Under **All files**, browse storage and select any folders you want to back up.
