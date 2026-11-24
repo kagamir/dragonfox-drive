@@ -42,12 +42,12 @@ function cycleTheme() {
 </script>
 
 <template>
-  <main class="relative flex min-h-screen items-center justify-center bg-gradient-to-b from-brand-soft to-bg p-4 dark:from-brand/10">
+  <main class="auth-stage">
     <button class="absolute right-4 top-4 rounded-lg p-2 text-fg-muted hover:bg-bg hover:text-fg" data-testid="theme-cycle-btn" :aria-label="t('theme.toggle', { mode: t('theme.' + (themeStore as string)) })" @click="cycleTheme">
       <component :is="themeIcon[themeStore as keyof typeof themeIcon]" class="h-5 w-5" />
     </button>
-    <div class="w-full max-w-sm rounded-2xl border border-border bg-surface p-8 shadow-md">
-      <h1 class="mb-1 text-2xl font-extrabold text-brand">🦊 {{ t("common.appName") }}</h1>
+    <div class="auth-panel">
+      <h1 class="mb-1 text-2xl font-extrabold text-fg"> {{ t("common.appName") }}</h1>
       <p class="mb-6 flex items-center gap-1.5 text-sm text-fg-muted">
         <Lock class="h-3.5 w-3.5" /> {{ t("auth.tagline") }}
       </p>
@@ -55,7 +55,7 @@ function cycleTheme() {
         <DfInput v-model="username" :label="t('auth.username')" autocomplete="username" :disabled="loading" />
         <DfInput v-model="password" :label="t('auth.password')" type="password" autocomplete="current-password" :disabled="loading" />
         <DfButton type="submit" data-testid="login-submit" :loading="loading" :disabled="loading">{{ loading ? t("auth.signingIn") : t("auth.signIn") }}</DfButton>
-        <p v-if="error" class="text-sm text-danger">{{ error }}</p>
+        <p role="alert" v-if="error" class="text-sm text-danger">{{ error }}</p>
       </form>
       <p v-if="config.allowRegistration" class="mt-5 text-center text-sm text-fg-muted">
         {{ t("auth.noAccount") }}<RouterLink :to="{ name: 'register' }" class="font-medium text-brand">{{ t("auth.createOne") }}</RouterLink>
