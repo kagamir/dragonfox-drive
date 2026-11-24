@@ -68,14 +68,23 @@ jobs:
           set -euo pipefail
           sudo chmod 666 /dev/kvm
           sdkmanager 'platform-tools' 'emulator' 'system-images;android-35;google_apis;x86_64'
-          echo no | avdmanager create avd -n dragonfox -k 'system-images;android-35;google_apis;x86_64' --force
+          export ANDROID_AVD_HOME="$RUNNER_TEMP/avd"
+          mkdir -p "$ANDROID_AVD_HOME"
+          avdmanager create avd --force -n dragonfox -p "$ANDROID_AVD_HOME/dragonfox.avd" -d pixel_2 -k 'system-images;android-35;google_apis;x86_64' </dev/null
+          test -f "$ANDROID_AVD_HOME/dragonfox.avd/config.ini"
+          printf 'avd.ini.encoding=UTF-8\npath=%s\ntarget=android-35\n' "$ANDROID_AVD_HOME/dragonfox.avd" > "$ANDROID_AVD_HOME/dragonfox.ini"
+          "$ANDROID_HOME/emulator/emulator" -list-avds | grep -Fx dragonfox
           "$ANDROID_HOME/emulator/emulator" -avd dragonfox -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect > "$RUNNER_TEMP/emulator.log" 2>&1 &
           emulator_pid=$!
           trap 'kill "$emulator_pid" 2>/dev/null || true' EXIT
-          if ! timeout 360 bash -c 'adb wait-for-device && until [[ $(adb shell getprop sys.boot_completed 2>/dev/null | tr -d "\r") == 1 ]]; do sleep 3; done'; then
-            tail -80 "$RUNNER_TEMP/emulator.log"
-            exit 1
-          fi
+          deadline=$((SECONDS + 360))
+          until [[ $(timeout 5 adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r') == 1 ]]; do
+            if ! kill -0 "$emulator_pid" 2>/dev/null || (( SECONDS >= deadline )); then
+              tail -80 "$RUNNER_TEMP/emulator.log"
+              exit 1
+            fi
+            sleep 3
+          done
           adb shell input keyevent 82
           server_dir=$(mktemp -d)
           (
