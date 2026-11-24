@@ -8,7 +8,7 @@ Open this directory in Android Studio, or install JDK 17, Android SDK Platform 3
 
 The installable APK is at `app/build/outputs/apk/preview/app-preview.apk`. To run device tests, connect an Android 11+ device or emulator and run `./gradlew connectedDebugAndroidTest`.
 
-Set `DRAGONFOX_TEST_BINARY` to the absolute path of a compiled DragonFox server to include the live-server interoperability test. To include the on-device sync test, use an isolated local server with registration enabled, run `adb reverse tcp:18080 tcp:18080`, and pass `-Pandroid.testInstrumentationRunnerArguments.syncServer=http://127.0.0.1:18080` to the device test task.
+Set `DRAGONFOX_TEST_BINARY` to the absolute path of a compiled DragonFox server to include the live-server interoperability test. To include the on-device sync test, install the debug app, grant it All files access, and start an isolated local server with registration enabled. Run `adb reverse tcp:18080 tcp:18080`, and pass `-Pandroid.testInstrumentationRunnerArguments.syncServer=http://127.0.0.1:18080` to the device test task.
 
 ## Publishing APKs
 

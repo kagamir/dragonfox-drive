@@ -96,7 +96,16 @@ jobs:
           trap 'kill "$emulator_pid" "$server_pid" 2>/dev/null || true' EXIT
           curl --retry 15 --retry-connrefused --retry-delay 1 --fail --silent http://127.0.0.1:18080/api/health
           adb reverse tcp:18080 tcp:18080
-          bash gradlew connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.syncServer=http://127.0.0.1:18080
+          adb install -r app/build/outputs/apk/debug/app-debug.apk
+          adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+          adb shell appops set --uid dev.dragonfox.drive.debug MANAGE_EXTERNAL_STORAGE allow
+          # Changing this permission can restart the target process. Grant it before launching the test runner.
+          adb shell am instrument -w -e syncServer http://127.0.0.1:18080 \
+            dev.dragonfox.drive.debug.test/androidx.test.runner.AndroidJUnitRunner | tee "$RUNNER_TEMP/instrumentation.txt"
+          if ! grep -Eq '^OK \([1-9][0-9]* tests?\)' "$RUNNER_TEMP/instrumentation.txt"; then
+            adb logcat -d -b crash | tail -100
+            exit 1
+          fi
       - name: Package preview APK
         if: steps.version.outputs.variant == 'preview'
         working-directory: android

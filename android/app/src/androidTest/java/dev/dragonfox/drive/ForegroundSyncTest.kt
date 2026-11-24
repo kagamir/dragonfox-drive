@@ -34,18 +34,8 @@ class ForegroundSyncTest {
         val server = InstrumentationRegistry.getArguments().getString("syncServer")
         assumeNotNull(server)
         val context = instrumentation.targetContext
-        fun appOps(command: String): String {
-            val fd = instrumentation.uiAutomation.executeShellCommand(command)
-            return android.os.ParcelFileDescriptor.AutoCloseInputStream(fd).bufferedReader().use { it.readText() }
-        }
-        val pkg = context.packageName
-        val previous = Regex("MANAGE_EXTERNAL_STORAGE: (allow|ignore|deny|default|foreground)")
-            .find(appOps("appops get --uid $pkg MANAGE_EXTERNAL_STORAGE"))?.groupValues?.get(1) ?: "default"
-        try {
-            appOps("appops set --uid $pkg MANAGE_EXTERNAL_STORAGE allow")
-            assertTrue(FileAccess.granted(context))
-            verifyUploads(context, requireNotNull(server))
-        } finally { appOps("appops set --uid $pkg MANAGE_EXTERNAL_STORAGE $previous") }
+        assertTrue("Grant All files access to the debug build before running syncServer tests", FileAccess.granted(context))
+        verifyUploads(context, requireNotNull(server))
     }
 
     private suspend fun verifyUploads(context: android.content.Context, server: String) {
