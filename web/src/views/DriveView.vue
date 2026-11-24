@@ -23,7 +23,7 @@ import DfContextMenu from "@/components/ui/DfContextMenu.vue";
 import FilePreviewModal from "@/components/FilePreviewModal.vue";
 import MovePickerModal from "@/components/MovePickerModal.vue";
 import ShareDialog from "@/components/ShareDialog.vue";
-import { List, LayoutGrid, FolderPlus, FilePlus, Search } from "lucide-vue-next";
+import { Folder, List, LayoutGrid, FolderPlus, FilePlus, Search } from "lucide-vue-next";
 
 const { t } = useI18n();
 const auth = useAuthStore();
@@ -233,12 +233,13 @@ const queueUploads = computed(() =>
   <div class="min-h-screen bg-bg">
     <AppHeader :username="auth.username ?? t('common.me')" active="drive" :show-upload="true" @upload="pickFile" />
     <UploadDropzone class="mx-auto w-full max-w-7xl px-4 py-6 md:px-6" @files="onFilesChosen">
-      <div class="flex flex-wrap items-center justify-between gap-3">
+      <div class="drive-heading"><span class="folder-emblem" aria-hidden="true"><Folder class="h-6 w-6" /></span><h1>{{ t("drive.myFiles") }}</h1></div>
+      <div class="drive-tools">
         <DfBreadcrumbs :items="crumbs" @navigate="(id) => folders.navigateTo(id)" />
-        <DfInput v-model="search" class="min-w-[14rem] flex-1 sm:max-w-xs" :placeholder="t('drive.searchHere')">
+        <DfInput v-model="search" class="drive-search" :aria-label="t('drive.searchHere')" :placeholder="t('drive.searchHere')">
           <template #prefix><Search class="h-4 w-4 text-fg-muted" /></template>
         </DfInput>
-        <div class="flex items-center gap-2">
+        <div class="drive-actions">
           <DfButton variant="ghost" size="sm" data-testid="new-folder-btn" @click="newFolder">
             <template #icon><FolderPlus class="h-4 w-4" /></template>{{ t("drive.newFolder") }}
           </DfButton>
