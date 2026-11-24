@@ -1,8 +1,32 @@
 # DragonFox Drive
 
-A high-performance **end-to-end encrypted** cloud drive with a **zero-trust** backend.
+[![Latest stable release](https://img.shields.io/github/v/release/kagamir/dragonfox-drive)](https://github.com/kagamir/dragonfox-drive/releases/latest)
+[![Release binaries](https://github.com/kagamir/dragonfox-drive/actions/workflows/release-binaries.yml/badge.svg?event=push)](https://github.com/kagamir/dragonfox-drive/actions/workflows/release-binaries.yml)
+[![Container image](https://img.shields.io/badge/GHCR-container%20image-24655b?logo=docker&logoColor=white)](https://github.com/kagamir/dragonfox-drive/pkgs/container/dragonfox-drive)
+[![License](https://img.shields.io/github/license/kagamir/dragonfox-drive)](LICENSE)
 
-- Browser-first: users access everything via a web UI.
+A self-hosted, end-to-end encrypted cloud drive. Organize files, share links, and stream video in your browser.
+
+## Screenshots
+
+![Desktop file list showing folders, an encrypted PDF, and other sample files alongside search and upload controls](docs/screenshots/drive-list.webp)
+
+<details>
+<summary>Mobile grid in dark mode</summary>
+
+<img src="docs/screenshots/drive-mobile.webp" width="340" alt="Dark-mode mobile file grid with folders, documents, and a photo" />
+
+</details>
+
+<details>
+<summary>Sign-in page</summary>
+
+![Sign-in page with username and password fields in light mode](docs/screenshots/sign-in.webp)
+
+</details>
+
+## Features and security
+
 - All encryption happens in the browser. The **storage provider** (the host of
   the blobs + database, including backups and any DB/disk leak) only ever sees
   opaque ciphertext — never plaintext, file names, folder names, the folder
