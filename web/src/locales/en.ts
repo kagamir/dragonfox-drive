@@ -1,5 +1,12 @@
 // web/src/locales/en.ts
 export default {
+  imageDetails: {
+    title: "Photo details", view: "Image preview", zoomIn: "Zoom in", zoomOut: "Zoom out",
+    fit: "Fit to window", dimensions: "Dimensions", camera: "Camera", lens: "Lens",
+    focalLength: "Focal length", aperture: "Aperture", shutter: "Exposure time",
+    sensitivity: "ISO", captured: "Date taken", none: "No camera information found.",
+    unreadable: "Camera information could not be read.", unsupported: "This browser could not display the image.",
+  },
   common: {
     appName: "DragonFox Drive",
     cancel: "Cancel", confirm: "Confirm", delete: "Delete", close: "Close",
@@ -19,7 +26,20 @@ export default {
     regClosed: "Registration disabled",
     regClosedBody: "This instance is not accepting new accounts. Ask the operator, or sign in.",
   },
+  gallery: {
+    folderType: "Folder type",
+    auto: "Automatic",
+    normal: "General",
+    photos: "Photos",
+    saveFailed: "Couldn’t save the folder type. Please try again.",
+    upgradeServer: "Update the server to save folder types.",
+    listView: "List view",
+    gridView: "Grid view",
+    selectItem: "Select {name}",
+    actions: "Actions for {name}",
+  },
   drive: {
+    textReadError: "Unable to read this text file.",
     myFiles: "My files", newFolder: "New folder", searchHere: "Search this folder…",
     upload: "Upload", uploading: "Uploading", name: "Name", size: "Size", status: "Status",
     prev: "Previous", next: "Next", page: "Page {cur} / {total}",

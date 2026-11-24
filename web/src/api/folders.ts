@@ -14,7 +14,7 @@ export const foldersApi = {
     http.post<{ id: string }>("/api/folders", body),
 
   patch: (id: string, body: PatchFolderRequest) =>
-    http.patch<{ ok: true }>(`/api/folders/${id}`, body),
+    http.patch<{ ok: true; folder_type_updated?: boolean }>(`/api/folders/${id}`, body),
 
   remove: (id: string, body: DeleteFolderRequest) =>
     request<DeleteFolderResponse>(`/api/folders/${id}`, { method: "DELETE", body }),

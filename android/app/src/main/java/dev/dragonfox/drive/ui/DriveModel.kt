@@ -7,6 +7,9 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.dragonfox.drive.R
+import dev.dragonfox.drive.gallery.PhotoLoader
+import dev.dragonfox.drive.protocol.CloudFile
+import dev.dragonfox.drive.protocol.FolderType
 import dev.dragonfox.drive.protocol.CloudFolder
 import dev.dragonfox.drive.protocol.DriveClient
 import dev.dragonfox.drive.protocol.DriveSession
@@ -36,6 +39,10 @@ internal class DriveModel(private val app: Application) : AndroidViewModel(app) 
         private set
     var authError by mutableStateOf<String?>(null)
         private set
+    var photoLoader by mutableStateOf<PhotoLoader?>(null)
+        private set
+    var cloudFiles by mutableStateOf<List<CloudFile>>(emptyList())
+        private set
     var cloudFolders by mutableStateOf<List<CloudFolder>>(emptyList())
         private set
 
@@ -58,6 +65,7 @@ internal class DriveModel(private val app: Application) : AndroidViewModel(app) 
 
     private fun attach(api: DriveClient) {
         client = api
+        photoLoader = PhotoLoader(app, api)
         val session = api.session
         account = session
         val active = SyncEngine(app, api, session.server + "\n" + session.userId)
@@ -95,14 +103,31 @@ internal class DriveModel(private val app: Application) : AndroidViewModel(app) 
         }
     }
 
-    suspend fun refreshFolders() {
-        val api = client ?: return
+    private suspend fun <T> withDrive(
+        request: (DriveClient) -> T,
+        apply: (T) -> Unit,
+    ) {
+        val api = client ?: throw CancellationException()
         try {
-            val items = withContext(Dispatchers.IO) { api.listFolders() }
-            if (client === api) cloudFolders = items
+            val result = withContext(Dispatchers.IO) { request(api) }
+            if (client !== api) throw CancellationException()
+            apply(result)
         } catch (e: StatusException) {
             if (client === api && e.status == 401) signOut(expired = true)
             throw e
+        }
+    }
+
+    suspend fun refreshFolders() = withDrive(DriveClient::listFolders) { cloudFolders = it }
+
+    suspend fun refreshDrive() = withDrive({ api -> api.listFolders() to api.listFiles() }) { (folders, files) ->
+        cloudFolders = folders
+        cloudFiles = files
+    }
+
+    suspend fun setFolderType(id: String, type: FolderType) {
+        withDrive({ api -> api.setFolderType(id, type) }) {
+            cloudFolders = cloudFolders.map { if (it.id == id) it.copy(type = type) else it }
         }
     }
 
@@ -120,6 +145,9 @@ internal class DriveModel(private val app: Application) : AndroidViewModel(app) 
         engine = null
         client = null
         account = null
+        photoLoader?.clear()
+        photoLoader = null
+        cloudFiles = emptyList()
         cloudFolders = emptyList()
         busy = true
         authError = if (expired) app.getString(R.string.df_expired) else null

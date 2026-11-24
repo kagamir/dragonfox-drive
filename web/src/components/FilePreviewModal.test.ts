@@ -43,14 +43,13 @@ describe("FilePreviewModal", () => {
     w.unmount();
   });
 
-  it("renders decoded text for text kind", async () => {
-    vi.stubGlobal("URL", { createObjectURL: vi.fn(), revokeObjectURL: vi.fn() });
-    const w = mountAttached({ kind: "text", url: "blob:t", name: "a.txt" });
-    await flushPromises();
-    // wait for the fetch+decode cycle
-    await vi.waitFor(() => {
-      expect(document.body.querySelector("pre")?.textContent?.length).toBeGreaterThan(0);
-    });
+  it("reads decrypted text directly under the same-origin connection policy", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const w = mountAttached({ kind: "text", url: "blob:t", name: "a.txt", previewBlob: new Blob(["café"]) });
+    await vi.waitFor(() => expect(document.body.querySelector("pre")?.textContent).toBe("café"));
+    expect(fetchMock).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
     w.unmount();
   });
 
@@ -99,10 +98,6 @@ describe("FilePreviewModal", () => {
 });
 
 describe("FilePreviewModal text editing", () => {
-  function stubFetch(body: string) {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(body)));
-  }
-
   // useConfirm's state is module-level global; a dialog left open by a failed
   // assertion (or one this test intentionally opened) must not bleed into the
   // next test, so make sure it's always resolved & closed afterward.
@@ -111,8 +106,7 @@ describe("FilePreviewModal text editing", () => {
   });
 
   it("shows an edit button for text kind only when onSave is provided", async () => {
-    stubFetch("hello");
-    const w = mountAttached({ kind: "text", url: "blob:t", name: "a.txt", onSave: async () => {} });
+    const w = mountAttached({ kind: "text", url: "blob:t", previewBlob: new Blob(["hello"]), name: "a.txt", onSave: async () => {} });
     await flushPromises();
     expect(document.body.querySelector('[data-testid="edit-btn"]')).toBeTruthy();
     w.unmount();
@@ -124,8 +118,7 @@ describe("FilePreviewModal text editing", () => {
   });
 
   it("edit switches to a textarea seeded with the loaded text", async () => {
-    stubFetch("hello");
-    const w = mountAttached({ kind: "text", url: "blob:t", name: "a.txt", onSave: async () => {} });
+    const w = mountAttached({ kind: "text", url: "blob:t", previewBlob: new Blob(["hello"]), name: "a.txt", onSave: async () => {} });
     await vi.waitFor(() => {
       expect(document.body.querySelector("pre")?.textContent).toBe("hello");
     });
@@ -140,9 +133,8 @@ describe("FilePreviewModal text editing", () => {
   });
 
   it("save calls onSave with the draft and exits edit mode on resolve", async () => {
-    stubFetch("hello");
     const onSave = vi.fn().mockResolvedValue(undefined);
-    const w = mountAttached({ kind: "text", url: "blob:t", name: "a.txt", onSave });
+    const w = mountAttached({ kind: "text", url: "blob:t", previewBlob: new Blob(["hello"]), name: "a.txt", onSave });
     await vi.waitFor(() => {
       expect(document.body.querySelector("pre")?.textContent).toBe("hello");
     });
@@ -165,9 +157,8 @@ describe("FilePreviewModal text editing", () => {
   });
 
   it("stays in edit mode when onSave rejects", async () => {
-    stubFetch("hello");
     const onSave = vi.fn().mockRejectedValue(new Error("boom"));
-    const w = mountAttached({ kind: "text", url: "blob:t", name: "a.txt", onSave });
+    const w = mountAttached({ kind: "text", url: "blob:t", previewBlob: new Blob(["hello"]), name: "a.txt", onSave });
     await vi.waitFor(() => {
       expect(document.body.querySelector("pre")?.textContent).toBe("hello");
     });
@@ -205,8 +196,7 @@ describe("FilePreviewModal text editing", () => {
   });
 
   it("cancel with clean draft exits edit mode without confirm", async () => {
-    stubFetch("hello");
-    const w = mountAttached({ kind: "text", url: "blob:t", name: "a.txt", onSave: async () => {} });
+    const w = mountAttached({ kind: "text", url: "blob:t", previewBlob: new Blob(["hello"]), name: "a.txt", onSave: async () => {} });
     await vi.waitFor(() => {
       expect(document.body.querySelector("pre")?.textContent).toBe("hello");
     });
@@ -221,8 +211,7 @@ describe("FilePreviewModal text editing", () => {
   });
 
   it("cancel with dirty draft asks confirm; declining keeps the editor", async () => {
-    stubFetch("hello");
-    const w = mountAttached({ kind: "text", url: "blob:t", name: "a.txt", onSave: async () => {} });
+    const w = mountAttached({ kind: "text", url: "blob:t", previewBlob: new Blob(["hello"]), name: "a.txt", onSave: async () => {} });
     await vi.waitFor(() => {
       expect(document.body.querySelector("pre")?.textContent).toBe("hello");
     });
@@ -246,8 +235,7 @@ describe("FilePreviewModal text editing", () => {
   });
 
   it("cancel with dirty draft + confirm accept discards and exits", async () => {
-    stubFetch("hello");
-    const w = mountAttached({ kind: "text", url: "blob:t", name: "a.txt", onSave: async () => {} });
+    const w = mountAttached({ kind: "text", url: "blob:t", previewBlob: new Blob(["hello"]), name: "a.txt", onSave: async () => {} });
     await vi.waitFor(() => {
       expect(document.body.querySelector("pre")?.textContent).toBe("hello");
     });
@@ -270,8 +258,7 @@ describe("FilePreviewModal text editing", () => {
   });
 
   it("close with dirty draft asks confirm and only emits close when accepted", async () => {
-    stubFetch("hello");
-    const w = mountAttached({ kind: "text", url: "blob:t", name: "a.txt", onSave: async () => {} });
+    const w = mountAttached({ kind: "text", url: "blob:t", previewBlob: new Blob(["hello"]), name: "a.txt", onSave: async () => {} });
     await vi.waitFor(() => {
       expect(document.body.querySelector("pre")?.textContent).toBe("hello");
     });
@@ -302,9 +289,8 @@ describe("FilePreviewModal text editing", () => {
   });
 
   it("after a rejected onSave the save button is re-enabled", async () => {
-    stubFetch("hello");
     const onSave = vi.fn().mockRejectedValue(new Error("boom"));
-    const w = mountAttached({ kind: "text", url: "blob:t", name: "a.txt", onSave });
+    const w = mountAttached({ kind: "text", url: "blob:t", previewBlob: new Blob(["hello"]), name: "a.txt", onSave });
     await vi.waitFor(() => {
       expect(document.body.querySelector("pre")?.textContent).toBe("hello");
     });

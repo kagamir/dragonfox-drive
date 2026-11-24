@@ -14,7 +14,14 @@ import type {
 } from "@/api/types";
 import type { FileMeta } from "@/api/types";
 
+import { mediaKind } from "@/util/media";
+import { encrypt, decrypt } from "@/crypto/symmetric";
+
+export type FolderMode = "auto" | "normal" | "photos";
+export class FolderModeUnsupportedError extends Error {}
+
 export interface FolderNode {
+  mode?: FolderMode;
   id: string;
   parentId: string | null;
   folderKey: Uint8Array;
@@ -55,6 +62,29 @@ export const useFoldersStore = defineStore("folders", () => {
 
   function folderKeyOf(id: string): Uint8Array | undefined {
     return byId.value.get(id)?.folderKey;
+  }
+
+  const currentMode = computed<FolderMode>(() => currentFolderId.value === null
+    ? "normal" : byId.value.get(currentFolderId.value)?.mode ?? "auto");
+
+  const effectiveMode = computed<"normal" | "photos">(() => {
+    if (currentMode.value !== "auto") return currentMode.value;
+    const store = useFilesStore();
+    const ready = store.filesWithParent(currentFolderId.value).filter((file) => file.status === "ready");
+    const pictures = ready.filter((file) => mediaKind(store.displayMimes[file.id], store.displayNames[file.id]) === "image");
+    return pictures.length * 2 > ready.length ? "photos" : "normal";
+  });
+
+  async function setFolderMode(id: string, mode: FolderMode): Promise<void> {
+    const node = byId.value.get(id);
+    if (!node) throw new Error("Folder not found");
+    const enc = mode === "auto" ? null : await encrypt(node.folderKey, new TextEncoder().encode(mode));
+    const response = await foldersApi.patch(id, {
+      encrypted_type: enc ? toBase64(enc.ciphertext) : null,
+      encrypted_type_nonce: enc ? toBase64(enc.iv) : null,
+    });
+    if (!response.folder_type_updated) throw new FolderModeUnsupportedError("Update the DragonFox Drive server to save folder types.");
+    folders.value = folders.value.map((folder) => folder.id === id ? { ...folder, mode } : folder);
   }
 
   const breadcrumbs = computed<FolderNode[]>(() => {
@@ -127,6 +157,7 @@ export const useFoldersStore = defineStore("folders", () => {
         childrenOf.set(s.parentId, arr);
       }
       const keyById = new Map<string, Uint8Array>();
+      const modeById = new Map<string, FolderMode>();
       const nameById = new Map<string, string>();
       const queue: (string | null)[] = [null];
       const processed = new Set<string>();
@@ -151,6 +182,15 @@ export const useFoldersStore = defineStore("folders", () => {
             fromBase64(s.row.encrypted_name_nonce),
           );
           nameById.set(cid, name);
+          if (s.row.encrypted_type && s.row.encrypted_type_nonce) {
+            // Older rows omit these fields. Failure of this optional metadata
+            // must not make the names or children of the folder inaccessible.
+            try {
+              const bytes = await decrypt(folderKey, fromBase64(s.row.encrypted_type), fromBase64(s.row.encrypted_type_nonce));
+              const value = new TextDecoder().decode(bytes);
+              if (value === "normal" || value === "photos") modeById.set(cid, value);
+            } catch { /* fall back to automatic classification */ }
+          }
           queue.push(cid);
         }
       }
@@ -158,6 +198,7 @@ export const useFoldersStore = defineStore("folders", () => {
       folders.value = shape.map((s) => ({
         id: s.row.id,
         parentId: s.parentId,
+        mode: modeById.get(s.row.id) ?? "auto",
         folderKey: keyById.get(s.row.id)!,
         name: nameById.get(s.row.id) ?? "(encrypted)",
         createdAt: s.row.created_at,
@@ -301,6 +342,9 @@ export const useFoldersStore = defineStore("folders", () => {
   return {
     folders,
     currentFolderId,
+    currentMode,
+    effectiveMode,
+    setFolderMode,
     page,
     loading,
     error,

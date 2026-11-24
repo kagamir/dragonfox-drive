@@ -1,0 +1,23 @@
+<resources>
+    <string name="df_gallery_refresh">刷新文件</string>
+    <string name="df_folder_display">文件夹显示类型</string>
+    <string name="df_folder_auto">自动识别</string>
+    <string name="df_folder_normal">普通文件夹</string>
+    <string name="df_folder_photos">图片文件夹</string>
+    <string name="df_empty_drive_folder">文件夹为空。</string>
+    <string name="df_photos">图片</string>
+    <string name="df_other_files">其他文件</string>
+    <string name="df_no_preview">无法预览此图片</string>
+    <string name="df_no_exif">没有可显示的拍摄参数。</string>
+    <string name="df_camera_info">照片信息</string>
+    <string name="df_camera_make">相机厂商</string>
+    <string name="df_camera_model">相机型号</string>
+    <string name="df_camera_lens">镜头</string>
+    <string name="df_camera_date">拍摄时间</string>
+    <string name="df_camera_aperture">光圈</string>
+    <string name="df_camera_shutter">快门速度</string>
+    <string name="df_camera_iso">感光度 ISO</string>
+    <string name="df_camera_focal">焦距</string>
+    <string name="df_camera_dimensions">尺寸</string>
+    <string name="df_camera_location">拍摄坐标</string>
+</resources>

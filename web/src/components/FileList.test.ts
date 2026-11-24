@@ -1,10 +1,12 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 import FileList from "./FileList.vue";
 import { keyOf } from "./fileMenu";
 import { i18n } from "@/locales";
 import type { FileMeta } from "@/api/types";
 import type { Entry } from "./fileMenu";
+
+vi.mock("@/workers/crypto", () => ({ cryptoApi: {}, ensureCryptoReady: vi.fn() }));
 
 const global = { plugins: [i18n] } as const;
 
@@ -42,6 +44,31 @@ describe("FileList", () => {
     });
     expect(w.findAll("li").length).toBe(0);
     expect(w.text()).toMatch(/f1/);
+  });
+
+  it("keeps mixed entries actionable in photo tiles and opens the full image on click", async () => {
+    const photo = makeFile({ id: "photo" });
+    const w = mount(FileList, {
+      props: {
+        entries: [folderEntry("trips", "Trips"), fileEntry(photo), fileEntry(makeFile({ id: "doc" }))],
+        displayNames: { photo: "sunrise.jpg", doc: "notes.txt" },
+        search: "", view: "gallery",
+      },
+      global: { ...global, stubs: { FileThumbnail: true } },
+    });
+    expect(w.findAll("file-thumbnail-stub")).toHaveLength(2);
+    await w.get('button[aria-label="sunrise.jpg"]').trigger("click");
+    expect(w.emitted("openFile")?.[0]).toEqual([photo]);
+    await w.get('button[aria-label="Trips"]').trigger("click");
+    expect(w.emitted("openFolder")?.[0]).toEqual(["trips"]);
+    await w.get('input[aria-label="Select notes.txt"]').trigger("click");
+    expect(w.emitted("update:selection")?.[0]).toEqual([["filedoc"]]);
+    await w.get('button[aria-label="Actions for sunrise.jpg"]').trigger("click");
+    await flushPromises();
+    await w.get('[role="menu"]').findAll("button").find(b => b.text() === "Download")!.trigger("click");
+    expect(w.emitted("download")?.[0]).toEqual([photo]);
+    await w.setProps({ search: "sunrise" });
+    expect(w.findAll("file-thumbnail-stub")).toHaveLength(1);
   });
 
   it("renders list rows with the folder and file names", () => {

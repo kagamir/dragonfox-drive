@@ -72,7 +72,7 @@ internal fun PermissionPanel(onGrant: () -> Unit) {
 @Composable
 internal fun Dashboard(config: SyncConfig, status: SyncStatus, user: String, server: String,
     target: String, allowed: Boolean, onEdit: () -> Unit, onRefresh: () -> Unit, onPermission: () -> Unit,
-    onLogout: () -> Unit, onEnabled: (Boolean) -> Unit) {
+    onBrowse: () -> Unit, onLogout: () -> Unit, onEnabled: (Boolean) -> Unit) {
     var menu by remember { mutableStateOf(false) }
     val colors = MaterialTheme.colorScheme
     val context = LocalContext.current
@@ -88,6 +88,11 @@ internal fun Dashboard(config: SyncConfig, status: SyncStatus, user: String, ser
     }
     Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
         Header("DragonFox Drive") {
+            TextButton(onClick = onBrowse) {
+                Icon(painterResource(R.drawable.df_folder), null, Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(label(R.string.df_root))
+            }
             Box {
                 IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.AccountCircle, label(R.string.df_account)) }
                 DropdownMenu(menu, { menu = false }) {

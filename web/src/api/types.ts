@@ -131,6 +131,8 @@ export interface ChunkIndices {
 // ---- Folders (P3) -------------------------------------------------------
 
 export interface FolderInfo {
+  encrypted_type?: string | null;
+  encrypted_type_nonce?: string | null;
   id: string;
   encrypted_parent_id: string | null; // base64; null ≡ root
   encrypted_parent_id_nonce: string | null; // base64
@@ -143,6 +145,8 @@ export interface FolderInfo {
 }
 
 export interface CreateFolderRequest {
+  encrypted_type?: string | null;
+  encrypted_type_nonce?: string | null;
   encrypted_parent_id: string | null;
   encrypted_parent_id_nonce: string | null;
   encrypted_folder_key: string;
@@ -157,6 +161,8 @@ export interface CreateFolderRequest {
  * Use `undefined` (not null) for fields you do not want to change.
  */
 export interface PatchFolderRequest {
+  encrypted_type?: string | null;
+  encrypted_type_nonce?: string | null;
   encrypted_name?: string;
   encrypted_name_nonce?: string;
   encrypted_parent_id?: string | null;

@@ -1,5 +1,12 @@
 // web/src/locales/zh.ts
 export default {
+  imageDetails: {
+    title: "照片信息", view: "图片预览", zoomIn: "放大", zoomOut: "缩小",
+    fit: "适应窗口", dimensions: "像素尺寸", camera: "相机", lens: "镜头",
+    focalLength: "焦距", aperture: "光圈", shutter: "曝光时间",
+    sensitivity: "感光度 ISO", captured: "拍摄时间", none: "未找到相机拍摄信息。",
+    unreadable: "无法读取相机拍摄信息。", unsupported: "当前浏览器无法显示这张图片。",
+  },
   common: {
     appName: "DragonFox Drive",
     cancel: "取消", confirm: "确认", delete: "删除", close: "关闭",
@@ -19,7 +26,20 @@ export default {
     regClosed: "注册已关闭",
     regClosedBody: "此实例不接受新账号注册。请联系管理员，或直接登录。",
   },
+  gallery: {
+    folderType: "文件夹类型",
+    auto: "自动识别",
+    normal: "普通文件夹",
+    photos: "图片文件夹",
+    saveFailed: "文件夹类型保存失败，请重试。",
+    upgradeServer: "请升级服务器后再保存文件夹类型。",
+    listView: "列表视图",
+    gridView: "网格视图",
+    selectItem: "选择 {name}",
+    actions: "{name} 的操作",
+  },
   drive: {
+    textReadError: "无法读取此文本文件。",
     myFiles: "我的文件", newFolder: "新建文件夹", searchHere: "搜索当前文件夹…",
     upload: "上传", uploading: "上传中", name: "名称", size: "大小", status: "状态",
     prev: "上一页", next: "下一页", page: "第 {cur} / {total} 页",

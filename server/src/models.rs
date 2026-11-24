@@ -36,6 +36,8 @@ pub struct FolderRow {
     pub encrypted_folder_key_nonce: String,
     pub encrypted_name: String,
     pub encrypted_name_nonce: String,
+    pub encrypted_type: Option<String>,
+    pub encrypted_type_nonce: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }

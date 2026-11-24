@@ -7,9 +7,17 @@
 
 A self-hosted, end-to-end encrypted cloud drive. Organize files, share links, and stream video in your browser.
 
+## Folder views
+
+Open a folder on the web or under **My files** on Android. In **Automatic** mode it opens as a photo gallery when more than half of its directly contained files are images. A tie or an empty folder uses the ordinary view. Subfolders do not count toward the total and stay visible in either view. The drive root always uses the ordinary view.
+
+To choose a view yourself, use the folder type selector beside the folder name on the web, or open the folder’s **⋮** menu on Android. Choose an ordinary folder or a photo folder to keep that view as the contents change. Choose **Automatic** to resume detection. Manual choices are encrypted and sync across devices. Update the server to this version before saving a choice.
+
+In a photo folder, select a thumbnail to open and zoom the image. Expand the details panel to see any camera, lens, focal length, aperture, shutter speed, ISO and capture time recorded in the file. Clients decrypt photos and read their metadata locally. Supported image formats depend on the browser or Android device.
+
 ## Android auto-sync
 
-The native Kotlin client runs on Android 11 and later. Project releases built with Android support include a signed APK alongside the server binaries on the [Releases page](https://github.com/kagamir/dragonfox-drive/releases). [Download the standalone preview APK](https://github.com/kagamir/dragonfox-drive/releases/tag/android-v0.1.0-preview.1). The preview installs alongside the production app. Preview builds can have different signing certificates, so installing a later preview may require uninstalling the previous one and selecting the folders again.
+The native Kotlin client runs on Android 11 and later. Project releases built with Android support include a signed APK alongside the server binaries on the [Releases page](https://github.com/kagamir/dragonfox-drive/releases). [Download the standalone preview APK](https://github.com/kagamir/dragonfox-drive/releases/tag/android-v0.1.0-preview.2). The preview installs alongside the production app. Preview builds can have different signing certificates, so installing a later preview may require uninstalling the previous one and selecting the folders again.
 
 1. Open the app, enter the HTTPS address of your DragonFox server, and sign in or register.
 2. Grant **All files access** in Android settings. Under **Photos and videos**, select from folders containing media. Under **All files**, browse storage and select any folders you want to back up.

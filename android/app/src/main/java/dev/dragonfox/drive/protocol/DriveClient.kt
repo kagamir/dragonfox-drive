@@ -81,11 +81,11 @@ class DriveClient(session: DriveSession, private val onSession: (DriveSession) -
     }
 
     private fun request(
-        method: String, path: String, body: ByteArray? = null, binary: Boolean = false, onSent: ((Int) -> Unit)? = null
+        method: String, path: String, body: ByteArray? = null, binary: Boolean = false, expectedBytes: Int? = null, checkRead: (() -> Unit)? = null, onSent: ((Int) -> Unit)? = null
     ): ByteArray {
         val stale = session
         try {
-            return http.request(method, path, stale.accessToken, body, binary, onSent)
+            return http.request(method, path, stale.accessToken, body, binary, expectedBytes, checkRead, onSent)
         } catch (e: StatusException) {
             if (e.status != 401) throw e
         }
@@ -97,7 +97,7 @@ class DriveClient(session: DriveSession, private val onSession: (DriveSession) -
                 onSession(session)
             }
         }
-        return http.request(method, path, session.accessToken, body, binary, onSent)
+        return http.request(method, path, session.accessToken, body, binary, expectedBytes, checkRead, onSent)
     }
 
     private fun json(method: String, path: String, payload: JSONObject? = null): JSONObject =
@@ -130,13 +130,31 @@ class DriveClient(session: DriveSession, private val onSession: (DriveSession) -
                 val key = row.decryptField("encrypted_folder_key", wrappingKey)
                 check(keys.put(id, key) == null) { "云端文件夹 ID 重复" }
                 val name = WireCrypto.unpad(row.decryptField("encrypted_name", key)).decodeToString()
-                folders += CloudFolder(id, parent, name)
+                // Type is optional. An unreadable override must not block older clients' sync data.
+                val type = if (row.isNull("encrypted_type")) FolderType.AUTO else try {
+                    val wire = row.decryptField("encrypted_type", key).decodeToString()
+                    FolderType.entries.firstOrNull { it.wire == wire } ?: FolderType.AUTO
+                } catch (_: Exception) { FolderType.AUTO }
+                folders += CloudFolder(id, parent, name, type)
                 queue.add(id to key)
             }
         }
         check(folders.size == rows.size) { "云端目录树不完整，请刷新后重试" }
         folderKeys = keys
         folders
+    }
+
+    fun setFolderType(id: String, type: FolderType) {
+        require(id.isNotBlank()) { "Root folder has no type override" }
+        val body = JSONObject()
+        val wire = type.wire
+        if (wire == null) {
+            body.put("encrypted_type", JSONObject.NULL).put("encrypted_type_nonce", JSONObject.NULL)
+        } else {
+            body.putEncrypted("encrypted_type", WireCrypto.seal(keyFor(id), wire.toByteArray(Charsets.UTF_8)))
+        }
+        val result = json("PATCH", "/api/folders/$id", body)
+        if (!result.optBoolean("folder_type_updated", false)) throw IOException("Server does not support folder types")
     }
 
     fun createFolder(parentId: String?, name: String): CloudFolder = synchronized(folderLock) {
@@ -186,7 +204,7 @@ class DriveClient(session: DriveSession, private val onSession: (DriveSession) -
         val previous = synchronized(tokenLock) { session.pendingUploads - activeUploads }
         val rows = json("GET", "/api/files").getJSONArray("files")
         recoverInterruptedUploads(previous, rows)
-        val missingDigests = mutableMapOf<String, ChunkSource>()
+        val readableFiles = mutableMapOf<String, ChunkSource>()
         val result = mutableListOf<CloudFile>()
         for (i in 0 until rows.length()) {
             val row = rows.getJSONObject(i)
@@ -199,32 +217,45 @@ class DriveClient(session: DriveSession, private val onSession: (DriveSession) -
                 WireCrypto.unb64(row.getString("encrypted_manifest_nonce")))).decodeToString())
             val revision = digestHex(encrypted)
             val digest = manifest.optString("plaintext_sha256", "").takeIf { it.isNotEmpty() }
-            if (digest == null) {
-                missingDigests[id] = ChunkSource(fileKey, WireCrypto.unb64(manifest.getString("iv_base")),
+            val file = CloudFile(id, parent, manifest.getString("name"), manifest.getLong("size"), digest, revision,
+                manifest.optString("mime", ""), manifest.optString("created_at", "").takeIf { it.isNotBlank() })
+            if (digest == null || file.isImage) {
+                readableFiles[id] = ChunkSource(fileKey, WireCrypto.unb64(manifest.getString("iv_base")),
                     manifest.getString("content_id"), row.getInt("chunk_count"), revision)
             }
-            result += CloudFile(id, parent, manifest.getString("name"), manifest.getLong("size"), digest, revision)
+            result += file
         }
-        sources = missingDigests
+        sources = readableFiles
         return result
     }
 
     /** Older browser uploads omit the digest. Download only when sync needs to resolve a name + size collision. */
     fun contentSha256(file: CloudFile, onChunk: () -> Unit): String {
         file.sha256?.let { return it }
+        val digest = MessageDigest.getInstance("SHA-256")
+        readFile(file, onChunk) { bytes -> digest.update(bytes); true }
+        return WireCrypto.hex(digest.digest())
+    }
+
+    /** Stop after an authenticated chunk if the consumer has enough bytes for an embedded thumbnail. */
+    fun readFile(file: CloudFile, checkActive: () -> Unit, consume: (ByteArray) -> Boolean) {
         val source = sources[file.id]?.takeIf { it.revision == file.revision }
             ?: throw IOException("文件已变更，请重新扫描")
-        val digest = MessageDigest.getInstance("SHA-256")
+        require(file.size >= 0)
+        val expectedCount = if (file.size == 0L) 1L else (file.size - 1) / CHUNK_SIZE + 1
+        check(source.count.toLong() == expectedCount) { "Invalid encrypted chunk count" }
         var size = 0L
         repeat(source.count) { index ->
-            onChunk()
-            val bytes = request("GET", "/api/files/" + file.id + "/chunks/" + index)
-            val plain = WireCrypto.openChunk(source.key, source.iv, index, source.contentId, bytes)
-            digest.update(plain)
+            checkActive()
+            val expectedLength = minOf(file.size - size, CHUNK_SIZE.toLong()).toInt() + 16
+            val cipher = request("GET", "/api/files/${file.id}/chunks/$index", expectedBytes = expectedLength, checkRead = checkActive)
+            val plain = WireCrypto.openChunk(source.key, source.iv, index, source.contentId, cipher)
             size += plain.size
+            check(size <= file.size) { "云端文件长度与清单不一致" }
+            checkActive()
+            if (!consume(plain)) return
         }
         check(size == file.size) { "云端文件长度与清单不一致" }
-        return WireCrypto.hex(digest.digest())
     }
 
     fun upload(parentId: String?, file: File, mime: String, onProgress: (Long) -> Unit): CloudFile {

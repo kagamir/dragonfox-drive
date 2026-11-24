@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { onMounted, ref, computed } from "vue";
+import { onMounted, ref, computed, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuthStore } from "@/stores/auth";
 import { useFilesStore } from "@/stores/files";
-import { useFoldersStore } from "@/stores/folders";
+import { useFoldersStore, FolderModeUnsupportedError, type FolderMode } from "@/stores/folders";
 import { useConfirm } from "@/composables/useConfirm";
 import { usePrompt } from "@/composables/usePrompt";
 import { useToast } from "@/composables/useToast";
@@ -23,7 +23,7 @@ import DfContextMenu from "@/components/ui/DfContextMenu.vue";
 import FilePreviewModal from "@/components/FilePreviewModal.vue";
 import MovePickerModal from "@/components/MovePickerModal.vue";
 import ShareDialog from "@/components/ShareDialog.vue";
-import { Folder, List, LayoutGrid, FolderPlus, FilePlus, Search } from "lucide-vue-next";
+import { Images, Folder, List, LayoutGrid, FolderPlus, FilePlus, Search } from "lucide-vue-next";
 
 const { t } = useI18n();
 const auth = useAuthStore();
@@ -224,6 +224,32 @@ const crumbs = computed(() => [
 ]);
 const showPrev = computed(() => folders.page > 0);
 const showNext = computed(() => folders.page < folders.totalPages - 1);
+const gallery = computed(() => folders.effectiveMode === "photos");
+const title = computed(() => folders.breadcrumbs.at(-1)?.name ?? t("drive.myFiles"));
+const savingMode = ref(false);
+
+watch(() => folders.currentFolderId, () => {
+  search.value = "";
+  selection.value = [];
+});
+
+async function changeFolderMode(event: Event) {
+  const id = folders.currentFolderId;
+  if (!id || savingMode.value) return;
+  const select = event.target as HTMLSelectElement;
+  const next = select.value as FolderMode;
+  savingMode.value = true;
+  try {
+    await folders.setFolderMode(id, next);
+  } catch (error) {
+    toast.error(t(error instanceof FolderModeUnsupportedError ? "gallery.upgradeServer" : "gallery.saveFailed"));
+  } finally {
+    // A failed save or navigation must leave the control showing the stored value.
+    select.value = folders.currentMode;
+    savingMode.value = false;
+  }
+}
+
 const queueUploads = computed(() =>
   files.activeUploads.map((u) => ({ fileId: u.fileId, name: u.file.name, progress: u.progress, phase: u.phase })),
 );
@@ -233,7 +259,26 @@ const queueUploads = computed(() =>
   <div class="min-h-screen bg-bg">
     <AppHeader :username="auth.username ?? t('common.me')" active="drive" :show-upload="true" @upload="pickFile" />
     <UploadDropzone class="mx-auto w-full max-w-7xl px-4 py-6 md:px-6" @files="onFilesChosen">
-      <div class="drive-heading"><span class="folder-emblem" aria-hidden="true"><Folder class="h-6 w-6" /></span><h1>{{ t("drive.myFiles") }}</h1></div>
+      <div class="drive-heading flex-wrap">
+        <span class="folder-emblem shrink-0" aria-hidden="true">
+          <component :is="gallery ? Images : Folder" class="h-6 w-6" />
+        </span>
+        <h1 class="min-w-0 flex-1 truncate" :title="title">{{ title }}</h1>
+        <label v-if="folders.currentFolderId" class="flex items-center gap-2 text-sm font-medium tracking-normal text-fg-muted">
+          {{ t("gallery.folderType") }}
+          <select
+            data-testid="folder-mode"
+            class="rounded-lg border border-border bg-surface px-2 py-1.5 text-fg"
+            :value="folders.currentMode"
+            :disabled="savingMode"
+            @change="changeFolderMode"
+          >
+            <option value="auto">{{ t("gallery.auto") }}</option>
+            <option value="normal">{{ t("gallery.normal") }}</option>
+            <option value="photos">{{ t("gallery.photos") }}</option>
+          </select>
+        </label>
+      </div>
       <div class="drive-tools">
         <DfBreadcrumbs :items="crumbs" @navigate="(id) => folders.navigateTo(id)" />
         <DfInput v-model="search" class="drive-search" :aria-label="t('drive.searchHere')" :placeholder="t('drive.searchHere')">
@@ -246,7 +291,10 @@ const queueUploads = computed(() =>
           <DfButton variant="ghost" size="sm" data-testid="new-text-file-btn" @click="newTextFile">
             <template #icon><FilePlus class="h-4 w-4" /></template>{{ t("drive.newTextFile") }}
           </DfButton>
-          <DfSegmented v-model="view" :options="[{ value: 'list', icon: List }, { value: 'grid', icon: LayoutGrid }]" />
+          <DfSegmented v-if="!gallery" v-model="view" :options="[
+            { value: 'list', icon: List, ariaLabel: t('gallery.listView') },
+            { value: 'grid', icon: LayoutGrid, ariaLabel: t('gallery.gridView') },
+          ]" />
         </div>
       </div>
 
@@ -259,7 +307,7 @@ const queueUploads = computed(() =>
           :entries="folders.paginatedView"
           :display-names="files.displayNames"
           :search="search"
-          :view="view"
+          :view="gallery ? 'gallery' : view"
           :selection="selection"
           :sort-key="sortKey"
           :sort-dir="sortDir"
@@ -302,6 +350,7 @@ const queueUploads = computed(() =>
       v-if="files.preview"
       :kind="files.preview.kind"
       :url="files.preview.url"
+      :preview-blob="files.preview.previewBlob"
       :name="files.preview.name"
       :player="files.preview.player"
       :on-save="files.preview.kind === 'text' ? saveExistingText : null"

@@ -52,12 +52,16 @@ vi.mock("@/workers/crypto", () => ({
 }));
 
 const { filesWithParentMock, filesRefreshMock } = vi.hoisted(() => ({
-  filesWithParentMock: vi.fn(() => []),
+  filesWithParentMock: vi.fn<(_parent: string | null) => {id: string; status?: string}[]>(() => []),
   filesRefreshMock: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("@/api/files", () => ({ filesApi: {} }));
 vi.mock("@/stores/files", () => ({
-  useFilesStore: () => ({ filesWithParent: filesWithParentMock, refresh: filesRefreshMock }),
+  useFilesStore: () => ({
+    filesWithParent: filesWithParentMock, refresh: filesRefreshMock,
+    displayMimes: { jpg: "image/jpeg", raw: "application/octet-stream", vid: "video/mp4", doc: "application/pdf" },
+    displayNames: { raw: "camera.DNG", doc: "misleading.jpg" },
+  }),
 }));
 
 import { useFoldersStore } from "./folders";
@@ -114,6 +118,78 @@ describe("folders store", () => {
     expect(root.name).toBe("Root");
     expect(child.parentId).toBe("root");
     expect(child.name).toBe("Child");
+  });
+
+
+  it("infers from every directly contained ready file rather than the current page", () => {
+    const folders = useFoldersStore();
+    expect(folders.effectiveMode).toBe("normal");
+    const records = Array.from({ length: 52 }, (_, i) => ({ id: i < 26 ? "jpg" : "vid", status: "ready" }));
+    filesWithParentMock.mockReturnValue([...records, { id: "raw", status: "ready" }, { id: "doc", status: "pending" }]);
+    folders.navigateTo("album");
+    expect(folders.currentMode).toBe("auto");
+    expect(folders.effectiveMode).toBe("photos");
+    expect(filesWithParentMock).toHaveBeenCalledWith("album");
+    folders.navigateTo(null);
+    filesWithParentMock.mockReturnValue(records);
+    folders.navigateTo("other");
+    expect(folders.effectiveMode).toBe("normal");
+    folders.navigateTo("empty");
+    filesWithParentMock.mockReturnValue([]);
+    expect(folders.effectiveMode).toBe("normal");
+  });
+
+  it("reads the Android-compatible AES-GCM type vector and tolerates damaged optional metadata", async () => {
+    const key = Uint8Array.from({ length: 32 }, (_, i) => i);
+    useAuthStore().masterKey = key;
+    unwrapFolderKeyMock.mockResolvedValue(key);
+    decryptFolderNameMock.mockResolvedValue("Album");
+    listMock.mockResolvedValue({ folders: [
+      { ...row("album", null), encrypted_type: "N2q5b6qWUC8paaRe/2ZzmDDTvu7nMg==", encrypted_type_nonce: "AAECAwQFBgcICQoL" },
+      { ...row("broken", null), encrypted_type: "AA==", encrypted_type_nonce: "AA==" },
+    ] });
+    const folders = useFoldersStore();
+    await folders.loadTree();
+    folders.navigateTo("album");
+    expect(folders.currentMode).toBe("photos");
+    folders.navigateTo("broken");
+    expect(folders.currentMode).toBe("auto");
+    expect(folders.breadcrumbs[0].name).toBe("Album");
+  });
+
+  it("round-trips encrypted overrides across reloads and clears both fields on auto", async () => {
+    const auth = useAuthStore();
+    const key = new Uint8Array(32).fill(7);
+    auth.masterKey = key;
+    unwrapFolderKeyMock.mockResolvedValue(key);
+    decryptFolderNameMock.mockResolvedValue("Album");
+    listMock.mockResolvedValue({ folders: [row("album", null)] });
+    patchMock.mockResolvedValue({ ok: true, folder_type_updated: true });
+    const folders = useFoldersStore();
+    await folders.loadTree();
+    folders.navigateTo("album");
+    expect(folders.currentMode).toBe("auto");
+    await folders.setFolderMode("album", "photos");
+    expect(folders.effectiveMode).toBe("photos");
+    const [, metadata] = patchMock.mock.calls.at(-1)!;
+    expect(Object.keys(metadata).sort()).toEqual(["encrypted_type", "encrypted_type_nonce"]);
+    expect(atob(metadata.encrypted_type).length).toBe(6 + 16);
+    expect(atob(metadata.encrypted_type_nonce).length).toBe(12);
+    await folders.setFolderMode("album", "normal");
+    expect(folders.currentMode).toBe("normal");
+    listMock.mockResolvedValue({ folders: [{ ...row("album", null), ...metadata }] });
+    await folders.loadTree();
+    expect(folders.currentMode).toBe("photos");
+    await folders.renameFolder("album", "Renamed");
+    expect(patchMock.mock.calls.at(-1)![1]).not.toHaveProperty("encrypted_type");
+    expect(folders.currentMode).toBe("photos");
+    await folders.setFolderMode("album", "auto");
+    expect(patchMock).toHaveBeenLastCalledWith("album", { encrypted_type: null, encrypted_type_nonce: null });
+    expect(folders.currentMode).toBe("auto");
+
+    patchMock.mockResolvedValueOnce({ ok: true });
+    await expect(folders.setFolderMode("album", "normal")).rejects.toThrow();
+    expect(folders.currentMode).toBe("auto");
   });
 
   it("orphans (parent not in set) are surfaced as root", async () => {

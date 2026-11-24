@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { onMounted, ref, shallowRef } from "vue";
 import { useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { sharesApi } from "@/api/shares";
@@ -8,6 +8,7 @@ import { cryptoApi, ensureCryptoReady } from "@/workers/crypto";
 import { fromBase64, FILE_CHUNK_SIZE, type Manifest } from "@/crypto/file";
 import { kindOf, canPreview, type FileKind } from "@/crypto/preview";
 import FilePreviewModal from "@/components/FilePreviewModal.vue";
+import { displayMime } from "@/util/media";
 import DfButton from "@/components/ui/DfButton.vue";
 import DfInput from "@/components/ui/DfInput.vue";
 import FileTypeIcon from "@/components/FileTypeIcon.vue";
@@ -22,7 +23,8 @@ const message = ref<string | null>(null);
 const passwordInput = ref("");
 const manifest = ref<Manifest | null>(null);
 const fileKey = ref<Uint8Array | null>(null);
-const preview = ref<{
+const preview = shallowRef<{
+  previewBlob?: Blob;
   kind: FileKind;
   url: string;
   name: string;
@@ -114,13 +116,14 @@ async function submitPassword() {
 async function openPreview() {
   if (!manifest.value || !fileKey.value) return;
   const m = manifest.value;
-  const kind = kindOf(m.mime);
+  const mime = displayMime(m.mime, m.name);
+  const kind = kindOf(mime);
   const ivBase = fromBase64(m.iv_base);
   if (kind === "other" || !canPreview(kind, m.size)) {
     message.value = "Preview not supported for this file — use Download.";
     return;
   }
-  if (kind === "video" && ["video/mp4", "video/quicktime", "video/x-m4v"].includes(m.mime) && typeof MediaSource !== "undefined") {
+  if (kind === "video" && ["video/mp4", "video/quicktime", "video/x-m4v"].includes(mime) && typeof MediaSource !== "undefined") {
     preview.value = {
       kind, url: "", name: m.name,
       player: { fileKey: fileKey.value, ivBase, contentId: m.content_id, chunkSize: FILE_CHUNK_SIZE, totalSize: m.size, fetchChunk: fetchChunk },
@@ -133,11 +136,12 @@ async function openPreview() {
     const cipher = await fetchChunk(i);
     parts[i] = await cryptoApi.decryptChunk(fileKey.value, ivBase, i, cipher, m.content_id);
   }
-  const url = URL.createObjectURL(new Blob(parts as BlobPart[], { type: m.mime }));
+  const blob = new Blob(parts as BlobPart[], { type: mime });
+  const url = URL.createObjectURL(blob);
   if (preview.value && !preview.value.player && preview.value.url.startsWith("blob:")) {
     URL.revokeObjectURL(preview.value.url);
   }
-  preview.value = { kind, url, name: m.name, player: null };
+  preview.value = { kind, url, previewBlob: kind === "image" || kind === "text" ? blob : undefined, name: m.name, player: null };
 }
 
 async function download() {
@@ -209,7 +213,7 @@ onMounted(load);
 
       <FilePreviewModal
         v-if="preview"
-        :kind="preview.kind" :url="preview.url" :name="preview.name" :player="preview.player"
+        :kind="preview.kind" :url="preview.url" :preview-blob="preview.previewBlob" :name="preview.name" :player="preview.player"
         @close="closePreview" @error="(m: string) => (message = m)"
       />
     </div>

@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { ref } from "vue";
+import { ref, shallowRef } from "vue";
 
 import { filesApi } from "@/api/files";
 import { refreshAuthToken, ApiError } from "@/api/client";
@@ -9,6 +9,7 @@ import { useAuthStore } from "./auth";
 import { useFoldersStore } from "./folders";
 import { FILE_CHUNK_SIZE, chunkCount, newContentId, serializeManifest, toBase64, fromBase64, toHex, type Manifest } from "@/crypto/file";
 import { kindOf, canPreview, PREVIEW_CAPS, type FileKind } from "@/crypto/preview";
+import { displayMime } from "@/util/media";
 import type { WrappedKey } from "@/crypto/keys";
 
 export interface UploadSession {
@@ -67,13 +68,16 @@ export const useFilesStore = defineStore("files", () => {
   const uploadProgress = ref(0);
   const downloading = ref(false);
   const displayNames = ref<Record<string, string>>({});
+  const displayMimes = ref<Record<string, string>>({});
+  let refreshId = 0;
   const fileParents = ref<Record<string, string | null>>({});
   const activeUploads = ref<UploadSession[]>([]);
   const activeDownloads = ref<DownloadSession[]>([]);
-  const preview = ref<{
+  const preview = shallowRef<{
     meta: FileMeta;
     url: string;
     kind: FileKind;
+    previewBlob?: Blob;
     name: string;
     player?: { fileKey: Uint8Array; ivBase: Uint8Array; contentId: string; chunkSize: number; totalSize: number; fetchChunk: (idx: number) => Promise<Uint8Array> } | null;
   } | null>(null);
@@ -132,17 +136,34 @@ export const useFilesStore = defineStore("files", () => {
   async function refresh(): Promise<void> {
     loading.value = true;
     error.value = null;
+    const id = ++refreshId;
     try {
       const res = await filesApi.list();
+      if (refreshId !== id) return;
+      const previous = new Map(files.value.map((f) => [f.id, f]));
+      for (const f of res.files) {
+        const old = previous.get(f.id);
+        previous.delete(f.id);
+        if (old?.encrypted_manifest !== f.encrypted_manifest || old?.encrypted_manifest_nonce !== f.encrypted_manifest_nonce) {
+          delete displayNames.value[f.id];
+          delete displayMimes.value[f.id];
+        }
+        if (old?.encrypted_parent_id !== f.encrypted_parent_id || old?.encrypted_parent_id_nonce !== f.encrypted_parent_id_nonce) {
+          delete fileParents.value[f.id];
+        }
+      }
+      for (const removedId of previous.keys()) {
+        delete displayNames.value[removedId];
+        delete displayMimes.value[removedId];
+        delete fileParents.value[removedId];
+      }
       files.value = res.files;
-      void (async () => {
-        await decryptParents();
-        await decryptNames();
-      })();
+      await decryptParents(id);
+      await decryptNames(id);
     } catch (e) {
-      error.value = (e as Error).message;
+      if (id === refreshId) error.value = (e as Error).message;
     } finally {
-      loading.value = false;
+      if (id === refreshId) loading.value = false;
     }
   }
 
@@ -151,7 +172,8 @@ export const useFilesStore = defineStore("files", () => {
    * Never rejects — if the key is unavailable or a single manifest fails to
    * decrypt, we silently leave the file id as the display fallback.
    */
-  async function decryptNames(): Promise<void> {
+  async function decryptNames(id: number): Promise<void> {
+    if (id !== refreshId) return;
     try {
       masterKey();
     } catch {
@@ -164,11 +186,13 @@ export const useFilesStore = defineStore("files", () => {
         f.encrypted_manifest_nonce &&
         f.encrypted_file_key &&
         f.encrypted_file_key_nonce &&
-        !displayNames.value[f.id]
+        displayMimes.value[f.id] === undefined
       ) {
         try {
           const { manifest: m } = await unlockFile(f);
+          if (id !== refreshId) return;
           displayNames.value[f.id] = m.name;
+          displayMimes.value[f.id] = m.mime || "";
         } catch {
           /* leave id as the display fallback */
         }
@@ -176,7 +200,7 @@ export const useFilesStore = defineStore("files", () => {
     }
   }
 
-  async function decryptParents(): Promise<void> {
+  async function decryptParents(id: number): Promise<void> {
     let key: Uint8Array;
     try {
       key = masterKey();
@@ -187,12 +211,15 @@ export const useFilesStore = defineStore("files", () => {
       if (fileParents.value[f.id] === undefined) {
         if (f.encrypted_parent_id && f.encrypted_parent_id_nonce) {
           try {
-            fileParents.value[f.id] = await cryptoApi.decryptParentId(
+            const parent = await cryptoApi.decryptParentId(
               key,
               fromBase64(f.encrypted_parent_id),
               fromBase64(f.encrypted_parent_id_nonce),
             );
+            if (id !== refreshId) return;
+            fileParents.value[f.id] = parent;
           } catch {
+            if (id !== refreshId) return;
             fileParents.value[f.id] = null;
           }
         } else {
@@ -491,6 +518,7 @@ export const useFilesStore = defineStore("files", () => {
           : f,
       );
       displayNames.value[id] = newName;
+      displayMimes.value[id] = manifest.mime || "";
     } catch (e) {
       error.value = (e as Error).message;
       throw e;
@@ -642,9 +670,10 @@ export const useFilesStore = defineStore("files", () => {
     try {
       await ensureCryptoReady();
       const { fileKey, manifest } = await unlockFile(meta);
-      const kind = kindOf(manifest.mime);
+      const mime = displayMime(manifest.mime, manifest.name);
+      const kind = kindOf(mime);
       if (kind === "video") {
-        return await openVideo(meta, manifest, fileKey);
+        return await openVideo(meta, { ...manifest, mime }, fileKey);
       }
       if (kind === "other") {
         error.value = "Preview is not supported for this file type — use Download.";
@@ -666,11 +695,12 @@ export const useFilesStore = defineStore("files", () => {
           parts[i] = await cryptoApi.decryptChunk(fileKey, ivBase, i, cipher, manifest.content_id);
         },
       );
-      const blob = new Blob(parts as BlobPart[], { type: manifest.mime });
+      const blob = new Blob(parts as BlobPart[], { type: mime });
       if (preview.value) URL.revokeObjectURL(preview.value.url);
       preview.value = {
         meta,
         url: URL.createObjectURL(blob),
+        previewBlob: kind === "image" || kind === "text" ? blob : undefined,
         kind,
         name: manifest.name,
       };
@@ -699,6 +729,7 @@ export const useFilesStore = defineStore("files", () => {
     uploadProgress,
     downloading,
     displayNames,
+    displayMimes,
     activeUploads,
     activeDownloads,
     fileParents,

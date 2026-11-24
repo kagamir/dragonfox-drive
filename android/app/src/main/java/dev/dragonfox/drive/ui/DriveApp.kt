@@ -118,11 +118,15 @@ internal fun DriveApp(model: DriveModel) {
                                 "home" -> Dashboard(config, status, model.account?.username.orEmpty(), model.account?.server.orEmpty(),
                                     remoteLabel(config.remoteFolderId, model.cloudFolders), allowed,
                                     onEdit = { edit(false) }, onRefresh = engine::rescan,
-                                    onPermission = ::requestAccess, onLogout = { confirmLogout = true },
+                                    onBrowse = { page = "drive" }, onPermission = ::requestAccess, onLogout = { confirmLogout = true },
                                     onEnabled = { enabled ->
                                         if (enabled && (!allowed || config.localFolders.isEmpty())) edit(true)
                                         else engine.configure(config.copy(enabled = enabled))
                                     })
+                                "drive" -> model.photoLoader?.let { loader ->
+                                    CloudBrowser(model.cloudFolders, model.cloudFiles, model::refreshDrive, model::setFolderType,
+                                        loader::load, onExit = ::back)
+                                }
                                 "edit" -> SyncEditor(SyncMode.valueOf(mode), folders, remoteLabel(target, model.cloudFolders),
                                     allowed, ::requestAccess, { page = "local" }, { page = "cloud" }, ::back,
                                     onSave = {

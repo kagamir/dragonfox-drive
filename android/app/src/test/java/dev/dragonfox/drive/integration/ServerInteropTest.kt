@@ -1,6 +1,7 @@
 package dev.dragonfox.drive.integration
 
 import dev.dragonfox.drive.protocol.DriveClient
+import dev.dragonfox.drive.protocol.FolderType
 import dev.dragonfox.drive.protocol.DriveSession
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -43,11 +44,12 @@ class ServerInteropTest {
             val registered = DriveClient.register(server, username, password) {}
             val root = registered.createFolder(null, "手机同步")
             val album = registered.createFolder(root.id, "Pictures")
-            val sample = temp.newFile("星图.bin")
+            registered.setFolderType(album.id, FolderType.PHOTOS)
+            val sample = temp.newFile("星图.jpg")
             val bytes = ByteArray(4 * 1024 * 1024 + 253) { index -> (index % 251).toByte() }
             sample.writeBytes(bytes)
             var transferred = 0L
-            val uploaded = registered.upload(album.id, sample, "application/octet-stream") {
+            val uploaded = registered.upload(album.id, sample, "image/jpeg") {
                 transferred = it
             }
             assertEquals(sample.length(), transferred)
@@ -65,13 +67,20 @@ class ServerInteropTest {
             val restored = DriveClient(expired) { session = it }
             val folders = restored.listFolders()
             assertTrue(oldRefresh != session.refreshToken)
-            assertTrue(folders.any { it.name == "Pictures" && it.parentId == root.id })
+            assertTrue(folders.any { it.name == "Pictures" && it.parentId == root.id && it.type == FolderType.PHOTOS })
             val listing = restored.listFiles()
             val copy = listing.single { it.id == uploaded.id }
             assertEquals(album.id, copy.parentId)
             assertEquals(sample.name, copy.name)
             assertEquals(sample.length(), copy.size)
             assertEquals(sha256(bytes), copy.sha256)
+            // A current manifest has a hash, whereas earlier web uploads omitted it.
+            // The viewer can still decrypt the complete original from this freshly restored account.
+            val decrypted = MessageDigest.getInstance("SHA-256")
+            restored.readFile(copy, {}) { decrypted.update(it); true }
+            assertEquals(sha256(bytes), decrypted.digest().joinToString("") { "%02x".format(it) })
+            restored.setFolderType(album.id, FolderType.AUTO)
+            assertEquals(FolderType.AUTO, restored.listFolders().single { it.id == album.id }.type)
             val marker = listing.single { it.name == empty.name }
             assertEquals(null, marker.parentId)
             assertEquals(0L, marker.size)

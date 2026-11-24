@@ -11,6 +11,10 @@ import { ApiError } from "@/api/client";
 // Mutable, per-test-controllable stub state. vi.hoisted makes `STUB` available
 // to the vi.mock factories below (which run at module load) and to each test.
 const STUB = vi.hoisted(() => ({
+  currentFolderId: null as string | null,
+  currentMode: "auto",
+  effectiveMode: "normal",
+  setFolderMode: vi.fn().mockResolvedValue(undefined),
   paginatedView: [] as Array<{ kind: "folder" | "file"; folder?: { id: string; name: string }; file?: FileMeta }>,
   files: [] as FileMeta[],
   preview: null as { meta: FileMeta; url: string; kind: string; name: string; player?: unknown } | null,
@@ -45,8 +49,13 @@ vi.mock("@/stores/files", () => ({
   }),
 }));
 vi.mock("@/stores/folders", () => ({
+  FolderModeUnsupportedError: class extends Error {},
   useFoldersStore: () => ({
-    folders: [], currentFolderId: null, page: 0, loading: false, error: null,
+    folders: [],
+    get currentFolderId() { return STUB.currentFolderId; },
+    get currentMode() { return STUB.currentMode; },
+    get effectiveMode() { return STUB.effectiveMode; },
+    setFolderMode: STUB.setFolderMode, page: 0, loading: false, error: null,
     breadcrumbs: [], totalPages: 1,
     get paginatedView() { return STUB.paginatedView; },
     loadTree: STUB.loadTree, navigateTo: vi.fn(), setPage: vi.fn(),
@@ -82,6 +91,10 @@ const stubs = { RouterLink: { template: "<slot />" } };
 
 describe("DriveView", () => {
   beforeEach(() => {
+    STUB.currentFolderId = null;
+    STUB.currentMode = "auto";
+    STUB.effectiveMode = "normal";
+    STUB.setFolderMode.mockClear();
     STUB.paginatedView = [];
     STUB.files = [];
     STUB.preview = null;
@@ -99,9 +112,26 @@ describe("DriveView", () => {
     const w = mount(DriveView, { global: { stubs, plugins: [i18n] } });
     await flushPromises();
     expect(w.text()).toMatch(/DragonFox/);
+    expect(w.find('[data-testid="folder-mode"]').exists()).toBe(false);
     // Breadcrumb root label is i18n-driven (drive.myFiles); assert by data-testid
     // rather than locking to a translated literal so the test is locale-agnostic.
     expect(w.find('[data-testid="new-folder-btn"]').exists()).toBe(true);
+  });
+
+  it("opens photo folders in the gallery and restores the folder type after a failed save", async () => {
+    setActivePinia(createPinia());
+    STUB.currentFolderId = "album";
+    STUB.effectiveMode = "photos";
+    STUB.paginatedView = [{ kind: "file", file: makeFile("photo") }];
+    const w = mount(DriveView, { global: { stubs: { ...stubs, FileThumbnail: true }, plugins: [i18n] } });
+    await flushPromises();
+    expect(w.find('[data-view="gallery"]').exists()).toBe(true);
+    const select = w.get('[data-testid="folder-mode"]');
+    STUB.setFolderMode.mockRejectedValueOnce(new Error("offline"));
+    await select.setValue("normal");
+    await flushPromises();
+    expect(STUB.setFolderMode).toHaveBeenCalledWith("album", "normal");
+    expect((select.element as HTMLSelectElement).value).toBe("auto");
   });
 
   describe("bulk delete", () => {

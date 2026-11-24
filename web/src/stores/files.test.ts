@@ -115,6 +115,33 @@ describe("files store", () => {
       class { static isTypeSupported = () => true; };
   });
 
+  it("updates cached names and media types when a remote manifest changes or disappears", async () => {
+    useAuthStore().masterKey = new Uint8Array(32);
+    const files = useFilesStore();
+    const row = {
+      id: "f1", owner_id: "u", status: "ready" as const, total_size: 2, chunk_count: 1,
+      encrypted_manifest: "YQ==", encrypted_manifest_nonce: "YQ==",
+      encrypted_file_key: "YQ==", encrypted_file_key_nonce: "YQ==",
+      encrypted_parent_id: null, encrypted_parent_id_nonce: null, created_at: "", updated_at: "",
+    };
+    vi.mocked(filesApi.list).mockResolvedValueOnce({ files: [row] });
+    await files.refresh();
+    expect(files.displayMimes.f1).toBe("text/plain");
+    const manifest = {
+      version: 1, name: "photo", mime: "image/jpeg", size: 2, created_at: "",
+      iv_base: "", content_id: "", chunk_size: 4 * 1024 * 1024,
+    };
+    vi.mocked(cryptoApi.decryptManifestWithKey).mockResolvedValueOnce(manifest);
+    vi.mocked(filesApi.list).mockResolvedValueOnce({ files: [{ ...row, encrypted_manifest: "Yg==" }] });
+    await files.refresh();
+    expect(files.displayNames.f1).toBe("photo");
+    expect(files.displayMimes.f1).toBe("image/jpeg");
+    vi.mocked(filesApi.list).mockResolvedValueOnce({ files: [] });
+    await files.refresh();
+    expect(files.displayMimes.f1).toBeUndefined();
+    expect(files.displayNames.f1).toBeUndefined();
+  });
+
   it("upload runs create → putManifest → putChunk → finalize", async () => {
     const auth = useAuthStore();
     auth.masterKey = new Uint8Array(32) as any;
@@ -252,6 +279,31 @@ describe("files store", () => {
     expect(files.preview).not.toBeNull();
     expect(files.preview!.kind).toBe("text");
     expect(files.preview!.url).toBe("blob:p");
+  });
+
+  it.each([
+    ["application/octet-stream", "image", "image/jpeg"],
+    ["", "image", "image/jpeg"],
+    ["text/plain", "text", "text/plain"],
+  ])("opens .JPG with declared MIME %j as %s", async (mime, kind, blobType) => {
+    useAuthStore().masterKey = new Uint8Array(32);
+    const makeUrl = vi.fn((_blob: Blob) => "blob:preview");
+    vi.stubGlobal("URL", { createObjectURL: makeUrl, revokeObjectURL: vi.fn() });
+    try {
+      vi.mocked(cryptoApi.decryptManifestWithKey).mockResolvedValueOnce({
+        version: 1, name: "photo.JPG", mime, size: 2, created_at: "",
+        iv_base: "AAAA", content_id: "ab".repeat(16), chunk_size: 4 * 1024 * 1024,
+      });
+      const store = useFilesStore();
+      await store.openPreview({
+        id: "f1", owner_id: "u", status: "ready", total_size: 2, chunk_count: 1,
+        encrypted_manifest: "YQ==", encrypted_manifest_nonce: "YQ==",
+        encrypted_file_key: "YQ==", encrypted_file_key_nonce: "YQ==", created_at: "", updated_at: "",
+      });
+      expect(store.preview?.kind).toBe(kind);
+      expect(makeUrl.mock.calls[0][0].type).toBe(blobType);
+      expect(store.preview?.previewBlob).toBe(makeUrl.mock.calls[0][0]);
+    } finally { vi.unstubAllGlobals(); }
   });
 
   it("openPreview rejects files that are too large to preview", async () => {

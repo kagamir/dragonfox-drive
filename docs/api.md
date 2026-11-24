@@ -300,6 +300,8 @@ Response:
       "encrypted_folder_key_nonce": "<base64>",
       "encrypted_name": "<base64>",
       "encrypted_name_nonce": "<base64>",
+      "encrypted_type": null,
+      "encrypted_type_nonce": null,
       "created_at": "2026-06-22T10:00:00Z",
       "updated_at": "2026-06-22T10:00:00Z"
     }
@@ -311,6 +313,14 @@ Response:
 `master_key` (never the folder's own key); `encrypted_folder_key` is wrapped
 by the parent folder's `folder_key` (or `master_key` for a root folder);
 `encrypted_name` is encrypted with the folder's own `folder_key`.
+
+Clients infer the view from the ready files directly inside each folder. An
+explicit preference overrides inference. For an override, encrypt the six
+UTF-8 bytes of `normal` or `photos` using the folder’s own AES-256-GCM key,
+a fresh 12-byte nonce and no additional authenticated data. Store the
+ciphertext including its authentication tag and the nonce as standard Base64.
+Two nulls select automatic mode. A missing pair from an older server also
+selects automatic mode. The drive root is virtual and has no preference.
 
 ### `POST /api/folders`
 
@@ -328,11 +338,13 @@ by the parent folder's `folder_key` (or `master_key` for a root folder);
 For a root folder, omit `encrypted_parent_id` and `encrypted_parent_id_nonce`
 (or send them as `null`).
 
+The optional `encrypted_type` and `encrypted_type_nonce` pair can be set at creation.
+
 Response: `{ "id": "uuid" }`.
 
 ### `PATCH /api/folders/:id`
 
-Renames and/or moves a folder. The client supplies the already re-encrypted
+Renames or moves a folder, or changes its view preference. The client supplies the already re-encrypted
 fields; the server does no crypto. Send only the fields you want to change:
 
 ```json
@@ -346,6 +358,7 @@ fields; the server does no crypto. Send only the fields you want to change:
 }
 ```
 
+- **Folder type:** send `encrypted_type` and `encrypted_type_nonce` together, or send two nulls to restore automatic mode. A successful type update includes `"folder_type_updated": true` in the response. Omitting both keys preserves the existing preference.
 - **Rename:** send `encrypted_name` + `encrypted_name_nonce`.
 - **Move:** send the new `encrypted_parent_id`(+`_nonce`). On a move the
   client must re-wrap the folder's key under the new parent (or `master_key`

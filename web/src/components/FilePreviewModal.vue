@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type { FileKind } from "@/crypto/preview";
 import type { PlayerPayload } from "@/player/msePlayer";
 import Mp4Player from "./Mp4Player.vue";
+import ImageViewer from "./ImageViewer.vue";
 import DfModal from "@/components/ui/DfModal.vue";
 import DfButton from "@/components/ui/DfButton.vue";
 import { useConfirm } from "@/composables/useConfirm";
@@ -11,6 +12,7 @@ import { useConfirm } from "@/composables/useConfirm";
 const props = defineProps<{
   kind: FileKind;
   url: string;
+  previewBlob?: Blob;
   name: string;
   player?: PlayerPayload | null;
   /** Enables text editing. Resolve = saved (edit mode exits); reject = keep
@@ -29,11 +31,19 @@ const draft = ref("");
 const saving = ref(false);
 const dirty = computed(() => editing.value && draft.value !== text.value);
 
-async function loadText() {
-  try { text.value = await (await fetch(props.url)).text(); }
-  catch { text.value = "(unable to decode text)"; }
-}
-onMounted(() => { if (props.kind === "text" && props.url) void loadText(); });
+watch(() => props.previewBlob, async (blob, _, onCleanup) => {
+  if (props.kind !== "text" || props.startEditing) return;
+  let current = true;
+  onCleanup(() => { current = false; });
+  text.value = "";
+  if (!blob) return;
+  try {
+    const decoded = await blob.text();
+    if (current) text.value = decoded;
+  } catch {
+    if (current) text.value = t("drive.textReadError");
+  }
+}, { immediate: true });
 
 function startEdit() { draft.value = text.value; editing.value = true; }
 async function cancelEdit() {
@@ -58,9 +68,9 @@ async function requestClose() {
 
 <template>
   <Mp4Player v-if="player" :payload="player" :name="name" @close="emit('close')" @error="(m) => emit('error', m)" />
-  <DfModal v-else :open="true" :title="name" size="lg" @close="requestClose">
+  <DfModal v-else :open="true" :title="name" :size="kind === 'image' ? 'photo' : 'lg'" @close="requestClose">
     <div class="flex flex-col items-center gap-3">
-      <img v-if="kind === 'image'" :src="url" :alt="name" class="max-h-[70vh] max-w-full rounded-lg" />
+      <ImageViewer v-if="kind === 'image'" :key="url" :url="url" :blob="previewBlob" :name="name" />
       <template v-else-if="kind === 'text'">
         <textarea
           v-if="editing"

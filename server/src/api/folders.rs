@@ -7,6 +7,7 @@ use axum::{
     extract::{Path, State},
     Json,
 };
+use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -25,6 +26,8 @@ pub struct FolderMeta {
     pub encrypted_folder_key_nonce: String,
     pub encrypted_name: String,
     pub encrypted_name_nonce: String,
+    pub encrypted_type: Option<String>,
+    pub encrypted_type_nonce: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -39,6 +42,8 @@ impl From<FolderRow> for FolderMeta {
             encrypted_folder_key_nonce: r.encrypted_folder_key_nonce,
             encrypted_name: r.encrypted_name,
             encrypted_name_nonce: r.encrypted_name_nonce,
+            encrypted_type: r.encrypted_type,
+            encrypted_type_nonce: r.encrypted_type_nonce,
             created_at: r.created_at,
             updated_at: r.updated_at,
         }
@@ -52,7 +57,7 @@ pub async fn list(
     let rows: Vec<FolderRow> = sqlx::query_as(
         "SELECT id, encrypted_parent_id, encrypted_parent_id_nonce, \
          encrypted_folder_key, encrypted_folder_key_nonce, \
-         encrypted_name, encrypted_name_nonce, created_at, updated_at \
+         encrypted_name, encrypted_name_nonce, encrypted_type, encrypted_type_nonce, created_at, updated_at \
          FROM folders WHERE owner_id = ? ORDER BY created_at ASC",
     )
     .bind(&user.user_id)
@@ -60,6 +65,20 @@ pub async fn list(
     .await?;
     let folders: Vec<FolderMeta> = rows.into_iter().map(FolderMeta::from).collect();
     Ok(Json(json!({ "folders": folders })))
+}
+
+// A type update must be atomic. Omitted keys preserve the current preference;
+// two nulls clear it. Only clients with the folder key interpret the payload.
+fn validate_type_fields(obj: &serde_json::Map<String, Value>) -> ApiResult<()> {
+    match (obj.get("encrypted_type"), obj.get("encrypted_type_nonce")) {
+        (None, None) | (Some(Value::Null), Some(Value::Null)) => Ok(()),
+        (Some(Value::String(cipher)), Some(Value::String(nonce)))
+            if STANDARD.decode(cipher).is_ok_and(|bytes| bytes.len() > 16)
+                && STANDARD.decode(nonce).is_ok_and(|bytes| bytes.len() == 12) => Ok(()),
+        _ => Err(ApiError::BadRequest(
+            "expected encrypted_type and encrypted_type_nonce as a ciphertext/nonce pair or two nulls".into(),
+        )),
+    }
 }
 
 pub async fn create(
@@ -70,6 +89,7 @@ pub async fn create(
     let obj = req
         .as_object()
         .ok_or_else(|| ApiError::BadRequest("expected object".into()))?;
+    validate_type_fields(obj)?;
     let get_str = |k: &str| -> ApiResult<String> {
         obj.get(k)
             .and_then(|v| v.as_str())
@@ -89,8 +109,8 @@ pub async fn create(
     sqlx::query(
         "INSERT INTO folders (id, owner_id, encrypted_parent_id, encrypted_parent_id_nonce, \
          encrypted_folder_key, encrypted_folder_key_nonce, \
-         encrypted_name, encrypted_name_nonce) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+         encrypted_name, encrypted_name_nonce, encrypted_type, encrypted_type_nonce) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(&user.user_id)
@@ -100,6 +120,8 @@ pub async fn create(
     .bind(&encrypted_folder_key_nonce)
     .bind(&encrypted_name)
     .bind(&encrypted_name_nonce)
+    .bind(obj.get("encrypted_type").and_then(Value::as_str))
+    .bind(obj.get("encrypted_type_nonce").and_then(Value::as_str))
     .execute(&state.db)
     .await?;
     Ok(Json(json!({ "id": id })))
@@ -114,11 +136,14 @@ pub async fn patch(
     let obj = req
         .as_object()
         .ok_or_else(|| ApiError::BadRequest("expected object".into()))?;
+    validate_type_fields(obj)?;
     let now = chrono::Utc::now().to_rfc3339();
     let mut updates: Vec<(&str, Option<String>)> = Vec::new();
     updates.push(("updated_at", Some(now)));
 
     for (json_key, col) in [
+        ("encrypted_type", "encrypted_type"),
+        ("encrypted_type_nonce", "encrypted_type_nonce"),
         ("encrypted_name", "encrypted_name"),
         ("encrypted_name_nonce", "encrypted_name_nonce"),
         ("encrypted_parent_id", "encrypted_parent_id"),
@@ -160,7 +185,11 @@ pub async fn patch(
     if res.rows_affected() == 0 {
         return Err(ApiError::NotFound);
     }
-    Ok(Json(json!({ "ok": true })))
+    let mut response = json!({ "ok": true });
+    if obj.contains_key("encrypted_type") {
+        response["folder_type_updated"] = json!(true);
+    }
+    Ok(Json(response))
 }
 
 pub async fn delete(
@@ -309,6 +338,45 @@ mod tests {
             .bind(id).fetch_one(&state.db).await.unwrap();
         assert_eq!(row.0, "n2");
         assert!(row.1.is_none(), "parent must be untouched by a rename");
+    }
+
+    #[tokio::test]
+    async fn folder_type_round_trips_and_survives_unrelated_edits() {
+        let (state, _guard) = folders_state().await;
+        seed_user(&state, "owner").await;
+        seed_user(&state, "other").await;
+        let created = create(State(state.clone()), auth("owner"), Json(create_body(None))).await.unwrap();
+        let id = created.0["id"].as_str().unwrap();
+        let read_row = || async {
+            list(State(state.clone()), auth("owner")).await.unwrap().0["folders"][0].clone()
+        };
+        assert!(read_row().await["encrypted_type"].is_null());
+        let payload = json!({
+            "encrypted_type": STANDARD.encode([1u8; 22]),
+            "encrypted_type_nonce": STANDARD.encode([2u8; 12])
+        });
+        let update = |who, fields| patch(State(state.clone()), auth(who), Path(id.to_owned()), Json(fields));
+        assert!(matches!(update("other", payload.clone()).await, Err(ApiError::NotFound)));
+        assert_eq!(update("owner", payload.clone()).await.unwrap().0["folder_type_updated"], true);
+        let _ = update("owner", json!({ "encrypted_name": "renamed", "encrypted_name_nonce": "nonce" })).await.unwrap();
+        let row = read_row().await;
+        assert_eq!(row["encrypted_type"], payload["encrypted_type"]);
+        assert_eq!(row["encrypted_type_nonce"], payload["encrypted_type_nonce"]);
+        let _ = update("owner", json!({ "encrypted_type": null, "encrypted_type_nonce": null })).await.unwrap();
+        let cleared = read_row().await;
+        assert!(cleared["encrypted_type"].is_null() && cleared["encrypted_type_nonce"].is_null());
+    }
+
+    #[test]
+    fn type_changes_require_a_matching_ciphertext_and_nonce() {
+        for invalid in [
+            json!({ "encrypted_type": null }),
+            json!({ "encrypted_type_nonce": null }),
+            json!({ "encrypted_type": null, "encrypted_type_nonce": "abc" }),
+            json!({ "encrypted_type": "photos", "encrypted_type_nonce": "invalid" }),
+        ] {
+            assert!(matches!(validate_type_fields(invalid.as_object().unwrap()), Err(ApiError::BadRequest(_))));
+        }
     }
 
     #[tokio::test]

@@ -2,6 +2,7 @@
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import type { FileMeta } from "@/api/types";
+import FileThumbnail from "@/components/FileThumbnail.vue";
 import FileTypeIcon from "@/components/FileTypeIcon.vue";
 import DfBadge from "@/components/ui/DfBadge.vue";
 import DfEmpty from "@/components/ui/DfEmpty.vue";
@@ -13,7 +14,7 @@ const props = withDefaults(defineProps<{
   entries: Entry[];
   displayNames: Record<string, string>;
   search: string;
-  view?: "list" | "grid";
+  view?: "list" | "grid" | "gallery";
   selection?: string[];
   sortKey?: SortKey;
   sortDir?: "asc" | "desc";
@@ -46,6 +47,11 @@ const { t } = useI18n();
 const lastSelected = ref<string | null>(null);
 
 function fname(f: FileMeta): string { return props.displayNames[f.id] ?? f.id; }
+function entryName(e: Entry) { return e.kind === "folder" ? e.folder.name : fname(e.file); }
+function openEntry(e: Entry) {
+  if (e.kind === "folder") emit("openFolder", e.folder.id);
+  else emit("openFile", e.file);
+}
 function fmtSize(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
@@ -140,18 +146,61 @@ function onContextmenu(ev: MouseEvent, e: Entry) {
 <template>
   <DfEmpty v-if="!sorted.length" :title="t('drive.empty')" :description="t('drive.emptyDesc')" />
   <template v-else>
-    <div v-if="view === 'grid'" class="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-      <button
+    <div
+      v-if="view !== 'list'"
+      :class="view === 'gallery'
+        ? 'grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5'
+        : 'grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5'"
+      :data-view="view"
+    >
+      <div
         v-for="e in sorted"
         :key="keyOf(e)"
-        class="flex flex-col items-center gap-2 rounded-xl border border-border bg-surface p-4 text-center transition-colors hover:border-brand"
-        @click="e.kind === 'folder' ? emit('openFolder', e.folder.id) : emit('openFile', e.file)"
+        class="relative min-w-0 rounded-xl border bg-surface transition-colors hover:border-brand"
+        :class="selection.includes(keyOf(e)) ? 'border-brand ring-1 ring-brand' : 'border-border'"
         @contextmenu="onContextmenu($event, e)"
       >
-        <FileTypeIcon :name="e.kind === 'folder' ? e.folder.name : fname(e.file)" :is-folder="e.kind === 'folder'" />
-        <span class="w-full truncate text-xs font-medium text-fg">{{ e.kind === "folder" ? e.folder.name : fname(e.file) }}</span>
-        <span v-if="e.kind === 'file'" class="text-[10px] text-fg-muted">{{ fmtSize(e.file.total_size) }}</span>
-      </button>
+        <button
+          type="button"
+          class="flex w-full flex-col items-center rounded-xl text-fg"
+          :class="view === 'grid' ? 'gap-2 p-4 pt-9' : 'text-left'"
+          :disabled="e.kind === 'file' && e.file.status !== 'ready'"
+          :aria-label="entryName(e)"
+          :title="entryName(e)"
+          @click="openEntry(e)"
+        >
+          <template v-if="view === 'gallery'">
+            <FileThumbnail v-if="e.kind === 'file'" :file="e.file" :name="fname(e.file)"
+              class="aspect-[4/3] w-full rounded-t-xl bg-bg" />
+            <span v-else class="flex aspect-[4/3] w-full items-center justify-center rounded-t-xl bg-brand-soft">
+              <FileTypeIcon :name="e.folder.name" is-folder />
+            </span>
+          </template>
+          <FileTypeIcon v-else :name="entryName(e)" :is-folder="e.kind === 'folder'" />
+          <span class="block w-full min-w-0" :class="view === 'gallery' ? 'px-3 py-2' : 'text-center'">
+            <span class="block truncate text-sm font-medium">{{ entryName(e) }}</span>
+            <span class="block truncate text-xs text-fg-muted">
+              {{ e.kind === 'folder' ? t('drive.folder') : e.file.status === 'ready' ? fmtSize(e.file.total_size) : statusLabel(e.file.status) }}
+            </span>
+          </span>
+        </button>
+        <label class="absolute start-1.5 top-1.5 grid size-7 cursor-pointer place-items-center rounded-md bg-surface/95">
+          <input type="checkbox" class="accent-brand"
+            :aria-label="t('gallery.selectItem', { name: entryName(e) })"
+            :checked="selection.includes(keyOf(e))"
+            @click.stop="toggle(e, $event.shiftKey)" />
+        </label>
+        <div class="absolute end-1.5 top-1.5">
+          <DfDropdown :items="itemsFor(e)" align="right">
+            <template #trigger>
+              <button class="grid size-7 place-items-center rounded-md bg-surface/95 text-fg hover:bg-bg"
+                :aria-label="t('gallery.actions', { name: entryName(e) })">
+                <MoreHorizontal class="h-4 w-4" />
+              </button>
+            </template>
+          </DfDropdown>
+        </div>
+      </div>
     </div>
 
     <template v-else>
