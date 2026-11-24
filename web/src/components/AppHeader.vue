@@ -37,9 +37,9 @@ const menu: DropdownItem[] = [
 </script>
 
 <template>
-  <header class="sticky top-0 z-30 flex items-center gap-4 border-b border-border bg-surface/90 px-4 py-2.5 backdrop-blur md:px-6">
-    <RouterLink :to="{ name: 'drive' }" class="flex items-center gap-1.5 font-extrabold text-brand">
-      <span>🦊</span><span class="hidden sm:inline">{{ t("common.appName") }}</span>
+  <header class="workspace-header sticky top-0 z-30 flex flex-wrap items-center gap-2 sm:gap-4 border-b border-border bg-surface/90 px-4 py-2.5 backdrop-blur md:px-6">
+    <RouterLink :to="{ name: 'drive' }" :aria-label="t('common.appName')" class="flex items-center gap-1.5 font-extrabold text-brand">
+      <span class="fox-mark" aria-hidden="true"></span><span class="hidden sm:inline">{{ t("common.appName") }}</span>
     </RouterLink>
     <nav class="flex items-center gap-1">
       <RouterLink :to="{ name: 'drive' }"
@@ -69,7 +69,7 @@ const menu: DropdownItem[] = [
     </DfTooltip>
     <DfDropdown :items="menu" align="right">
       <template #trigger>
-        <button class="flex h-8 w-8 items-center justify-center rounded-full bg-brand/15 text-sm font-semibold text-brand">
+        <button :aria-label="username" class="flex h-8 w-8 items-center justify-center rounded-full bg-brand/15 text-sm font-semibold text-brand">
           {{ username.slice(0, 1).toUpperCase() }}
         </button>
       </template>

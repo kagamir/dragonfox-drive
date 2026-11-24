@@ -40,8 +40,8 @@ async function submit() {
 </script>
 
 <template>
-  <main class="flex min-h-screen items-center justify-center bg-gradient-to-b from-brand-soft to-bg p-4 dark:from-brand/10">
-    <div class="w-full max-w-sm rounded-2xl border border-border bg-surface p-8 shadow-md">
+  <main class="auth-stage">
+    <div class="auth-panel">
       <template v-if="config.loaded && !config.allowRegistration">
         <h1 class="mb-2 text-xl font-bold text-fg">{{ t("auth.regClosed") }}</h1>
         <p class="mb-4 text-sm text-fg-muted">{{ t("auth.regClosedBody") }}</p>
@@ -58,7 +58,7 @@ async function submit() {
           <DfInput v-model="password" :label="t('auth.password')" type="password" autocomplete="new-password" :disabled="loading" />
           <DfInput v-model="confirmPwd" :label="t('auth.confirmPassword')" type="password" autocomplete="new-password" :error="mismatch ? t('auth.mismatch') : undefined" :disabled="loading" />
           <DfButton type="submit" data-testid="register-submit" :loading="loading" :disabled="loading">{{ loading ? t("auth.creating") : t("auth.createAccount") }}</DfButton>
-          <p v-if="error" class="text-sm text-danger">{{ error }}</p>
+          <p role="alert" v-if="error" class="text-sm text-danger">{{ error }}</p>
         </form>
         <p class="mt-5 text-center text-sm text-fg-muted">
           {{ t("auth.haveAccount") }}<RouterLink :to="{ name: 'login' }" class="font-medium text-brand">{{ t("auth.signIn") }}</RouterLink>
