@@ -7,27 +7,6 @@
 
 A self-hosted, end-to-end encrypted cloud drive. Organize files, share links, and stream video in your browser.
 
-## Folder views
-
-Open a folder on the web or in the **Home** tab on Android. In **Automatic** mode it opens as a photo gallery when more than half of its directly contained files are images. A tie or an empty folder uses the ordinary view. Subfolders do not count toward the total and stay visible in either view. The drive root always uses the ordinary view.
-
-To choose a view yourself, use the folder type selector beside the folder name on the web, or open the folder’s **⋮** menu on Android. Choose an ordinary folder or a photo folder to keep that view as the contents change. Choose **Automatic** to resume detection. Manual choices are encrypted and sync across devices. Update the server to this version before saving a choice.
-
-On the web, open a thumbnail to fill the window with the photo. Click the left or right side to browse, scroll to zoom and drag to pan. Use **Fit to window** to resume browsing. Open **Photo details** for the right-hand drawer with the dimensions and any camera, lens, focal length, aperture, shutter speed, ISO and capture time recorded in the file. Clients decrypt photos and read their metadata locally. Supported image formats depend on the browser or Android device.
-
-## Android auto-sync
-
-The native Kotlin client runs on Android 11 and later. Project releases built with Android support include a signed APK alongside the server binaries on the [Releases page](https://github.com/kagamir/dragonfox-drive/releases). [Download the standalone preview APK](https://github.com/kagamir/dragonfox-drive/releases/tag/android-v0.1.0-preview.5). The preview installs alongside the production app. Preview builds can have different signing certificates, so installing a later preview may require uninstalling the previous one and selecting the folders again.
-
-1. Open the app, enter the HTTPS address of your DragonFox server, and sign in or register.
-2. Open **Sync**, grant **All files access**, then choose local folders. **Photos and videos** shows the album with the newest media first. Each cover shows the first four items in the same order as the album. Tap the cover to see its full path and browse its contents, or use the checkmark to select it. **All files** lists folders and files. Tap a folder name to open it, use its checkbox to select it for recursive backup, or tap a supported file to preview it. The parent entry at the top takes you up one level.
-3. Choose the cloud destination and enable auto-sync. Uploads preserve each file’s storage-relative path. The **Sync** tab shows current tasks and progress. Sync pauses in the background and offline, and adjusts upload concurrency to the connection.
-4. In **Account**, set the theme, time between scans and maximum scan depth (default **5**). The root of each storage volume counts as level **1**. Files below the scan limit are skipped in the picker and in every sync pass. Each folder containing media has its own album through level **5**. For example, photos directly in `Trips`, `Trips/Beijing` and `Trips/Shanghai` appear in three separate albums. Media deeper than level **5**, within the scan limit, appears in its level-five album. With a scan depth of **10**, `/downloads/pic/4/5/6/7/8/9/test.jpeg` appears in the album **5**. With a scan depth of **5**, the file is skipped.
-
-Sync uploads missing content. Deleting a local file leaves the cloud copy in place. Deleting a cloud copy while the local file is still selected makes it eligible for upload again. A server built with zero-byte upload support is required to sync empty files.
-
-[Build, test, and sign the Android client](android/README.md).
-
 ## Screenshots
 
 ![Desktop file list showing folders, an encrypted PDF, and other sample files alongside search and upload controls](docs/screenshots/drive-list.webp)
