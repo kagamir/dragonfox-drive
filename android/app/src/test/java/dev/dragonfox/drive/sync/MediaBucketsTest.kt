@@ -44,15 +44,15 @@ class MediaBucketsTest {
         assertEquals(1, storageDepth(root,listOf(root)))
         assertEquals(9, storageDepth(deep.parentFile!!,listOf(root)))
         assertEquals(1, SyncConfig(maxDepth = 0).normalized().maxDepth)
-        // A volume-root photograph owns all in-range descendants; remove it to test the level-five fold separately.
-        assertEquals(root, catalog(10).single().directory)
-        assertTrue(home.delete())
+        val rootAtTen = catalog(10).single { it.directory == root }
+        assertEquals(listOf(home), rootAtTen.covers)
+        assertFalse(rootAtTen.recursive)
         val bucketDir = File(root, base)
         val five = catalog(5).single { it.directory == bucketDir }
-        assertTrue(five.recursive)
+        assertFalse(five.recursive)
         assertEquals(listOf(direct), five.covers)
         val ten = catalog(10)
-        assertEquals(3, ten.sumOf { it.count })
+        assertEquals(4, ten.sumOf { it.count })
         val boundary = ten.single { it.directory == bucketDir }
         assertTrue(boundary.recursive)
         assertEquals(setOf(direct, deep), boundary.covers.toSet())
@@ -64,6 +64,27 @@ class MediaBucketsTest {
         assertEquals(setOf(direct,deep,txt), all.toSet())
         assertTrue(hidden !in all && other !in all)
         assertEquals(listOf("downloads","pic","4","5","6","7","8","9"), remotePath(deep.parentFile!!, listOf(VolumeRoot(root, emptyList()))))
+    }
+
+    @Test fun everyLevelHasIndependentSelectionUntilTheLevelFiveFold() {
+        val photos = (1..6).map { level ->
+            val relative = (2..level).joinToString("/") { "level$it" }
+            file(listOf(relative, "photo.jpg").filter { it.isNotEmpty() }.joinToString("/"))
+        }
+        for (limit in 1..6) {
+            val groups = catalog(limit).associateBy { it.directory }
+            assertEquals(minOf(limit, 5), groups.size)
+            for ((index, photo) in photos.take(minOf(limit, 5)).withIndex()) {
+                val group = groups.getValue(photo.parentFile!!)
+                val expected = if (index == 4 && limit == 6) photos.takeLast(2) else listOf(photo)
+                assertEquals(expected.toSet(), group.page(0,group.count).toSet())
+                assertEquals(index == 4 && limit == 6, group.recursive)
+                val path = setOf(group.directory.path)
+                val rule = SyncConfig(localFolders = path, recursiveFolders = if (group.recursive) path else emptySet(),
+                    maxDepth = limit)
+                assertEquals(expected.toSet(), uploaded(rule).toSet())
+            }
+        }
     }
 
     @Test fun scanNeverOpensADirectoryBeyondTheCapIncludingExplicitOldSelections() {
@@ -128,35 +149,43 @@ class MediaBucketsTest {
         val recursive = legacy.copy(localFolders = setOf(oldRoot.path),recursiveFolders = setOf(oldRoot.path))
         val all = catalog(10)
         assertEquals(3, all.sumOf { it.count })
-        assertEquals(oldRoot, all.single().directory)
-        assertEquals(setOf(parent,top,nested), all.single().covers.toSet())
+        val directAlbum = all.single { it.directory == oldRoot }
+        assertFalse(directAlbum.recursive)
+        assertEquals(listOf(parent), directAlbum.covers)
+        assertEquals(setOf(top,nested), all.single { it.directory == bucket }.covers.toSet())
+        assertEquals(listOf(parent), uploaded(recursive.copy(recursiveFolders = emptySet())))
         assertEquals(setOf(top,nested,parent), uploaded(recursive).toSet())
     }
 
-    @Test fun siblingsStaySeparateWithoutDirectParentMediaAndOrderUsesSnapshotCreationTime() {
+    @Test fun actualParentsRemainSeparateAndSnapshotsUseMemberCreationTime() {
+        val direct = file("Pictures/top.jpg", 9_000L)
         val oldest = file("Pictures/Camera/a.jpg", 2_000L)
         val newest = file("Pictures/Camera/Daily/z.jpg", 1_000L)
         val other = file("Pictures/Screenshots/shot.jpg", 4_000L)
         val third = file("Trips/mountains.jpg", 8_000L)
         file("Pictures/notes.txt")
-        val created = mapOf(oldest to 1L, newest to 12L, other to 20L, third to 12L)
+        val created = mapOf(direct to 5L, oldest to 1L, newest to 12L, other to 20L, third to 12L)
         var resolved = 0
         val albums = collectAlbums(listOf(VolumeRoot(root, emptyList())), 8, { true }, ::media, { batch ->
             assertTrue(batch.size <= 128)
             resolved += batch.size
             batch.associateWith(created::getValue)
         }) {}
-        assertEquals(listOf(other.parentFile, oldest.parentFile, third.parentFile), albums.map { it.directory })
-        val camera = albums[1]
-        assertEquals(listOf(newest, oldest), camera.covers)
-        assertTrue(camera.recursive)
-        val later = file("Pictures/Camera/Next/tomorrow.jpg")
-        assertTrue(newest.delete())
-        assertEquals(listOf(newest, oldest), camera.page(0, 1) + camera.page(1, Int.MAX_VALUE))
+        assertEquals(listOf(other.parentFile, newest.parentFile, third.parentFile, direct.parentFile, oldest.parentFile),
+            albums.map { it.directory })
+        assertTrue(albums.none { it.recursive })
+        assertEquals(listOf(direct), albums.single { it.directory == direct.parentFile }.covers)
+        val camera = albums.single { it.directory == oldest.parentFile }
+        assertEquals(listOf(oldest), camera.covers)
+        val next = file("Pictures/Camera/Next/tomorrow.jpg")
+        val added = file("Pictures/Camera/another.jpg")
+        assertEquals(listOf(oldest), camera.page(0, 60))
         assertEquals(emptyList<File>(), camera.page(Int.MAX_VALUE, 40))
-        assertEquals(4, resolved)
+        assertEquals(5, resolved)
         val selected = setOf(camera.directory.path)
-        assertEquals(setOf(oldest, later), uploaded(SyncConfig(localFolders=selected, recursiveFolders=selected, maxDepth=8)).toSet())
+        val cfg = SyncConfig(localFolders=selected, maxDepth=8)
+        assertEquals(setOf(oldest,added), uploaded(cfg).toSet())
+        assertEquals(setOf(oldest,added,newest,next), uploaded(cfg.copy(recursiveFolders=selected)).toSet())
     }
 
     @Test fun levelFiveStillGroupsEmptyParentsAndNestedVolumeIsNeverMerged() {
@@ -170,10 +199,13 @@ class MediaBucketsTest {
         assertEquals(setOf(base,card), groups.map { it.directory }.toSet())
         assertEquals(setOf(a,b), groups.single { it.directory == base }.page(0,9).toSet())
         val top = file("A/direct.jpg")
-        val merged = collectAlbums(volumes, 10, { true }, ::media, ::stamps) {}
-        assertEquals(setOf(cardPicture), merged.single { it.directory == card }.page(0,9).toSet())
-        val main = merged.single { it.directory == top.parentFile }
-        assertEquals(setOf(top,a,b), main.page(0,9).toSet())
+        val updated = collectAlbums(volumes, 10, { true }, ::media, ::stamps) {}
+        assertEquals(setOf(cardPicture), updated.single { it.directory == card }.page(0,9).toSet())
+        val main = updated.single { it.directory == top.parentFile }
+        assertEquals(listOf(top), main.page(0,9))
+        assertFalse(main.recursive)
+        assertTrue(updated.single { it.directory == base }.recursive)
+        assertEquals(setOf(a,b), updated.single { it.directory == base }.page(0,9).toSet())
         val selected = setOf(main.directory.path, card.path)
         val cfg = SyncConfig(localFolders=selected, recursiveFolders=selected, maxDepth=10)
         val uploads = selectedFiles(cfg, volumes.map { it.dir }, { true }, {}).toList()

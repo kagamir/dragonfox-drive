@@ -4,7 +4,7 @@
     <string name="df_account">Account</string>
     <string name="df_active_tasks">Current uploads</string>
     <string name="df_all_files">All files</string>
-    <string name="df_all_hint">Select a folder or open it to choose a subfolder.</string>
+    <string name="df_all_hint">Check folders to sync them. Tap a folder to browse it or a file to preview it.</string>
     <string name="df_attention">Review sync errors</string>
     <string name="df_auto_sync">Automatic sync</string>
     <string name="df_back">Go back</string>

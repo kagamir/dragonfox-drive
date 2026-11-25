@@ -1,0 +1,19 @@
+<resources>
+    <string name="df_text_preview">文本</string>
+    <string name="df_pdf_preview">PDF</string>
+    <string name="df_file_details">文件详情</string>
+    <string name="df_file_type">文件类型</string>
+    <string name="df_no_file_preview">此类文件暂不支持预览。</string>
+    <string name="df_text_encoding">此文件包含二进制数据，或采用了暂不支持的文本编码。</string>
+    <string name="df_empty_text">文件内容为空。</string>
+    <string name="df_text_truncated">已显示文件的开头部分。</string>
+    <string name="df_local_read_error">无法读取文件，请检查文件是否存在，以及是否已允许文件访问。</string>
+    <string name="df_pdf_error">无法显示这份 PDF，文件可能已损坏或受密码保护。</string>
+    <string name="df_pdf_previous">上一页</string>
+    <string name="df_pdf_next">下一页</string>
+    <string name="df_page_count">第 %1$d 页，共 %2$d 页</string>
+    <string name="df_audio_information">音频信息</string>
+    <string name="df_play_audio">播放音频</string>
+    <string name="df_pause_audio">暂停音频</string>
+    <string name="df_audio_failed">无法播放此音频文件。</string>
+</resources>

@@ -11,7 +11,7 @@
     <string name="df_minutes">%1$d min</string>
     <string name="df_levels">Level %1$d</string>
     <string name="df_interval_help">Enter the number of seconds between automatic checks while the app is open (%1$d–%2$d).</string>
-    <string name="df_depth_help">The storage root is level 1. Choose %1$d–%2$d levels to scan for browsing and backup. Media stays in the first album found along its path, up to level 5.</string>
+    <string name="df_depth_help">The storage root is level 1. Choose %1$d–%2$d levels to scan for browsing and backup. Each folder has its own album through level 5. Deeper media is grouped into its level-5 album.</string>
     <string name="df_about">About</string>
     <string name="df_app_version">Version %1$s</string>
     <string name="df_about_android">The Android client for DragonFox Drive. Browse your encrypted files and sync folders from this device.</string>

@@ -16,4 +16,8 @@
     <string name="df_album_single">1 个项目</string>
     <string name="df_manage_album_scope">管理包含 %1$s 的选择规则</string>
     <string name="df_album_storage">存储空间</string>
+    <string name="df_local_parent">返回上一级</string>
+    <string name="df_no_local_entries">当前扫描深度内没有可显示的文件或文件夹。</string>
+    <string name="df_no_local_volumes">没有可用的存储卷。</string>
+    <string name="df_select_folder">选择文件夹 %1$s</string>
 </resources>

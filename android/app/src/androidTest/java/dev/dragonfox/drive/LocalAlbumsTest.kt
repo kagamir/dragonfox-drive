@@ -46,6 +46,7 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -61,7 +62,7 @@ class LocalAlbumsTest {
         val downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
         val scope = "picker-" + UUID.randomUUID()
         val root = File(downloads, scope) // Volume = 1, Download = 2, fixture = 3.
-        val many = File(root, "Zeta").apply { check(mkdirs()) }
+        val many = File(root, "旅行").apply { check(mkdirs()) }
         val bucket = File(root, "4/5").apply { check(mkdirs()) }
         val deep = File(bucket, "6/7/8/9").apply { check(mkdirs()) }
         val beyondLimit = File(deep, "10/11").apply { check(mkdirs()) }
@@ -73,32 +74,36 @@ class LocalAlbumsTest {
         // A separate album shares the boundary album's display name.
         val twin = File(root, "other/5").apply { check(mkdirs()) }
         val twinPhoto = File(twin, "oldest.jpg")
-        val nested = File(many, "child/trip").apply { check(mkdirs()) }
-        val secondChild = File(many, "second").apply { check(mkdir()) }
-        val oldestFirst = listOf(File(many, "z.jpg"), File(secondChild, "a.jpg"), File(many, "b.jpg"),
-            File(nested, "clip.mp4"), File(many, "d.jpg"))
+        val beijing = File(many, "北京").apply { check(mkdir()) }
+        val shanghai = File(many, "上海").apply { check(mkdir()) }
+        val beijingPhoto = File(beijing, "beijing.jpg")
+        val shanghaiPhoto = File(shanghai, "shanghai.jpg")
+        val oldestFirst = listOf("z.jpg", "a.jpg", "b.jpg", "clip.mp4", "d.jpg").map { File(many, it) }
         val newestFirst = oldestFirst.asReversed()
         val directPhoto = File(bucket, "direct.jpg")
         val deepPhoto = File(deep, "deep.jpg")
         val ignoredPhoto = File(beyondLimit, "out-of-range.jpg")
         val other = File(deep, "excluded.txt")
         try {
-            createMediaInOrder(context, listOf(siblingPhoto, twinPhoto) + oldestFirst + directPhoto + deepPhoto + ignoredPhoto)
+            createMediaInOrder(context, listOf(siblingPhoto, twinPhoto, beijingPhoto, shanghaiPhoto) + oldestFirst + directPhoto + deepPhoto + ignoredPhoto)
             other.writeText("not media")
 
             runBlocking {
                 val albums = scanner.mediaBuckets(10).filter { it.directory.toPath().startsWith(root.toPath()) }
-                assertEquals(listOf(bucket, many, twin, sibling), albums.map { it.directory })
-                val merged = albums.single { it.directory == many }
-                assertTrue(merged.recursive)
-                assertEquals(5, merged.count)
-                assertEquals(newestFirst.take(4), merged.covers)
-                assertEquals(newestFirst, merged.page(0, 2) + merged.page(2, 3))
+                assertEquals(listOf(bucket, many, shanghai, beijing, twin, sibling), albums.map { it.directory })
+                assertEquals(listOf(beijingPhoto), albums.single { it.directory == beijing }.page(0, 4))
+                assertEquals(listOf(shanghaiPhoto), albums.single { it.directory == shanghai }.page(0, 4))
+                val travel = albums.single { it.directory == many }
+                assertFalse(travel.recursive)
+                assertEquals(5, travel.count)
+                assertEquals(newestFirst.take(4), travel.covers)
+                assertEquals(newestFirst, travel.page(0, 2) + travel.page(2, 3))
                 val aggregate = albums.single { it.directory == bucket }
                 assertEquals(2, aggregate.count)
                 assertTrue(aggregate.recursive)
                 assertEquals(listOf(deepPhoto, directPhoto), aggregate.page(0, 10))
                 val shallow = scanner.mediaBuckets(5).single { it.directory == bucket }
+                assertFalse(shallow.recursive)
                 assertEquals(1, shallow.count)
                 assertEquals(listOf(directPhoto), shallow.covers)
                 assertEquals(listOf(directPhoto), shallow.page(0, 10))
@@ -129,6 +134,10 @@ class LocalAlbumsTest {
                 val text = context.getString(R.string.df_album_count, count)
                 screen.onNode(hasAnyAncestor(hasTestTag("local-album:" + file.path)) and hasText(text),
                     useUnmergedTree = true).assertIsDisplayed()
+            }
+            for (city in listOf(beijing, shanghai)) {
+                showAlbum(city)
+                item("local-select:" + city.path).assertIsOff()
             }
             showAlbum(many)
             val index = item("local-albums").fetchSemanticsNode().config[SemanticsProperties.IndexForKey]
@@ -203,7 +212,7 @@ class LocalAlbumsTest {
             try {
                 val config = reopened.load()
                 assertEquals(setOf(many.path, bucket.path), config.localFolders)
-                assertEquals(setOf(many.path, bucket.path), config.recursiveFolders)
+                assertEquals(setOf(bucket.path), config.recursiveFolders)
                 assertEquals(10, config.maxDepth)
                 screen.runOnIdle { plan = config; pickerOpen = true }
                 showAlbum(many)
@@ -211,23 +220,7 @@ class LocalAlbumsTest {
                 showAlbum(bucket)
                 item("local-select:" + bucket.path).assertIsOn()
                 screen.onNodeWithText(context.getString(R.string.df_all_files)).performClick()
-                fun showFolder(folder: File) {
-                    screen.waitUntil(30_000) {
-                        screen.onAllNodesWithTag("local-folders").fetchSemanticsNodes().any { list ->
-                            SemanticsProperties.IndexForKey in list.config &&
-                                list.config[SemanticsProperties.IndexForKey](folder.path) >= 0
-                        }
-                    }
-                    item("local-folders").performScrollToKey(folder.path)
-                }
-                // The all-files browser exposes the same five display levels even at N=10.
-                for (folder in listOf(requireNotNull(downloads.parentFile), downloads, root, requireNotNull(bucket.parentFile))) {
-                    showFolder(folder)
-                    item("local-open:" + folder.path).performClick()
-                }
-                showFolder(bucket)
-                item("local-select:" + bucket.path).assertIsOff().performClick().assertIsOn()
-                item("local-open:" + bucket.path).assertDoesNotExist()
+                awaitTag("local-folders")
                 screen.onNodeWithText(context.getString(R.string.df_media)).performClick()
                 showAlbum(many)
                 item("local-select:" + many.path).assertIsOn()

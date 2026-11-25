@@ -16,4 +16,8 @@
     <string name="df_album_single">1 item</string>
     <string name="df_manage_album_scope">Manage selection covering %1$s</string>
     <string name="df_album_storage">Storage</string>
+    <string name="df_local_parent">Up one level</string>
+    <string name="df_no_local_entries">No files or folders to show within this scan depth.</string>
+    <string name="df_no_local_volumes">No storage volumes available.</string>
+    <string name="df_select_folder">Select folder %1$s</string>
 </resources>

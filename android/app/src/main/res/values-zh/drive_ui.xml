@@ -4,7 +4,7 @@
     <string name="df_account">账号</string>
     <string name="df_active_tasks">当前上传</string>
     <string name="df_all_files">全部文件</string>
-    <string name="df_all_hint">勾选文件夹，或点右侧箭头选择子文件夹。</string>
+    <string name="df_all_hint">勾选要同步的文件夹。点击文件夹可进入，点击文件可预览。</string>
     <string name="df_attention">同步遇到问题</string>
     <string name="df_auto_sync">自动同步</string>
     <string name="df_back">返回</string>

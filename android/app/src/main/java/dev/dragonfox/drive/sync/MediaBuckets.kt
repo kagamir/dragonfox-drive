@@ -4,7 +4,7 @@ import java.io.File
 
 /** Immutable per-scan path snapshot. Identity equality keeps Compose from comparing every entry. */
 internal class MediaBucket(
-    val directory: File, private val files: List<File>, val recursive: Boolean = true,
+    val directory: File, private val files: List<File>, val recursive: Boolean,
 ) {
     val count = files.size
     val covers = files.take(4)
@@ -18,12 +18,12 @@ internal class MediaBucket(
     }
 }
 
+private const val ALBUM_DISPLAY_DEPTH = 5 // The volume root is level one.
+
 private data class TimedFile(val file: File, val created: Long)
 
-/** Direct files are visited before any child directory. Consequently an album owner, if present,
- * is already known when we encounter a descendant. Only a directory with media or the display
- * depth boundary can become an owner. The physical traversal always respects the scan limit.
- */
+/** Group by actual parent, folding only files below level five into that level's directory.
+ * The separate hard scan limit is applied by walkFiles before those files are enumerated. */
 internal fun collectAlbums(
     volumes: List<VolumeRoot>, depth: Int, includeDirectory: (File) -> Boolean, isMedia: (File) -> Boolean,
     creationTimes: (List<File>) -> Map<File, Long>, checkActive: () -> Unit,
@@ -43,11 +43,11 @@ internal fun collectAlbums(
             if (previousParent != parent) {
                 val root = containingVolume(parent, roots) ?: continue
                 val rel = root.toPath().relativize(parent.toPath())
-                val display = if (rel.nameCount > 4) root.toPath().resolve(rel.subpath(0, 4)).toFile() else parent
-                var ancestor = display
-                while (ancestor != root && ancestor !in groups) ancestor = ancestor.parentFile!!
-                val owner = if (ancestor in groups) ancestor else display
-                group = groups.getOrPut(owner) { ArrayList() }
+                val maxRelativeDepth = ALBUM_DISPLAY_DEPTH - 1
+                val display = if (rel.nameCount > maxRelativeDepth) {
+                    root.toPath().resolve(rel.subpath(0, maxRelativeDepth)).toFile()
+                } else parent
+                group = groups.getOrPut(display) { ArrayList() }
                 previousParent = parent
             }
             group!!.add(TimedFile(file, times.getValue(file)))
@@ -68,7 +68,8 @@ internal fun collectAlbums(
         }
         val ordered = entries.map { it.file }
         val firstDate = entries.first().created
-        albums.add(firstDate to MediaBucket(directory, ordered))
+        val includesDescendants = maxDepth > ALBUM_DISPLAY_DEPTH && storageDepth(directory, roots) == ALBUM_DISPLAY_DEPTH
+        albums.add(firstDate to MediaBucket(directory, ordered, recursive = includesDescendants))
         iterator.remove()
     }
     return albums.sortedWith(compareByDescending<Pair<Long, MediaBucket>> { it.first }.thenBy { it.second.directory.path })

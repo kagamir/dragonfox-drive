@@ -12,7 +12,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.nio.file.Files
+import java.nio.file.AccessDeniedException
 
 object FileAccess {
     @Suppress("UNUSED_PARAMETER")
@@ -30,7 +30,6 @@ class FolderScanner(private val context: Context, private val rootsOverride: Lis
     internal fun volumes(): List<VolumeRoot> =
         rootsOverride?.map { VolumeRoot(it, emptyList()) } ?: context.getSystemService(StorageManager::class.java).storageVolumes.mapNotNull { volume ->
             val dir = volume.directory ?: return@mapNotNull null
-            if (!dir.isDirectory) return@mapNotNull null
             VolumeRoot(dir, if (volume.isPrimary) emptyList() else listOf(volume.uuid ?: dir.name))
         }
 
@@ -38,16 +37,28 @@ class FolderScanner(private val context: Context, private val rootsOverride: Lis
 
     fun volumeDepth(directory: File): Int? = storageDepth(directory, roots())
 
-    fun children(dir: File): List<File> {
-        val volumes = volumes()
-        return dir.listFiles().orEmpty().filter {
-            it.isDirectory && !Files.isSymbolicLink(it.toPath()) && accessible(it, volumes)
-        }.sortedBy { it.name.lowercase() }
-    }
+    internal suspend fun directoryEntries(dir: File?, maxDepth: Int): List<LocalEntry> =
+        readLocal(maxDepth) { entries(dir) }
 
-    internal fun accessible(dir: File, volumes: List<VolumeRoot>): Boolean = volumes.any { volume ->
-        dir.toPath().startsWith(volume.dir.toPath()) &&
-            listOf("Android/data", "Android/obb").none { dir.toPath().startsWith(File(volume.dir, it).toPath()) }
+    internal suspend fun fileEntry(file: File, maxDepth: Int): LocalEntry =
+        readLocal(maxDepth) { this.fileEntry(file) }
+
+    private suspend fun <T> readLocal(maxDepth: Int, read: LocalDirectoryListing.() -> T): T =
+        withContext(Dispatchers.IO) {
+            val job = currentCoroutineContext()
+            job.ensureActive()
+            if (!FileAccess.granted(context)) throw SecurityException("All files access required")
+            try {
+                LocalDirectoryListing(roots(), maxDepth, ::mime) { job.ensureActive() }.read()
+            } catch (e: AccessDeniedException) {
+                throw SecurityException(e.localizedMessage, e)
+            }
+        }
+
+    internal fun accessible(dir: File, volumes: List<VolumeRoot>): Boolean {
+        val root = volumes.filter { dir.toPath().startsWith(it.dir.toPath()) }
+            .maxByOrNull { it.dir.path.length } ?: return false
+        return !protectedStoragePath(dir.toPath(), root.dir.toPath())
     }
 
     internal fun mime(file: File): String = fileMime(file) { MimeTypeMap.getSingleton().getMimeTypeFromExtension(it) }

@@ -42,20 +42,20 @@ import kotlinx.coroutines.withContext
 internal fun LocalMediaDetail(file: File, navigation: MediaNavigation? = null, onBack: () -> Unit) {
     Box(Modifier.fillMaxSize().testTag("local-media-detail")) {
         key(file.path) {
-            if (isLocalVideo(file)) LocalVideo(file, navigation, onBack)
+            if (isLocalVideo(file)) LocalPlayback(file, navigation, onBack = onBack)
             else PhotoDetail(file.path, "", file.name, { LocalMediaLoader.photo(file) }, navigation, onBack)
         }
     }
 }
 
 @Composable
-private fun LocalVideo(file: File, navigation: MediaNavigation?, onBack: () -> Unit) {
+internal fun LocalPlayback(file: File, navigation: MediaNavigation? = null, audioOnly: Boolean = false, onBack: () -> Unit) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val bytes by produceState<Long?>(null, file) { value = withContext(Dispatchers.IO) { file.length() } }
     var failed by remember { mutableStateOf(false) }
     var position by rememberSaveable { mutableIntStateOf(0) }
-    var wantsPlay by rememberSaveable { mutableStateOf(true) }
+    var wantsPlay by rememberSaveable { mutableStateOf(!audioOnly) }
     var attempt by remember { mutableIntStateOf(0) }
     var ready by remember(attempt) { mutableStateOf(false) }
     var duration by remember(attempt) { mutableIntStateOf(0) }
@@ -96,7 +96,7 @@ private fun LocalVideo(file: File, navigation: MediaNavigation?, onBack: () -> U
         }
     }
 
-    MediaViewer(file.name, navigation, R.string.df_video_information, onBack,
+    MediaViewer(file.name, navigation, if (audioOnly) R.string.df_audio_information else R.string.df_video_information, onBack,
         information = {
             if (duration > 0) MediaInfoRow(label(R.string.df_video_duration), playbackTime(duration))
             if (width > 0 && height > 0) MediaInfoRow(label(R.string.df_camera_dimensions), "$width × $height")
@@ -112,8 +112,8 @@ private fun LocalVideo(file: File, navigation: MediaNavigation?, onBack: () -> U
                             player.start()
                         } else { player.pause(); position = player.currentPosition.coerceAtLeast(0) }
                     }, enabled = ready, modifier = Modifier.testTag("viewer-play-toggle")) {
-                        if (wantsPlay) Icon(painterResource(R.drawable.df_pause_video), label(R.string.df_pause_video), tint = Color.White)
-                        else Icon(Icons.Default.PlayArrow, label(R.string.df_play_video), tint = Color.White)
+                        if (wantsPlay) Icon(painterResource(R.drawable.df_pause_video), label(if (audioOnly) R.string.df_pause_audio else R.string.df_pause_video), tint = Color.White)
+                        else Icon(Icons.Default.PlayArrow, label(if (audioOnly) R.string.df_play_audio else R.string.df_play_video), tint = Color.White)
                     }
                     Text(playbackTime(seeking?.toInt() ?: position), style = MaterialTheme.typography.labelMedium)
                     val seekLabel = label(R.string.df_seek_video)
@@ -134,7 +134,7 @@ private fun LocalVideo(file: File, navigation: MediaNavigation?, onBack: () -> U
         }) { toggle ->
         if (failed) {
             Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(label(R.string.df_local_video_failed), color = Color.White)
+                Text(label(if (audioOnly) R.string.df_audio_failed else R.string.df_local_video_failed), color = Color.White)
                 FilledTonalButton(onClick = { failed = false; attempt++ }) { Text(label(R.string.df_retry)) }
             }
         } else {
@@ -155,6 +155,15 @@ private fun LocalVideo(file: File, navigation: MediaNavigation?, onBack: () -> U
                         player.setVideoURI(Uri.fromFile(file))
                     }
                 })
+            }
+            if (audioOnly) {
+                Surface(Modifier.align(Alignment.Center).size(112.dp).testTag("file-audio"),
+                    shape = MaterialTheme.shapes.extraLarge, color = Color(0xff332a27)) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(painterResource(R.drawable.df_audio_note), null,
+                            Modifier.size(50.dp), tint = Color(0xffffb38a))
+                    }
+                }
             }
             if (!ready) CircularProgressIndicator(Modifier.align(Alignment.Center), color = Color.White)
             Box(Modifier.fillMaxSize().semantics { contentDescription = file.name }

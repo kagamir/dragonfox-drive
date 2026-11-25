@@ -1,0 +1,19 @@
+<resources>
+    <string name="df_text_preview">Text</string>
+    <string name="df_pdf_preview">PDF</string>
+    <string name="df_file_details">File details</string>
+    <string name="df_file_type">File type</string>
+    <string name="df_no_file_preview">A preview is unavailable for this file type.</string>
+    <string name="df_text_encoding">The content is binary or uses an unsupported text encoding.</string>
+    <string name="df_empty_text">This file is empty.</string>
+    <string name="df_text_truncated">Showing the beginning of this file.</string>
+    <string name="df_local_read_error">Couldn’t read this file. Check that it still exists and that file access is allowed.</string>
+    <string name="df_pdf_error">Couldn’t display this PDF. It may be damaged or password-protected.</string>
+    <string name="df_pdf_previous">Previous page</string>
+    <string name="df_pdf_next">Next page</string>
+    <string name="df_page_count">Page %1$d of %2$d</string>
+    <string name="df_audio_information">Audio information</string>
+    <string name="df_play_audio">Play audio</string>
+    <string name="df_pause_audio">Pause audio</string>
+    <string name="df_audio_failed">Couldn’t play this audio file.</string>
+</resources>

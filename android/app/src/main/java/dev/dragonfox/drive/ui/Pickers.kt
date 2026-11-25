@@ -6,21 +6,18 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource as label
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.dragonfox.drive.R
@@ -57,7 +54,7 @@ internal fun LocalPicker(initialMode: SyncMode, previous: Set<String>, previousR
     var openAlbum by rememberSaveable(maxDepth) { mutableStateOf<String?>(null) }
     val album = remember(openAlbum, albums) { albums.find { it.directory.absolutePath == openAlbum } }
     var manage by rememberSaveable { mutableStateOf(false) }
-    var folders by remember { mutableStateOf<List<File>>(emptyList()) }
+    val directoryScroll = rememberSaveableStateHolder()
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     var refresh by remember { mutableIntStateOf(0) }
@@ -77,10 +74,9 @@ internal fun LocalPicker(initialMode: SyncMode, previous: Set<String>, previousR
         }
     }
     BackHandler(mode == SyncMode.MEDIA && openAlbum != null || mode == SyncMode.ALL && history.isNotEmpty()) { up() }
-    LaunchedEffect(mode, current, allowed, maxDepth, refresh) {
+    LaunchedEffect(mode, source, allowed, maxDepth, refresh) {
         error = null
         loading = allowed
-        folders = emptyList()
         if (!allowed) {
             albums = emptyList()
             return@LaunchedEffect
@@ -90,8 +86,6 @@ internal fun LocalPicker(initialMode: SyncMode, previous: Set<String>, previousR
             if (mode == SyncMode.MEDIA) {
                 albums = source.mediaBuckets(maxDepth)
                 if (openAlbum != null && albums.none { it.directory.absolutePath == openAlbum }) openAlbum = null
-            } else folders = withContext(Dispatchers.IO) {
-                if (current == null) scanRoots else source.children(File(current))
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
@@ -115,6 +109,8 @@ internal fun LocalPicker(initialMode: SyncMode, previous: Set<String>, previousR
                 }
                 Text(if (mode == SyncMode.MEDIA) label(R.string.df_media_hint) else current ?: label(R.string.df_all_hint),
                     Modifier.padding(vertical = 4.dp), style = MaterialTheme.typography.bodySmall,
+                    maxLines = if (mode == SyncMode.ALL && current != null) 2 else Int.MAX_VALUE,
+                    overflow = TextOverflow.Ellipsis,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                 FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     if (mode == SyncMode.MEDIA && allowed && albums.isNotEmpty() && !loading && error == null) {
@@ -134,42 +130,21 @@ internal fun LocalPicker(initialMode: SyncMode, previous: Set<String>, previousR
             val content = Modifier.widthIn(max = 840.dp).fillMaxWidth().weight(1f)
             when {
                 !allowed -> Box(content) { PermissionPanel(request) }
+                mode == SyncMode.ALL -> AllFilesBrowser(source, current, maxDepth, selection, directoryScroll,
+                    onEnter = { path -> if (history.lastOrNull() != path) history = ArrayList(history + path) },
+                    onUp = ::up, onChecked = { path, checked ->
+                        allPaths = ArrayList(if (checked) selection + path else selection - path)
+                    }, modifier = content)
                 loading -> Box(content) { LoadingLine() }
                 error != null -> Column(content.padding(16.dp)) { RetryLine(error.orEmpty()) { refresh++ } }
-                mode == SyncMode.MEDIA && albums.isEmpty() -> Text(label(R.string.df_no_media), content.padding(16.dp))
-                mode == SyncMode.MEDIA -> AlbumGrid(albums, activeSelection, recursive.intersect(activeSelection), albumScroll, { openAlbum = it.directory.absolutePath }, { item ->
+                albums.isEmpty() -> Text(label(R.string.df_no_media), content.padding(16.dp))
+                else -> AlbumGrid(albums, activeSelection, recursive.intersect(activeSelection), albumScroll, { openAlbum = it.directory.absolutePath }, { item ->
                     val path = item.directory.absolutePath
                     if (item.fullySelected(selection, recursive)) {
                         val remove = item.rulesToClear(activeSelection)
                         select(selection - remove, recursive - remove)
                     } else select(selection + path, if (item.recursive) recursive + path else recursive)
                 }, { manage = true }, content)
-                else -> LazyColumn(content.testTag("local-folders"), contentPadding = PaddingValues(16.dp)) {
-                    if (folders.isEmpty()) item { Text(label(R.string.df_empty_folder)) }
-                    items(folders, key = { it.absolutePath }) { folder ->
-                        val path = folder.absolutePath
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Row(Modifier.weight(1f).testTag("local-select:$path")
-                                .toggleable(value = path in selection, role = Role.Checkbox) {
-                                    allPaths = ArrayList(if (it) selection + path else selection - path)
-                                }.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                Checkbox(path in selection, onCheckedChange = null)
-                                Column {
-                                    Text(folder.name.ifEmpty { path }, fontWeight = FontWeight.Medium)
-                                    Text(path, style = MaterialTheme.typography.bodySmall, maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                            }
-                            // Volume roots are at level one. The last visible row stays selectable.
-                            if (history.size + 1 < minOf(5, maxDepth)) IconButton(onClick = { history = ArrayList(history + path) },
-                                modifier = Modifier.testTag("local-open:$path")) {
-                                Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, label(R.string.df_open_folder, folder.name))
-                            }
-                        }
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                    }
-                }
             }
             Button(onClick = { onDone(mode, selection, recursive) }, enabled = allowed,
                 modifier = Modifier.widthIn(max = 840.dp).fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
