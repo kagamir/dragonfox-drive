@@ -11,6 +11,23 @@ export type Entry =
 
 export type SortKey = "name" | "size" | "status";
 
+const STATUS_RANK: Record<string, number> = { ready: 0, uploading: 1, pending: 2, deleted: 3 };
+
+/** Filtering and ordering for one file-list page, shared with photo navigation. */
+export function visibleEntries(entries: Entry[], names: Record<string, string>, search: string, sortKey: SortKey, sortDir: "asc" | "desc"): Entry[] {
+  const name = (entry: Entry) => entry.kind === "folder" ? entry.folder.name : names[entry.file.id] ?? entry.file.id;
+  const query = search.trim().toLowerCase();
+  const result = query ? entries.filter((entry) => name(entry).toLowerCase().includes(query)) : [...entries];
+  const dir = sortDir === "asc" ? 1 : -1;
+  return result.sort((a, b) => {
+    if (a.kind !== b.kind) return a.kind === "folder" ? -1 : 1;
+    if (sortKey === "name") return name(a).localeCompare(name(b)) * dir;
+    if (a.kind === "folder" || b.kind === "folder") return 0;
+    if (sortKey === "size") return (a.file.total_size - b.file.total_size) * dir;
+    return ((STATUS_RANK[a.file.status] ?? 9) - (STATUS_RANK[b.file.status] ?? 9)) * dir;
+  });
+}
+
 export interface MenuHandlers {
   openFolder: (id: string) => void;
   openFile: (f: FileMeta) => void;

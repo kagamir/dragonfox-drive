@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, shallowRef } from "vue";
+import { nextTick, onMounted, ref, shallowRef } from "vue";
 import { useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { sharesApi } from "@/api/shares";
@@ -171,11 +171,16 @@ async function download() {
   }
 }
 
-function closePreview() {
+async function closePreview() {
+  const wasPhoto = preview.value?.kind === "image";
   if (preview.value && !preview.value.player && preview.value.url.startsWith("blob:")) {
     URL.revokeObjectURL(preview.value.url);
   }
   preview.value = null;
+  if (wasPhoto) {
+    await nextTick();
+    document.getElementById("share-preview")?.focus();
+  }
 }
 
 onMounted(load);
@@ -201,7 +206,7 @@ onMounted(load);
         <FileTypeIcon :name="manifest?.name ?? 'file'" />
         <p class="break-all text-sm font-semibold text-fg">{{ manifest?.name ?? t("common.appName") }}</p>
         <div class="flex gap-2">
-          <DfButton data-testid="share-preview-btn" @click="openPreview">{{ t("share.preview") }}</DfButton>
+          <DfButton id="share-preview" data-testid="share-preview-btn" @click="openPreview">{{ t("share.preview") }}</DfButton>
           <DfButton variant="ghost" data-testid="share-download-btn" :loading="downloading" @click="download">{{ downloading ? t("share.downloading") : t("share.download") }}</DfButton>
         </div>
         <p v-if="message" class="text-sm text-danger">{{ message }}</p>

@@ -53,7 +53,7 @@ describe("FilePreviewModal", () => {
     w.unmount();
   });
 
-  it("emits close when the DfModal close button is clicked", async () => {
+  it("emits close from the full-window photo viewer", async () => {
     const w = mountAttached({ kind: "image", url: "blob:i", name: "a.png" });
     await flushPromises();
     (document.body.querySelector('button[aria-label="Close"]') as HTMLButtonElement).click();

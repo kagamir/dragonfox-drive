@@ -1,6 +1,8 @@
 // web/src/locales/en.ts
 export default {
   imageDetails: {
+    previous: "Previous photo", next: "Next photo", zoom: "Zoom", closeInfo: "Close photo details",
+    fullscreen: "Enter fullscreen", exitFullscreen: "Exit fullscreen", fullscreenError: "The browser could not change fullscreen mode.",
     title: "Photo details", view: "Image preview", zoomIn: "Zoom in", zoomOut: "Zoom out",
     fit: "Fit to window", dimensions: "Dimensions", camera: "Camera", lens: "Lens",
     focalLength: "Focal length", aperture: "Aperture", shutter: "Exposure time",

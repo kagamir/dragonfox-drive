@@ -12,6 +12,10 @@ import { ApiError } from "@/api/client";
 // to the vi.mock factories below (which run at module load) and to each test.
 const STUB = vi.hoisted(() => ({
   currentFolderId: null as string | null,
+  displayNames: {} as Record<string, string>,
+  displayMimes: {} as Record<string, string>,
+  setPage: vi.fn(),
+  previewLoading: false,
   currentMode: "auto",
   effectiveMode: "normal",
   setFolderMode: vi.fn().mockResolvedValue(undefined),
@@ -35,7 +39,8 @@ vi.mock("@/stores/files", () => ({
   useFilesStore: () => ({
     get files() { return STUB.files; },
     loading: false, error: null, uploading: false, uploadProgress: 0,
-    downloading: false, displayNames: {} as Record<string, string>, activeUploads: [],
+    downloading: false, displayNames: STUB.displayNames, displayMimes: STUB.displayMimes, activeUploads: [],
+    get previewLoading() { return STUB.previewLoading; },
     activeDownloads: [] as { fileId: string; name: string; progress: number; phase: string }[],
     fileParents: {},
     get preview() { return STUB.preview; },
@@ -49,6 +54,7 @@ vi.mock("@/stores/files", () => ({
   }),
 }));
 vi.mock("@/stores/folders", () => ({
+  PAGE_SIZE: 50,
   FolderModeUnsupportedError: class extends Error {},
   useFoldersStore: () => ({
     folders: [],
@@ -57,8 +63,9 @@ vi.mock("@/stores/folders", () => ({
     get effectiveMode() { return STUB.effectiveMode; },
     setFolderMode: STUB.setFolderMode, page: 0, loading: false, error: null,
     breadcrumbs: [], totalPages: 1,
-    get paginatedView() { return STUB.paginatedView; },
-    loadTree: STUB.loadTree, navigateTo: vi.fn(), setPage: vi.fn(),
+    get combinedChildren() { return STUB.paginatedView; },
+    get paginatedView() { return STUB.paginatedView.slice(0, 50); },
+    loadTree: STUB.loadTree, navigateTo: vi.fn(), setPage: STUB.setPage,
     createFolder: vi.fn().mockResolvedValue(undefined), renameFolder: vi.fn().mockResolvedValue(undefined),
     moveFolder: vi.fn().mockResolvedValue(undefined), deleteFolder: STUB.deleteFolder,
     folderKeyOf: () => undefined,
@@ -73,7 +80,7 @@ vi.mock("@/components/FilePreviewModal.vue", () => ({
   default: {
     name: "FilePreviewModal", // findComponent({ name }) 依赖它
     template: "<div data-testid='preview-modal-stub' />",
-    props: ["kind", "url", "name", "player", "onSave", "startEditing"],
+    props: ["kind", "url", "name", "player", "onSave", "startEditing", "canPrevious", "canNext", "navigating"],
   },
 }));
 vi.mock("@/components/ShareDialog.vue", () => ({ default: { template: "<div />" } }));
@@ -98,6 +105,10 @@ describe("DriveView", () => {
     STUB.paginatedView = [];
     STUB.files = [];
     STUB.preview = null;
+    STUB.previewLoading = false;
+    STUB.displayNames = {};
+    STUB.displayMimes = {};
+    STUB.setPage.mockClear();
     STUB.remove.mockClear();
     STUB.deleteFolder.mockClear();
     STUB.saveTextFile.mockClear();
@@ -132,6 +143,45 @@ describe("DriveView", () => {
     await flushPromises();
     expect(STUB.setFolderMode).toHaveBeenCalledWith("album", "normal");
     expect((select.element as HTMLSelectElement).value).toBe("auto");
+  });
+
+  it("follows filtered cover order across pages, skips ineligible files and updates the page after a successful switch", async () => {
+    setActivePinia(createPinia());
+    const current = makeFile("b");
+    const target = makeFile("d");
+    const other = makeFile("c");
+    STUB.preview = { kind: "image", meta: current, url: "blob:b", name: "trip-b.jpg" };
+    STUB.displayNames = { a: "trip-a.jpg", b: "trip-b.jpg", c: "trip-z.jpg", d: "trip-c.jpg",
+      skip: "other.jpg", doc: "trip-b2.jpg", pending: "trip-b3.jpg", huge: "trip-b4.jpg" };
+    STUB.displayMimes.doc = "text/plain";
+    STUB.paginatedView = [
+      { kind: "file", file: current }, { kind: "file", file: makeFile("skip") },
+      { kind: "file", file: makeFile("a") }, { kind: "file", file: makeFile("doc") },
+      { kind: "file", file: { ...makeFile("pending"), status: "pending" } },
+      { kind: "file", file: { ...makeFile("huge"), total_size: 1024 ** 3 } },
+      ...Array.from({ length: 44 }, (_, i) => ({ kind: "folder" as const, folder: { name: "folder", id: String(i) } })),
+      { kind: "file", file: other }, { kind: "file", file: target },
+    ];
+    const w = mount(DriveView, { global: { stubs, plugins: [i18n] } });
+    await w.get(".drive-search input").setValue("trip");
+    const modal = w.getComponent({ name: "FilePreviewModal" });
+    expect(modal.props("canPrevious")).toBe(true);
+    expect(modal.props("canNext")).toBe(true);
+    STUB.previewLoading = true;
+    modal.vm.$emit("navigate", 1);
+    expect(STUB.openPreview).not.toHaveBeenCalled();
+    STUB.previewLoading = false;
+    modal.vm.$emit("navigate", 1);
+    await flushPromises();
+    expect(STUB.openPreview).toHaveBeenCalledWith(target);
+    expect(STUB.setPage).not.toHaveBeenCalled(); // a failed preview leaves the previous page in place
+    STUB.openPreview.mockImplementationOnce(async () => {
+      STUB.preview = { kind: "image", meta: target, name: "trip-c.jpg", url: "blob:d" };
+    });
+    modal.vm.$emit("navigate", 1);
+    await flushPromises();
+    expect(STUB.setPage).toHaveBeenCalledWith(1);
+    w.unmount();
   });
 
   describe("bulk delete", () => {

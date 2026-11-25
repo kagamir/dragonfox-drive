@@ -391,6 +391,60 @@ describe("files store", () => {
     expect(files.preview).toBeNull();
   });
 
+  it("retains the current photo on failure and discards superseded or closed preview requests", async () => {
+    useAuthStore().masterKey = new Uint8Array(32);
+    const store = useFilesStore();
+    const original = {
+      id: "first", owner_id: "u", status: "ready" as const, total_size: 3, chunk_count: 1,
+      encrypted_manifest: "em", encrypted_manifest_nonce: "emn", encrypted_file_key: "fk",
+      encrypted_file_key_nonce: "fkn", encrypted_parent_id: null, encrypted_parent_id_nonce: null,
+      created_at: "", updated_at: "",
+    };
+    const manifest = { version: 1, name: "image.jpg", mime: "image/jpeg", size: 3, created_at: "",
+      iv_base: "AAAA", content_id: "ab".repeat(16), chunk_size: 4 * 1024 * 1024 };
+    for (let i = 0; i < 5; i++) vi.mocked(cryptoApi.decryptManifestWithKey).mockResolvedValueOnce(manifest);
+    const create = vi.fn().mockReturnValueOnce("blob:a").mockReturnValueOnce("blob:b");
+    const revoke = vi.fn();
+    vi.stubGlobal("URL", { createObjectURL: create, revokeObjectURL: revoke });
+    try {
+      await store.openPreview(original);
+      getChunkMock.mockRejectedValueOnce(new Error("file unavailable"));
+      await store.openPreview({ ...original, id: "unavailable" });
+      expect(store.preview?.url).toBe("blob:a");
+      expect(store.error).toBe("file unavailable");
+      expect(revoke).not.toHaveBeenCalled();
+
+      async function pending(id: string) {
+        let resolve!: (v: Response) => void;
+        const started = new Promise<void>((ready) => {
+          getChunkMock.mockImplementationOnce(() => new Promise<Response>((r) => { resolve = r; ready(); }));
+        });
+        const done = store.openPreview({ ...original, id });
+        await started;
+        const signal = getChunkMock.mock.lastCall?.[2] as AbortSignal;
+        expect(store.previewLoading).toBe(true);
+        return { done, finish: () => resolve(new Response(new Uint8Array([1]))), signal };
+      }
+      const slow = await pending("old");
+      await store.openPreview({ ...original, id: "new" });
+      expect(slow.signal.aborted).toBe(true);
+      slow.finish();
+      await slow.done;
+      expect(store.preview?.meta.id).toBe("new");
+      expect(revoke).toHaveBeenCalledWith("blob:a");
+      const closed = await pending("closed");
+      store.closePreview();
+      expect(closed.signal.aborted).toBe(true);
+      closed.finish();
+      await closed.done;
+      expect(store.preview).toBeNull();
+      expect(store.error).toBeNull();
+      expect(store.previewLoading).toBe(false);
+      expect(create).toHaveBeenCalledTimes(2);
+      expect(revoke).toHaveBeenCalledWith("blob:b");
+    } finally { vi.unstubAllGlobals(); }
+  });
+
   it("openPreview routes an MP4 to the MSE player payload", async () => {
     const auth = useAuthStore();
     auth.masterKey = new Uint8Array(32) as any;

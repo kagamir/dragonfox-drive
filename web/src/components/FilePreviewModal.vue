@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { Dialog, DialogPanel, DialogTitle } from "@headlessui/vue";
 import type { FileKind } from "@/crypto/preview";
 import type { PlayerPayload } from "@/player/msePlayer";
 import Mp4Player from "./Mp4Player.vue";
@@ -14,6 +15,10 @@ const props = defineProps<{
   url: string;
   previewBlob?: Blob;
   name: string;
+  canPrevious?: boolean;
+  canNext?: boolean;
+  navigating?: boolean;
+  navigationError?: string;
   player?: PlayerPayload | null;
   /** Enables text editing. Resolve = saved (edit mode exits); reject = keep
    *  the draft and stay in edit mode (the parent surfaces the error). */
@@ -21,7 +26,7 @@ const props = defineProps<{
   /** New-file flow: open directly in edit mode with an empty draft. */
   startEditing?: boolean;
 }>();
-const emit = defineEmits<{ close: []; error: [message: string] }>();
+const emit = defineEmits<{ close: []; error: [message: string]; navigate: [direction: -1 | 1] }>();
 const { t } = useI18n();
 const confirm = useConfirm();
 
@@ -68,10 +73,16 @@ async function requestClose() {
 
 <template>
   <Mp4Player v-if="player" :payload="player" :name="name" @close="emit('close')" @error="(m) => emit('error', m)" />
-  <DfModal v-else :open="true" :title="name" :size="kind === 'image' ? 'photo' : 'lg'" @close="requestClose">
+  <Dialog v-else-if="kind === 'image'" :open="true" class="fixed inset-0 z-50" @close="emit('close')">
+    <DialogPanel class="h-full w-full">
+      <DialogTitle class="sr-only">{{ name }}</DialogTitle>
+      <ImageViewer :url="url" :blob="previewBlob" :name="name" :can-previous="canPrevious" :can-next="canNext"
+        :navigating="navigating" :navigation-error="navigationError" @navigate="(direction) => emit('navigate', direction)" @close="emit('close')" />
+    </DialogPanel>
+  </Dialog>
+  <DfModal v-else :open="true" :title="name" size="lg" @close="requestClose">
     <div class="flex flex-col items-center gap-3">
-      <ImageViewer v-if="kind === 'image'" :key="url" :url="url" :blob="previewBlob" :name="name" />
-      <template v-else-if="kind === 'text'">
+      <template v-if="kind === 'text'">
         <textarea
           v-if="editing"
           v-model="draft"

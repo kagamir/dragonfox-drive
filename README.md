@@ -13,7 +13,7 @@ Open a folder on the web or in the **Home** tab on Android. In **Automatic** mod
 
 To choose a view yourself, use the folder type selector beside the folder name on the web, or open the folder’s **⋮** menu on Android. Choose an ordinary folder or a photo folder to keep that view as the contents change. Choose **Automatic** to resume detection. Manual choices are encrypted and sync across devices. Update the server to this version before saving a choice.
 
-In a photo folder, select a thumbnail to open and zoom the image. Expand the details panel to see any camera, lens, focal length, aperture, shutter speed, ISO and capture time recorded in the file. Clients decrypt photos and read their metadata locally. Supported image formats depend on the browser or Android device.
+On the web, open a thumbnail to fill the window with the photo. Click the left or right side to browse, scroll to zoom and drag to pan. Use **Fit to window** to resume browsing. Open **Photo details** for the right-hand drawer with the dimensions and any camera, lens, focal length, aperture, shutter speed, ISO and capture time recorded in the file. Clients decrypt photos and read their metadata locally. Supported image formats depend on the browser or Android device.
 
 ## Android auto-sync
 

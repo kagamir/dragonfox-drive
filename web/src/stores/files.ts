@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { ref, shallowRef } from "vue";
+import { computed, ref, shallowRef } from "vue";
 
 import { filesApi } from "@/api/files";
 import { refreshAuthToken, ApiError } from "@/api/client";
@@ -81,6 +81,9 @@ export const useFilesStore = defineStore("files", () => {
     name: string;
     player?: { fileKey: Uint8Array; ivBase: Uint8Array; contentId: string; chunkSize: number; totalSize: number; fetchChunk: (idx: number) => Promise<Uint8Array> } | null;
   } | null>(null);
+
+  const previewRequest = shallowRef<AbortController | null>(null);
+  const previewLoading = computed(() => previewRequest.value !== null);
 
   function masterKey(): Uint8Array {
     const key = useAuthStore().masterKey;
@@ -610,110 +613,80 @@ export const useFilesStore = defineStore("files", () => {
     return upload(file);
   }
 
-  async function openVideo(meta: FileMeta, manifest: Manifest, fileKey: Uint8Array): Promise<void> {
-    const ivBase = fromBase64(manifest.iv_base);
-    const isMp4 = ["video/mp4", "video/quicktime", "video/x-m4v"].includes(manifest.mime);
-
-    if (isMp4 && typeof MediaSource !== "undefined") {
-      // MSE path: the FilePreviewModal renders <Mp4Player> using this payload.
-      if (preview.value) closePreview();
-      preview.value = {
-        meta,
-        url: "",
-        kind: "video",
-        name: manifest.name,
-        player: {
-          fileKey,
-          ivBase,
-          contentId: manifest.content_id,
-          chunkSize: FILE_CHUNK_SIZE,
-          totalSize: manifest.size,
-          fetchChunk: async (i: number) => {
-            const r = await filesApi.getChunk(meta.id, i);
-            return new Uint8Array(await r.arrayBuffer());
-          },
-        },
-      };
-      return;
-    }
-
-    // Fallback: whole-file blob for non-MP4 / MSE-unsupported small videos.
-    if (manifest.size <= PREVIEW_CAPS.video) {
-      const n = meta.chunk_count;
-      const parts = new Array<Uint8Array>(n);
-      await asyncPool(
-        3,
-        Array.from({ length: n }, (_, i) => i),
-        async (i) => {
-          const resp = await filesApi.getChunk(meta.id, i);
-          const cipher = new Uint8Array(await resp.arrayBuffer());
-          parts[i] = await cryptoApi.decryptChunk(fileKey, ivBase, i, cipher, manifest.content_id);
-        },
-      );
-      const blob = new Blob(parts as BlobPart[], { type: manifest.mime });
-      if (preview.value) URL.revokeObjectURL(preview.value.url);
-      preview.value = {
-        meta,
-        url: URL.createObjectURL(blob),
-        kind: "video",
-        name: manifest.name,
-        player: null,
-      };
-      return;
-    }
-
-    error.value = "This video can't be played in the browser — use Download.";
+  function replacePreview(next: typeof preview.value): void {
+    const previous = preview.value;
+    preview.value = next;
+    if (previous?.url.startsWith("blob:")) URL.revokeObjectURL(previous.url);
   }
 
   async function openPreview(meta: FileMeta): Promise<void> {
+    previewRequest.value?.abort();
+    const request = new AbortController();
+    previewRequest.value = request;
+    const signal = request.signal;
     error.value = null;
     try {
       await ensureCryptoReady();
+      if (signal.aborted) return;
       const { fileKey, manifest } = await unlockFile(meta);
+      if (signal.aborted) return;
       const mime = displayMime(manifest.mime, manifest.name);
       const kind = kindOf(mime);
-      if (kind === "video") {
-        return await openVideo(meta, { ...manifest, mime }, fileKey);
-      }
       if (kind === "other") {
         error.value = "Preview is not supported for this file type — use Download.";
         return;
       }
-      if (!canPreview(kind, manifest.size)) {
+      if (kind !== "video" && !canPreview(kind, manifest.size)) {
         error.value = "File too large to preview — use Download.";
         return;
       }
       const ivBase = fromBase64(manifest.iv_base);
+      if (kind === "video" && ["video/mp4", "video/quicktime", "video/x-m4v"].includes(mime) && typeof MediaSource !== "undefined") {
+        replacePreview({
+          meta, url: "", kind, name: manifest.name,
+          player: {
+            fileKey, ivBase, contentId: manifest.content_id, chunkSize: FILE_CHUNK_SIZE, totalSize: manifest.size,
+            fetchChunk: async (i: number) => {
+              const r = await filesApi.getChunk(meta.id, i);
+              return new Uint8Array(await r.arrayBuffer());
+            },
+          },
+        });
+        return;
+      }
+      if (kind === "video" && manifest.size > PREVIEW_CAPS.video) {
+        error.value = "This video can't be played in the browser — use Download.";
+        return;
+      }
       const n = meta.chunk_count;
       const parts = new Array<Uint8Array>(n);
-      await asyncPool(
-        3,
-        Array.from({ length: n }, (_, i) => i),
-        async (i) => {
-          const resp = await filesApi.getChunk(meta.id, i);
-          const cipher = new Uint8Array(await resp.arrayBuffer());
-          parts[i] = await cryptoApi.decryptChunk(fileKey, ivBase, i, cipher, manifest.content_id);
-        },
-      );
+      await asyncPool(3, Array.from({ length: n }, (_, i) => i), async (i) => {
+        if (signal.aborted) return;
+        const resp = await filesApi.getChunk(meta.id, i, signal);
+        const cipher = new Uint8Array(await resp.arrayBuffer());
+        if (!signal.aborted) parts[i] = await cryptoApi.decryptChunk(fileKey, ivBase, i, cipher, manifest.content_id);
+      });
+      if (signal.aborted) return;
       const blob = new Blob(parts as BlobPart[], { type: mime });
-      if (preview.value) URL.revokeObjectURL(preview.value.url);
-      preview.value = {
-        meta,
-        url: URL.createObjectURL(blob),
+      replacePreview({
+        meta, url: URL.createObjectURL(blob), kind, name: manifest.name,
         previewBlob: kind === "image" || kind === "text" ? blob : undefined,
-        kind,
-        name: manifest.name,
-      };
+        player: null,
+      });
     } catch (e) {
-      error.value = (e as Error).message;
+      if (!signal.aborted) {
+        error.value = (e as Error).message;
+        request.abort();
+      }
+    } finally {
+      if (previewRequest.value === request) previewRequest.value = null;
     }
   }
 
   function closePreview(): void {
-    if (!preview.value) return;
-    const p = preview.value;
-    if (!p.player && p.url.startsWith("blob:")) URL.revokeObjectURL(p.url);
-    preview.value = null;
+    previewRequest.value?.abort();
+    previewRequest.value = null;
+    replacePreview(null);
   }
 
   async function remove(id: string): Promise<void> {
@@ -746,6 +719,7 @@ export const useFilesStore = defineStore("files", () => {
     createTextFile,
     unlockFile,
     preview,
+    previewLoading,
     openPreview,
     closePreview,
   };

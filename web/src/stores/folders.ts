@@ -39,7 +39,7 @@ export interface FileEntry {
 }
 export type TreeEntry = FolderEntry | FileEntry;
 
-const PAGE_SIZE = 50;
+export const PAGE_SIZE = 50;
 
 export const useFoldersStore = defineStore("folders", () => {
   const folders = ref<FolderNode[]>([]);
@@ -350,6 +350,7 @@ export const useFoldersStore = defineStore("folders", () => {
     error,
     breadcrumbs,
     totalPages,
+    combinedChildren,
     paginatedView,
     loadTree,
     navigateTo,

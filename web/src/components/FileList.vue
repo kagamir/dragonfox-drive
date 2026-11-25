@@ -8,7 +8,7 @@ import DfBadge from "@/components/ui/DfBadge.vue";
 import DfEmpty from "@/components/ui/DfEmpty.vue";
 import DfDropdown from "@/components/ui/DfDropdown.vue";
 import { MoreHorizontal } from "lucide-vue-next";
-import { keyOf, menuFor, type Entry, type MenuHandlers, type SortKey } from "@/components/fileMenu";
+import { keyOf, menuFor, visibleEntries, type Entry, type MenuHandlers, type SortKey } from "@/components/fileMenu";
 
 const props = withDefaults(defineProps<{
   entries: Entry[];
@@ -59,41 +59,12 @@ function fmtSize(n: number): string {
   return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
-const filtered = computed(() => {
-  const q = props.search.trim().toLowerCase();
-  if (!q) return props.entries;
-  return props.entries.filter((e) =>
-    e.kind === "folder" ? e.folder.name.toLowerCase().includes(q) : fname(e.file).toLowerCase().includes(q),
-  );
-});
-
-const sorted = computed(() => {
-  const dir = props.sortDir === "asc" ? 1 : -1;
-  const arr = [...filtered.value];
-  arr.sort((a, b) => {
-    if (a.kind !== b.kind) return a.kind === "folder" ? -1 : 1;
-    if (props.sortKey === "size") {
-      const as = a.kind === "folder" ? 0 : a.file.total_size;
-      const bs = b.kind === "folder" ? 0 : b.file.total_size;
-      return (as - bs) * dir;
-    }
-    if (props.sortKey === "status") {
-      const ra = a.kind === "folder" ? -1 : STATUS_RANK[a.file.status] ?? 9;
-      const rb = b.kind === "folder" ? -1 : STATUS_RANK[b.file.status] ?? 9;
-      return (ra - rb) * dir;
-    }
-    const an = a.kind === "folder" ? a.folder.name : fname(a.file);
-    const bn = b.kind === "folder" ? b.folder.name : fname(b.file);
-    return an.localeCompare(bn) * dir;
-  });
-  return arr;
-});
+const sorted = computed(() => visibleEntries(props.entries, props.displayNames, props.search, props.sortKey, props.sortDir));
 
 function statusVariant(s: string) {
   return s === "ready" ? "ok" : s === "uploading" || s === "pending" ? "proc" : "neutral";
 }
 const STATUS_KEY: Record<string, string> = { ready: "ready", uploading: "uploading", pending: "pending" };
-const STATUS_RANK: Record<string, number> = { ready: 0, uploading: 1, pending: 2, deleted: 3 };
 function statusLabel(s: string) {
   return t("status." + (STATUS_KEY[s] ?? "pending"));
 }
@@ -157,7 +128,8 @@ function onContextmenu(ev: MouseEvent, e: Entry) {
         v-for="e in sorted"
         :key="keyOf(e)"
         class="relative min-w-0 rounded-xl border bg-surface transition-colors hover:border-brand"
-        :class="selection.includes(keyOf(e)) ? 'border-brand ring-1 ring-brand' : 'border-border'"
+        :class="[selection.includes(keyOf(e)) ? 'border-brand ring-1 ring-brand' : 'border-border',
+          { 'gallery-tile': view === 'gallery' }]"
         @contextmenu="onContextmenu($event, e)"
       >
         <button
@@ -165,14 +137,15 @@ function onContextmenu(ev: MouseEvent, e: Entry) {
           class="flex w-full flex-col items-center rounded-xl text-fg"
           :class="view === 'grid' ? 'gap-2 p-4 pt-9' : 'text-left'"
           :disabled="e.kind === 'file' && e.file.status !== 'ready'"
+          :id="e.kind === 'file' ? 'drive-file-' + e.file.id : undefined"
           :aria-label="entryName(e)"
           :title="entryName(e)"
           @click="openEntry(e)"
         >
           <template v-if="view === 'gallery'">
             <FileThumbnail v-if="e.kind === 'file'" :file="e.file" :name="fname(e.file)"
-              class="aspect-[4/3] w-full rounded-t-xl bg-bg" />
-            <span v-else class="flex aspect-[4/3] w-full items-center justify-center rounded-t-xl bg-brand-soft">
+              class="gallery-cover aspect-[4/3] w-full rounded-t-xl bg-bg" />
+            <span v-else class="gallery-cover flex aspect-[4/3] w-full items-center justify-center rounded-t-xl bg-brand-soft">
               <FileTypeIcon :name="e.folder.name" is-folder />
             </span>
           </template>
@@ -184,13 +157,13 @@ function onContextmenu(ev: MouseEvent, e: Entry) {
             </span>
           </span>
         </button>
-        <label class="absolute start-1.5 top-1.5 grid size-7 cursor-pointer place-items-center rounded-md bg-surface/95">
+        <label class="cover-control absolute start-1.5 top-1.5 grid size-7 cursor-pointer place-items-center rounded-md bg-surface/95">
           <input type="checkbox" class="accent-brand"
             :aria-label="t('gallery.selectItem', { name: entryName(e) })"
             :checked="selection.includes(keyOf(e))"
             @click.stop="toggle(e, $event.shiftKey)" />
         </label>
-        <div class="absolute end-1.5 top-1.5">
+        <div class="cover-control absolute end-1.5 top-1.5">
           <DfDropdown :items="itemsFor(e)" align="right">
             <template #trigger>
               <button class="grid size-7 place-items-center rounded-md bg-surface/95 text-fg hover:bg-bg"
@@ -234,6 +207,7 @@ function onContextmenu(ev: MouseEvent, e: Entry) {
           <div class="flex min-w-0 items-center gap-3">
             <FileTypeIcon :name="e.kind === 'folder' ? e.folder.name : fname(e.file)" :is-folder="e.kind === 'folder'" />
             <button
+              :id="e.kind === 'file' ? 'drive-file-' + e.file.id : undefined"
               class="min-w-0 truncate text-left text-sm font-medium text-fg hover:text-brand"
               @click="e.kind === 'folder' ? emit('openFolder', e.folder.id) : emit('openFile', e.file)"
             >{{ e.kind === "folder" ? e.folder.name : fname(e.file) }}</button>
@@ -256,3 +230,12 @@ function onContextmenu(ev: MouseEvent, e: Entry) {
     </template>
   </template>
 </template>
+
+<style scoped>
+@media (hover: hover) and (pointer: fine) {
+  .gallery-tile:not(:has(.gallery-cover:hover, .cover-control:hover, :focus-visible, [aria-expanded="true"])) .cover-control {
+    opacity: 0;
+    pointer-events: none;
+  }
+}
+</style>

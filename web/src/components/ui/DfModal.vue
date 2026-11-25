@@ -5,10 +5,10 @@ import {
 } from "@headlessui/vue";
 import { X } from "lucide-vue-next";
 import { useI18n } from "vue-i18n";
-withDefaults(defineProps<{ open: boolean; title?: string; size?: "sm" | "md" | "lg" | "photo" }>(), { size: "md" });
+withDefaults(defineProps<{ open: boolean; title?: string; size?: "sm" | "md" | "lg" }>(), { size: "md" });
 defineEmits<{ close: [] }>();
 const { t } = useI18n();
-const maxW = { sm: "max-w-sm", md: "max-w-md", lg: "max-w-2xl", photo: "max-w-6xl" };
+const maxW = { sm: "max-w-sm", md: "max-w-md", lg: "max-w-2xl" };
 </script>
 
 <template>
@@ -23,7 +23,7 @@ const maxW = { sm: "max-w-sm", md: "max-w-md", lg: "max-w-2xl", photo: "max-w-6x
         <TransitionChild as="template"
           enter="duration-200 ease-out" enter-from="opacity-0 scale-95" enter-to="opacity-100 scale-100"
           leave="duration-150 ease-in" leave-from="opacity-100 scale-100" leave-to="opacity-0 scale-95">
-          <DialogPanel :class="['w-full max-h-[90vh] overflow-y-auto rounded-xl border border-border bg-surface shadow-lg', size === 'photo' ? 'p-3 sm:p-5' : 'p-6', maxW[size]]">
+          <DialogPanel :class="['w-full max-h-[90vh] overflow-y-auto rounded-xl border border-border bg-surface p-6 shadow-lg', maxW[size]]">
             <div class="mb-2 flex items-start justify-between gap-4">
               <DialogTitle v-if="title" class="min-w-0 break-words text-lg font-semibold text-fg">{{ title }}</DialogTitle>
               <button type="button" class="ml-auto text-fg-muted hover:text-fg" :aria-label="t('common.close')" @click="$emit('close')">

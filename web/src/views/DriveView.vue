@@ -1,20 +1,22 @@
 <script setup lang="ts">
-import { onMounted, ref, computed, watch } from "vue";
+import { nextTick, onBeforeUnmount, onMounted, ref, computed, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuthStore } from "@/stores/auth";
 import { useFilesStore } from "@/stores/files";
-import { useFoldersStore, FolderModeUnsupportedError, type FolderMode } from "@/stores/folders";
+import { useFoldersStore, FolderModeUnsupportedError, PAGE_SIZE, type FolderMode } from "@/stores/folders";
 import { useConfirm } from "@/composables/useConfirm";
 import { usePrompt } from "@/composables/usePrompt";
 import { useToast } from "@/composables/useToast";
 import type { FileMeta } from "@/api/types";
 import { ApiError } from "@/api/client";
+import { mediaKind } from "@/util/media";
+import { canPreview } from "@/crypto/preview";
 import AppHeader from "@/components/AppHeader.vue";
 import UploadDropzone from "@/components/UploadDropzone.vue";
 import UploadQueueDrawer from "@/components/UploadQueueDrawer.vue";
 import DownloadQueueDrawer from "@/components/DownloadQueueDrawer.vue";
 import FileList from "@/components/FileList.vue";
-import { menuFor, parseKey, type Entry, type MenuHandlers, type SortKey } from "@/components/fileMenu";
+import { menuFor, parseKey, visibleEntries, type Entry, type MenuHandlers, type SortKey } from "@/components/fileMenu";
 import DfBreadcrumbs from "@/components/ui/DfBreadcrumbs.vue";
 import DfButton from "@/components/ui/DfButton.vue";
 import DfSegmented from "@/components/ui/DfSegmented.vue";
@@ -49,6 +51,8 @@ const ctxTarget = ref<Entry | null>(null);
 
 onMounted(async () => { await folders.loadTree(); await files.refresh(); });
 
+onBeforeUnmount(() => files.closePreview());
+
 function pickFile() { fileInput.value?.click(); }
 async function onFilesChosen(list: File[]) {
   for (const f of list) {
@@ -62,7 +66,53 @@ async function onFileChosen(e: Event) {
   target.value = "";
 }
 
-function openFile(f: FileMeta) { void files.openPreview(f).catch(() => {}); }
+const photoError = ref("");
+function openFile(f: FileMeta) {
+  photoError.value = "";
+  void files.openPreview(f).catch(() => {});
+}
+async function closePreview() {
+  const photoId = files.preview?.kind === "image" ? files.preview.meta.id : null;
+  photoError.value = "";
+  files.closePreview();
+  if (photoId) {
+    await nextTick();
+    document.getElementById("drive-file-" + photoId)?.focus();
+  }
+}
+// The list sorts and filters within each page. Traverse the same pages in order
+// so the next photo always matches the next eligible cover in the browser.
+const photos = computed(() => {
+  const items: { file: FileMeta; page: number }[] = [];
+  const entries = folders.combinedChildren;
+  for (let start = 0; start < entries.length; start += PAGE_SIZE) {
+    const page = visibleEntries(entries.slice(start, start + PAGE_SIZE), files.displayNames, search.value, sortKey.value, sortDir.value);
+    for (const entry of page) {
+      if (entry.kind !== "file") continue;
+      const f = entry.file;
+      if (f.status === "ready" && canPreview("image", f.total_size) && mediaKind(files.displayMimes[f.id], files.displayNames[f.id]) === "image") {
+        items.push({ file: f, page: start / PAGE_SIZE });
+      }
+    }
+  }
+  return items;
+});
+const photoIndex = computed(() => files.preview?.kind === "image"
+  ? photos.value.findIndex(({ file }) => file.id === files.preview?.meta.id) : -1);
+
+async function navigatePhoto(direction: -1 | 1) {
+  if (photoIndex.value < 0 || files.previewLoading) return;
+  const target = photos.value[photoIndex.value + direction];
+  if (!target) return;
+  const previous = files.preview;
+  photoError.value = "";
+  await files.openPreview(target.file);
+  if (files.preview?.meta.id === target.file.id) {
+    if (target.page !== folders.page) folders.setPage(target.page);
+  } else if (files.preview === previous && files.error) {
+    photoError.value = files.error;
+  }
+}
 function download(f: FileMeta) { void files.download(f).catch(() => {}); }
 function share(f: FileMeta) { shareTarget.value = f; }
 async function newTextFile() {
@@ -229,6 +279,7 @@ const title = computed(() => folders.breadcrumbs.at(-1)?.name ?? t("drive.myFile
 const savingMode = ref(false);
 
 watch(() => folders.currentFolderId, () => {
+  files.closePreview();
   search.value = "";
   selection.value = [];
 });
@@ -353,8 +404,13 @@ const queueUploads = computed(() =>
       :preview-blob="files.preview.previewBlob"
       :name="files.preview.name"
       :player="files.preview.player"
+      :can-previous="photoIndex > 0"
+      :can-next="photoIndex >= 0 && photoIndex < photos.length - 1"
+      :navigating="files.previewLoading"
+      :navigation-error="photoError"
+      @navigate="navigatePhoto"
       :on-save="files.preview.kind === 'text' ? saveExistingText : null"
-      @close="files.closePreview()"
+      @close="closePreview"
       @error="(m: string) => (files.error = m)"
     />
     <FilePreviewModal

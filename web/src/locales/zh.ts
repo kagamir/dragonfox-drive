@@ -1,6 +1,8 @@
 // web/src/locales/zh.ts
 export default {
   imageDetails: {
+    previous: "上一张", next: "下一张", zoom: "缩放", closeInfo: "关闭照片信息",
+    fullscreen: "进入全屏", exitFullscreen: "退出全屏", fullscreenError: "浏览器无法进入或退出全屏。",
     title: "照片信息", view: "图片预览", zoomIn: "放大", zoomOut: "缩小",
     fit: "适应窗口", dimensions: "像素尺寸", camera: "相机", lens: "镜头",
     focalLength: "焦距", aperture: "光圈", shutter: "曝光时间",

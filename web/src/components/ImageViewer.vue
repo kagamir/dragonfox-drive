@@ -1,155 +1,192 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { Camera, ChevronDown, Scan, ZoomIn, ZoomOut } from "lucide-vue-next";
-import type { CameraData } from "@/util/imageExif";
+import { useMediaQuery } from "@vueuse/core";
+import { Info, Maximize, Minimize, Scan, X, ZoomIn, ZoomOut } from "lucide-vue-next";
+import PhotoCanvas from "./PhotoCanvas.vue";
+import PhotoInfoDrawer from "./PhotoInfoDrawer.vue";
 
-const props = defineProps<{ url: string; name: string; blob?: Blob }>();
+const props = defineProps<{
+  url: string; name: string; blob?: Blob;
+  canPrevious?: boolean; canNext?: boolean; navigating?: boolean; navigationError?: string;
+}>();
+const emit = defineEmits<{ close: []; navigate: [direction: -1 | 1] }>();
 const { t } = useI18n();
-const stage = ref<HTMLElement | null>(null);
-const natural = ref({ w: 0, h: 0 });
-const bounds = ref({ w: 0, h: 0 });
-const fit = computed(() => natural.value.w && bounds.value.w
-  ? Math.min(1, bounds.value.w / natural.value.w, bounds.value.h / natural.value.h) : 1);
-const zoom = ref<number | null>(null);
-const scale = computed(() => zoom.value ?? fit.value);
-const photoWidth = computed(() => natural.value.w && bounds.value.w ? natural.value.w * scale.value + "px" : undefined);
-const broken = ref(false);
+const viewer = ref<HTMLElement | null>(null);
+const canvas = ref<InstanceType<typeof PhotoCanvas> | null>(null);
+const drawer = ref<InstanceType<typeof PhotoInfoDrawer> | null>(null);
+const infoButton = ref<HTMLButtonElement | null>(null);
 const expanded = ref(false);
-const exifState = ref<"idle" | "loading" | "ready" | "error">("idle");
-const fields = ref<CameraData>({});
-let observer: ResizeObserver | undefined;
-let worker: Worker | undefined;
-let timer: ReturnType<typeof setTimeout> | undefined;
+const compact = useMediaQuery("(max-width: 42rem)");
+const dimensions = ref({ width: 0, height: 0 });
+const fullscreenAvailable = ref(false);
+const fullscreen = ref(false);
+const fullscreenError = ref(false);
+const zoomPercent = computed(() => Math.round((canvas.value?.scale ?? 1) * 100));
 
-function measure() {
-  if (stage.value) bounds.value = { w: stage.value.clientWidth, h: stage.value.clientHeight };
+watch(() => props.url, () => { dimensions.value = { width: 0, height: 0 }; }, { flush: "sync" });
+
+async function showInfo(open: boolean) {
+  expanded.value = open;
+  await nextTick();
+  if (open) drawer.value?.focusClose();
+  else infoButton.value?.focus();
 }
-onMounted(() => {
-  measure();
-  if (stage.value && typeof ResizeObserver !== "undefined") {
-    observer = new ResizeObserver(measure);
-    observer.observe(stage.value);
-  }
-});
-function loaded(event: Event) {
-  const image = event.currentTarget as HTMLImageElement;
-  natural.value = { w: image.naturalWidth, h: image.naturalHeight };
-  measure();
-}
-function setScale(value: number | null, click?: MouseEvent) {
-  const el = stage.value;
-  if (!el) return;
-  const box = el.getBoundingClientRect();
-  const x = click?.detail ? click.clientX - box.left : el.clientWidth / 2;
-  const y = click?.detail ? click.clientY - box.top : el.clientHeight / 2;
-  const oldW = natural.value.w * scale.value;
-  const oldH = natural.value.h * scale.value;
-  const px = oldW ? (el.scrollLeft + x - Math.max(0, (el.clientWidth - oldW) / 2)) / oldW : .5;
-  const py = oldH ? (el.scrollTop + y - Math.max(0, (el.clientHeight - oldH) / 2)) / oldH : .5;
-  zoom.value = value === null ? null : Math.min(4, Math.max(fit.value, value));
-  nextTick(() => {
-    el.scrollLeft = px * natural.value.w * scale.value - x;
-    el.scrollTop = py * natural.value.h * scale.value - y;
-  });
+
+function navigate(direction: -1 | 1) {
+  if (props.navigating || canvas.value?.isZoomed || (direction < 0 ? !props.canPrevious : !props.canNext)) return;
+  emit("navigate", direction);
 }
 function keydown(e: KeyboardEvent) {
-  if (e.ctrlKey || e.metaKey || e.altKey || broken.value) return;
-  if (e.key === "+" || e.key === "=") setScale(scale.value * 1.5);
-  else if (e.key === "-") setScale(scale.value / 1.5);
-  else if (e.key === "0") setScale(null);
-  else return;
+  if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === "Escape" && expanded.value) {
+    e.preventDefault();
+    e.stopPropagation();
+    void showInfo(false);
+    return;
+  }
+  if (compact.value && expanded.value) return;
+  switch (e.key) {
+    case "ArrowLeft": navigate(-1); break;
+    case "ArrowRight": navigate(1); break;
+    case "+": case "=": canvas.value?.zoomIn(); break;
+    case "-": canvas.value?.zoomOut(); break;
+    case "0": canvas.value?.resetZoom(); break;
+    default: return;
+  }
   e.preventDefault();
 }
 
-function stopWorker() {
-  worker?.terminate();
-  worker = undefined;
-  clearTimeout(timer);
+function onFullscreenChange() {
+  fullscreen.value = document.fullscreenElement === viewer.value;
 }
-function fail() { exifState.value = "error"; stopWorker(); }
-function toggleDetails() {
-  expanded.value = !expanded.value;
-  if (!expanded.value && exifState.value === "loading") {
-    stopWorker();
-    exifState.value = "idle";
-  }
-  if (!expanded.value || exifState.value !== "idle") return;
-  exifState.value = "loading";
+onMounted(() => {
+  fullscreenAvailable.value = !!document.fullscreenEnabled && !!viewer.value?.requestFullscreen;
+  document.addEventListener("fullscreenchange", onFullscreenChange);
+});
+onBeforeUnmount(() => document.removeEventListener("fullscreenchange", onFullscreenChange));
+async function toggleFullscreen() {
+  fullscreenError.value = false;
   try {
-    if (!props.blob) return fail();
-    worker = new Worker(new URL("../workers/imageExif.worker.ts", import.meta.url), { type: "module" });
-    worker.onmessage = ({ data }) => {
-      if (data.failed) return fail();
-      fields.value = data.fields;
-      exifState.value = "ready";
-      stopWorker();
-    };
-    worker.onerror = fail;
-    timer = setTimeout(fail, 8000);
-    worker.postMessage(props.blob);
-  } catch { fail(); }
+    if (document.fullscreenElement === viewer.value) await document.exitFullscreen();
+    else await viewer.value?.requestFullscreen();
+  } catch { fullscreenError.value = true; }
 }
-onBeforeUnmount(() => { observer?.disconnect(); stopWorker(); });
 </script>
 
 <template>
-  <section class="viewer" @keydown="keydown">
-    <div ref="stage" class="photo-stage" tabindex="0" role="region" :aria-label="t('imageDetails.view')">
-      <div class="photo-center">
-        <p v-if="broken" role="status" class="p-5 text-sm text-fg-muted">{{ t("imageDetails.unsupported") }}</p>
-        <button v-else type="button" class="photo-button" :class="{ enlarged: scale > fit }"
-          :aria-label="scale > fit ? t('imageDetails.fit') : t('imageDetails.zoomIn')"
-          @click="setScale(scale > fit ? null : (fit < 1 ? 1 : 2), $event)">
-          <img :src="url" :alt="name" :style="{ width: photoWidth }" @load="loaded" @error="broken = true" draggable="false" />
+  <section ref="viewer" class="photo-viewer" :class="{ 'info-open': expanded }"
+    data-testid="photo-viewer" @keydown="keydown">
+    <div class="photo-pane" :inert="compact && expanded">
+      <header class="photo-header">
+        <button type="button" class="photo-icon" data-testid="photo-close"
+          :aria-label="t('common.close')" :title="t('common.close')" @click="emit('close')">
+          <X aria-hidden="true" />
+        </button>
+        <span class="photo-name" data-testid="photo-name" :title="name" aria-live="polite">{{ name }}</span>
+        <span v-if="navigating" class="photo-spinner" role="status" :aria-label="t('common.loading')" />
+        <button ref="infoButton" type="button" class="photo-icon info-toggle" data-testid="photo-info-toggle"
+          :aria-label="t('imageDetails.title')" :title="t('imageDetails.title')"
+          :aria-expanded="expanded" aria-controls="photo-info" @click="showInfo(!expanded)">
+          <Info aria-hidden="true" />
+        </button>
+        <button v-if="fullscreenAvailable" type="button" class="photo-icon" data-testid="photo-fullscreen"
+          :aria-label="t(fullscreen ? 'imageDetails.exitFullscreen' : 'imageDetails.fullscreen')"
+          :title="t(fullscreen ? 'imageDetails.exitFullscreen' : 'imageDetails.fullscreen')" @click="toggleFullscreen">
+          <component :is="fullscreen ? Minimize : Maximize" aria-hidden="true" />
+        </button>
+      </header>
+      <PhotoCanvas ref="canvas" :url="url" :name="name" :can-previous="canPrevious && !navigating"
+        :can-next="canNext && !navigating" @navigate="navigate"
+        @dimensions="(width, height) => { dimensions = { width, height } }" />
+
+      <p v-if="navigationError || fullscreenError" role="status" class="viewer-error">
+        {{ navigationError || t("imageDetails.fullscreenError") }}
+      </p>
+
+      <div class="zoom-tools" role="group" :aria-label="t('imageDetails.zoom')">
+        <button type="button" class="photo-icon" :disabled="!canvas?.canZoomOut"
+          :aria-label="t('imageDetails.zoomOut')" :title="t('imageDetails.zoomOut')" @click="canvas?.zoomOut()">
+          <ZoomOut aria-hidden="true" />
+        </button>
+        <span data-testid="photo-zoom" class="zoom-percent">{{ zoomPercent }}%</span>
+        <button type="button" class="photo-icon" :disabled="!canvas?.canZoomIn"
+          :aria-label="t('imageDetails.zoomIn')" :title="t('imageDetails.zoomIn')" @click="canvas?.zoomIn()">
+          <ZoomIn aria-hidden="true" />
+        </button>
+        <button type="button" class="photo-icon fit-control" data-testid="photo-fit" :disabled="!canvas?.isZoomed"
+          :aria-label="t('imageDetails.fit')" :title="t('imageDetails.fit')" @click="canvas?.resetZoom()">
+          <Scan aria-hidden="true" />
         </button>
       </div>
     </div>
-    <div class="tools">
-      <button type="button" class="details-toggle" :aria-expanded="expanded" @click="toggleDetails">
-        <Camera aria-hidden="true" :size="16" />{{ t("imageDetails.title") }}
-        <ChevronDown :size="14" aria-hidden="true" :class="{ 'rotate-180': expanded }" />
-      </button>
-      <div v-if="!broken" class="zoom-tools">
-        <button type="button" :aria-label="t('imageDetails.zoomOut')" :title="t('imageDetails.zoomOut')"
-          :disabled="!natural.w || scale <= fit" @click="setScale(scale / 1.5)"><ZoomOut :size="17" /></button>
-        <span class="tabular-nums">{{ Math.round(scale * 100) }}%</span>
-        <button type="button" :aria-label="t('imageDetails.zoomIn')" :title="t('imageDetails.zoomIn')"
-          :disabled="!natural.w || scale >= 4" @click="setScale(scale * 1.5)"><ZoomIn :size="17" /></button>
-        <button type="button" :aria-label="t('imageDetails.fit')" :title="t('imageDetails.fit')"
-          :disabled="zoom === null" @click="setScale(null)"><Scan :size="17" /></button>
-      </div>
-    </div>
-    <div v-if="expanded" class="metadata">
-      <dl v-if="natural.w || Object.keys(fields).length" class="fields">
-        <div v-if="natural.w"><dt>{{ t("imageDetails.dimensions") }}</dt><dd>{{ natural.w }} × {{ natural.h }} px</dd></div>
-        <div v-for="(value, key) in fields" :key="key"><dt>{{ t('imageDetails.' + key) }}</dt><dd>{{ value }}</dd></div>
-      </dl>
-      <p v-if="exifState === 'loading'" role="status">{{ t("common.loading") }}</p>
-      <p v-else-if="exifState === 'error'" role="status">{{ t("imageDetails.unreadable") }}</p>
-      <p v-else-if="!Object.keys(fields).length" role="status">{{ t("imageDetails.none") }}</p>
-    </div>
+
+    <button v-if="expanded && compact" class="drawer-scrim" type="button" tabindex="-1"
+      :aria-label="t('imageDetails.closeInfo')" @click="showInfo(false)" />
+    <Transition name="photo-drawer">
+      <PhotoInfoDrawer v-show="expanded" ref="drawer" class="info-drawer" :open="expanded" :name="name" :blob="blob"
+        :width="dimensions.width" :height="dimensions.height" @close="showInfo(false)" />
+    </Transition>
   </section>
 </template>
 
 <style scoped>
-.viewer { width: 100%; min-width: 0; }
-.photo-stage { width: 100%; height: min(62vh, 48rem); height: min(62dvh, 48rem); overflow: auto; overscroll-behavior: contain; background: var(--color-bg); border-radius: .7rem; }
-.photo-center { width: max-content; min-width: 100%; min-height: 100%; display: grid; place-items: center; }
-.photo-button { border: 0; padding: 0; background: transparent; cursor: zoom-in; }
-.photo-button.enlarged { cursor: zoom-out; }
-.photo-button img { display: block; max-width: none; height: auto; }
-.tools { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: .3rem; padding-top: .55rem; }
-.tools button { min-height: 2.5rem; border-radius: .5rem; }
-.tools button:hover:enabled { background: var(--color-brand-soft); }
-.details-toggle, .zoom-tools { display: flex; align-items: center; gap: .35rem; }
-.details-toggle { padding: .3rem .55rem; font-weight: 600; }
-.zoom-tools { color: var(--color-fg-muted); font-size: .8rem; }
-.zoom-tools button { display: grid; place-items: center; min-width: 2.5rem; }
-.zoom-tools button:disabled { opacity: .45; }
-.metadata { margin-top: .5rem; padding: .9rem; background: var(--color-bg); border-radius: .7rem; }
-.fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr)); gap: .8rem; }
-.fields dt, .metadata p { font-size: .8rem; color: var(--color-fg-muted); }
-.fields dd { margin: .1rem 0 0; font-weight: 600; overflow-wrap: anywhere; }
-.fields + p { margin-top: .8rem; }
+.photo-viewer {
+  --photo-panel: #202023;
+  --photo-muted: #b8b8bf;
+  --drawer-width: min(22rem, 38vw);
+  position: relative;
+  isolation: isolate;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  color: #f6f6f7;
+  background: #101012;
+  color-scheme: dark;
+}
+.photo-pane { position: absolute; inset: 0; display: flex; min-width: 0; }
+.info-open .photo-pane { inset-inline-end: var(--drawer-width); }
+.photo-header {
+  position: absolute; inset: 0 0 auto; z-index: 2;
+  display: flex; align-items: center; gap: .55rem;
+  padding: max(.65rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right)) 1.15rem max(1rem, env(safe-area-inset-left));
+  background: linear-gradient(to bottom, rgb(0 0 0 / .73), transparent);
+  pointer-events: none;
+}
+.photo-icon {
+  pointer-events: auto; display: inline-grid; flex: none; place-items: center;
+  width: 2.75rem; height: 2.75rem; border-radius: 50%; color: inherit; cursor: pointer;
+}
+.photo-icon svg { width: 1.22rem; height: 1.22rem; stroke-width: 1.8; }
+.photo-icon:hover:enabled, .photo-icon[aria-expanded="true"] { background: rgb(255 255 255 / .18); }
+.photo-viewer :deep(button:focus-visible) { outline: 2px solid #fff; outline-offset: -3px; }
+.photo-icon:disabled { opacity: .38; cursor: default; }
+.photo-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; text-shadow: 0 1px 4px #000; }
+.info-toggle { margin-inline-start: auto; }
+.photo-spinner { flex: none; width: 1rem; height: 1rem; border: 2px solid #777; border-top-color: white; border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.zoom-tools {
+  position: absolute; bottom: max(1.1rem, env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); z-index: 1;
+  display: flex; align-items: center; border: 1px solid rgb(255 255 255 / .19); border-radius: 2rem;
+  padding: 2px; background: rgb(30 30 34 / .9); box-shadow: 0 3px 14px #0005;
+}
+.zoom-percent { min-width: 3.2rem; text-align: center; font-size: .82rem; font-variant-numeric: tabular-nums; }
+.fit-control { margin-inline-start: 3px; position: relative; }
+.fit-control::before { content: ""; position: absolute; left: -2px; top: 25%; height: 50%; width: 1px; background: rgb(255 255 255 / .35); }
+.info-drawer {
+  position: absolute; inset-block: 0; inset-inline-end: 0; z-index: 4; width: var(--drawer-width);
+  background: var(--photo-panel); border-inline-start: 1px solid rgb(255 255 255 / .12);
+}
+.drawer-scrim { position: absolute; inset: 0; z-index: 3; background: #0008; }
+.viewer-error { position: absolute; z-index: 2; right: 1rem; top: 4.5rem; padding: .45rem .85rem; border-radius: .5rem; background: var(--photo-panel); font-size: .85rem; }
+@media (max-width: 42rem) {
+  .photo-viewer { --drawer-width: min(22rem, 90vw); }
+  .info-open .photo-pane { inset-inline-end: 0; }
+  .photo-header { gap: .15rem; padding-inline: max(.45rem, env(safe-area-inset-left)) max(.45rem, env(safe-area-inset-right)); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .photo-drawer-enter-active, .photo-drawer-leave-active { transition: transform .18s ease-out; }
+  .photo-drawer-enter-from, .photo-drawer-leave-to { transform: translateX(100%); }
+}
+@media (prefers-reduced-motion: reduce) { .photo-spinner { animation: none; } }
 </style>
