@@ -1,16 +1,23 @@
 package dev.dragonfox.drive
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.media.MediaScannerConnection
+import android.net.Uri
 import android.os.Environment
+import android.os.SystemClock
+import android.provider.MediaStore
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasContentDescription
@@ -35,9 +42,10 @@ import dev.dragonfox.drive.sync.SyncStorage
 import dev.dragonfox.drive.ui.LocalPicker
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -59,36 +67,41 @@ class LocalAlbumsTest {
         val beyondLimit = File(deep, "10/11").apply { check(mkdirs()) }
         val scanner = FolderScanner(context)
         val storage = SyncStorage(context, scope)
-        val covers = (1..5).map { File(many, "image-$it.jpg") }
+        // Direct siblings under "4" share no album because "4" contains no media.
+        val sibling = File(root, "4/independent").apply { check(mkdirs()) }
+        val siblingPhoto = File(sibling, "sibling.jpg")
+        // A separate album shares the boundary album's display name.
+        val twin = File(root, "other/5").apply { check(mkdirs()) }
+        val twinPhoto = File(twin, "oldest.jpg")
+        val nested = File(many, "child/trip").apply { check(mkdirs()) }
+        val secondChild = File(many, "second").apply { check(mkdir()) }
+        val oldestFirst = listOf(File(many, "z.jpg"), File(secondChild, "a.jpg"), File(many, "b.jpg"),
+            File(nested, "clip.mp4"), File(many, "d.jpg"))
+        val newestFirst = oldestFirst.asReversed()
         val directPhoto = File(bucket, "direct.jpg")
         val deepPhoto = File(deep, "deep.jpg")
         val ignoredPhoto = File(beyondLimit, "out-of-range.jpg")
         val other = File(deep, "excluded.txt")
         try {
-            val image = Bitmap.createBitmap(12, 10, Bitmap.Config.ARGB_8888)
-            try {
-                image.eraseColor(Color.BLUE)
-                for (file in covers + directPhoto + deepPhoto + ignoredPhoto) {
-                    file.outputStream().use { check(image.compress(Bitmap.CompressFormat.JPEG, 80, it)) }
-                }
-            } finally { image.recycle() }
+            createMediaInOrder(context, listOf(siblingPhoto, twinPhoto) + oldestFirst + directPhoto + deepPhoto + ignoredPhoto)
             other.writeText("not media")
 
-            val head = runBlocking {
+            runBlocking {
                 val albums = scanner.mediaBuckets(10).filter { it.directory.toPath().startsWith(root.toPath()) }
-                assertEquals(listOf(many, bucket), albums.map { it.directory })
-                assertEquals(5, albums.first().count)
-                assertFalse(albums.first().recursive)
-                assertEquals(4, albums.first().covers.distinct().size)
-                val aggregate = albums.last()
+                assertEquals(listOf(bucket, many, twin, sibling), albums.map { it.directory })
+                val merged = albums.single { it.directory == many }
+                assertTrue(merged.recursive)
+                assertEquals(5, merged.count)
+                assertEquals(newestFirst.take(4), merged.covers)
+                assertEquals(newestFirst, merged.page(0, 2) + merged.page(2, 3))
+                val aggregate = albums.single { it.directory == bucket }
                 assertEquals(2, aggregate.count)
                 assertTrue(aggregate.recursive)
-                assertEquals(setOf(directPhoto, deepPhoto), scanner.mediaPage(aggregate, 0, 10).toSet())
+                assertEquals(listOf(deepPhoto, directPhoto), aggregate.page(0, 10))
                 val shallow = scanner.mediaBuckets(5).single { it.directory == bucket }
                 assertEquals(1, shallow.count)
                 assertEquals(listOf(directPhoto), shallow.covers)
-                assertEquals(listOf(directPhoto), scanner.mediaPage(shallow, 0, 10))
-                albums.first()
+                assertEquals(listOf(directPhoto), shallow.page(0, 10))
             }
 
             var plan by mutableStateOf(SyncConfig(mode = SyncMode.MEDIA, maxDepth = 10))
@@ -119,14 +132,57 @@ class LocalAlbumsTest {
             }
             showAlbum(many)
             val index = item("local-albums").fetchSemanticsNode().config[SemanticsProperties.IndexForKey]
-            assertTrue("The larger album is listed first", index(many.path) in 0 until index(bucket.path))
+            assertTrue("The newer two-item album precedes the older five-item album", index(bucket.path) in 0 until index(many.path))
             assertCount(many, 5)
-            head.covers.forEach { item("local-cover:" + it.path).assertIsDisplayed() }
-            covers.filterNot { it in head.covers }.forEach { item("local-cover:" + it.path).assertDoesNotExist() }
+            val covers = newestFirst.take(4).map { file ->
+                item("local-cover:" + file.path).assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+            }
+            assertTrue("Four covers use newest-first reading order",
+                covers[0].center.x < covers[1].center.x && covers[2].center.x < covers[3].center.x &&
+                    covers[0].center.y == covers[1].center.y && covers[2].center.y == covers[3].center.y &&
+                    covers[0].center.y < covers[2].center.y)
+            item("local-cover:" + oldestFirst.first().path).assertDoesNotExist()
+            item("local-album:" + many.path).performClick()
+            awaitTag("local-item:" + newestFirst.first().path)
+            val mediaGrid = item("local-media")
+            val mediaIndex = mediaGrid.fetchSemanticsNode().config[SemanticsProperties.IndexForKey]
+            val positions = newestFirst.map { mediaIndex(it.path) }
+            // The full-width path is item 0. Every following item must match the cover order.
+            assertEquals((1..newestFirst.size).toList(), positions)
+            val path = item("local-album-path").assertTextEquals(many.absolutePath).assertIsDisplayed()
+            val title = screen.onNodeWithText(many.name, useUnmergedTree = true)
+            assertTrue("Full folder path appears below the album name",
+                path.fetchSemanticsNode().boundsInRoot.top >= title.fetchSemanticsNode().boundsInRoot.bottom - 1)
+            item("local-item:" + newestFirst.first().path).performClick()
+            awaitTag("local-media-detail")
+            item("viewer-title").assertTextEquals(newestFirst.first().name)
+            item("viewer-position").assertTextEquals(context.getString(R.string.df_media_position, 1, newestFirst.size))
+            val photo = hasAnyAncestor(isDialog()) and hasContentDescription(newestFirst.first().name)
+            screen.waitUntil(20_000) {
+                screen.onAllNodes(photo, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+            }
+            screen.onNode(photo, useUnmergedTree = true).performTouchInput { click() }
+            screen.waitUntil(5_000) { screen.onAllNodesWithTag("viewer-title").fetchSemanticsNodes().isEmpty() }
+            screen.onNode(photo, useUnmergedTree = true).performTouchInput { click() }
+            awaitTag("viewer-title")
+            item("viewer-previous").assertIsNotEnabled()
+            item("viewer-next").performClick()
+            item("viewer-title").assertTextEquals("clip.mp4")
+            item("viewer-position").assertTextEquals(context.getString(R.string.df_media_position, 2, newestFirst.size))
+            item("viewer-play-toggle").assertExists()
+            item("viewer-previous").performClick()
+            item("viewer-title").assertTextEquals(newestFirst.first().name)
+            val back = context.getString(R.string.df_back)
+            screen.onNode(hasAnyAncestor(isDialog()) and hasContentDescription(back)).performClick()
+            screen.onNodeWithContentDescription(back).performClick()
+            showAlbum(many)
             item("local-select:" + many.path).assertIsOff().performTouchInput { click() }.assertIsOn()
             item("local-media").assertDoesNotExist()
 
             showAlbum(bucket)
+            item("local-album-path").assertDoesNotExist()
+            screen.onNode(hasAnyAncestor(hasTestTag("local-album:" + bucket.path)) and
+                hasText(requireNotNull(bucket.parent), substring = true), useUnmergedTree = true).assertDoesNotExist()
             assertCount(bucket, 2)
             item("local-select:" + bucket.path).assertIsOff()
             item("local-album:" + bucket.path).performClick()
@@ -136,7 +192,6 @@ class LocalAlbumsTest {
             item("local-item:" + ignoredPhoto.path).assertDoesNotExist()
             item("local-item:" + deepPhoto.path).performClick()
             awaitTag("local-media-detail")
-            val back = context.getString(R.string.df_back)
             screen.onNode(hasAnyAncestor(isDialog()) and hasContentDescription(back)).performClick()
             screen.onNodeWithContentDescription(back).performClick()
             showAlbum(bucket)
@@ -148,7 +203,7 @@ class LocalAlbumsTest {
             try {
                 val config = reopened.load()
                 assertEquals(setOf(many.path, bucket.path), config.localFolders)
-                assertEquals(setOf(bucket.path), config.recursiveFolders)
+                assertEquals(setOf(many.path, bucket.path), config.recursiveFolders)
                 assertEquals(10, config.maxDepth)
                 screen.runOnIdle { plan = config; pickerOpen = true }
                 showAlbum(many)
@@ -181,5 +236,34 @@ class LocalAlbumsTest {
             storage.close()
             root.deleteRecursively()
         }
+    }
+
+    /** Real creation and MediaStore insertion agree. Assign opposite mtimes to catch fallback-only sorting. */
+    private fun createMediaInOrder(context: Context, files: List<File>) {
+        val image = Bitmap.createBitmap(12, 10, Bitmap.Config.ARGB_8888)
+        image.eraseColor(Color.BLUE)
+        var previousAdded = 0L
+        try {
+            files.forEachIndexed { index, file ->
+                val wait = (previousAdded + 1) * 1000 - System.currentTimeMillis()
+                if (wait > 0) SystemClock.sleep(wait + 10)
+                file.outputStream().use { output ->
+                    if (file.extension == "mp4") {
+                        InstrumentationRegistry.getInstrumentation().context.assets.open("local_album_frame.mp4").use { it.copyTo(output) }
+                    } else check(image.compress(Bitmap.CompressFormat.JPEG, 85, output))
+                }
+                check(file.setLastModified(1_600_000_000_000L - index * 60_000L))
+                val indexed = CompletableFuture<Uri?>()
+                MediaScannerConnection.scanFile(context, arrayOf(file.path), null) { _, uri -> indexed.complete(uri) }
+                val uri = requireNotNull(indexed.get(15, TimeUnit.SECONDS)) { "Media scanner skipped ${file.name}" }
+                val field = MediaStore.MediaColumns.DATE_ADDED
+                val added = requireNotNull(context.contentResolver.query(uri, arrayOf(field), null, null, null)).use {
+                    check(it.moveToFirst())
+                    it.getLong(0)
+                }
+                assertTrue("MediaStore creation times should increase for each fixture", added > previousAdded)
+                previousAdded = added
+            }
+        } finally { image.recycle() }
     }
 }

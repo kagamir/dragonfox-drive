@@ -28,7 +28,7 @@
     <string name="df_local_folders">已选文件夹：%1$d</string>
     <string name="df_login_intro">登录你的端到端加密云盘。</string>
     <string name="df_media">图片和视频</string>
-    <string name="df_media_hint">仅显示含图片或视频的文件夹。上传时将跳过其他类型的文件。</string>
+    <string name="df_media_hint">相册按最新媒体排列。点封面浏览，点勾选框备份相册内的图片和视频。</string>
     <string name="df_monitoring">正在监测文件变化</string>
     <string name="df_new_account">没有账号？注册</string>
     <string name="df_no_media">未找到含有图片或视频的文件夹。</string>

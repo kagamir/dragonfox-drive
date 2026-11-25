@@ -5,6 +5,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.dragonfox.drive.protocol.DriveClient
 import dev.dragonfox.drive.sync.FileAccess
+import dev.dragonfox.drive.sync.FolderScanner
 import dev.dragonfox.drive.sync.SyncConfig
 import dev.dragonfox.drive.sync.SyncEngine
 import dev.dragonfox.drive.sync.SyncMode
@@ -81,8 +82,13 @@ class ForegroundSyncTest {
             cycle { engine.rescan() }
             assertEquals(setOf("photo.jpg", "clip.mp4"), client.listFiles().map { it.name }.toSet())
 
-            val scoped = config.copy(localFolders = setOf(source.absolutePath, boundary.absolutePath),
-                recursiveFolders = setOf(boundary.absolutePath))
+            // Existing direct-only plans above still upload only direct files. Re-selecting
+            // these two albums uses the scanner's merged, descendant-inclusive selection.
+            val selected = FolderScanner(context).mediaBuckets(config.maxDepth)
+                .filter { it.directory == source || it.directory == boundary }
+            assertEquals(setOf(source, boundary), selected.map { it.directory }.toSet())
+            val scoped = config.copy(localFolders = selected.map { it.directory.path }.toSet(),
+                recursiveFolders = selected.filter { it.recursive }.map { it.directory.path }.toSet())
             cycle { engine.configure(scoped) }
             val folders = client.listFolders().associateBy { it.id }
             val paths = client.listFiles().map { file ->
@@ -90,7 +96,7 @@ class ForegroundSyncTest {
                 (parentNames + file.name).joinToString("/")
             }
             val base = "Mobile/${Environment.DIRECTORY_DOWNLOADS}/${fixture.name}"
-            assertEquals(listOf("$base/direct/photo.jpg", "$base/direct/clip.mp4",
+            assertEquals(listOf("$base/direct/photo.jpg", "$base/direct/clip.mp4", "$base/direct/child/direct-child.jpg",
                 "$base/albums/boundary/repeat.jpg", "$base/albums/boundary/year/trip/repeat.jpg").sorted(), paths.sorted())
 
             // Volume/Download/fixture/albums/boundary reaches level 5. Only new files
@@ -100,7 +106,7 @@ class ForegroundSyncTest {
             File(boundary, "at-limit.jpg").writeText("upload this new media")
             cycle { /* The foreground engine's next automatic check drives this cycle. */ }
             val timed = client.listFiles()
-            assertEquals(listOf("at-limit.jpg", "clip.mp4", "photo.jpg", "repeat.jpg", "repeat.jpg"),
+            assertEquals(listOf("at-limit.jpg", "clip.mp4", "direct-child.jpg", "photo.jpg", "repeat.jpg", "repeat.jpg"),
                 timed.map { it.name }.sorted())
             val boundaryId = folders.entries.single { it.value.name == boundary.name }.key
             assertEquals(boundaryId, timed.single { it.name == "at-limit.jpg" }.parentId)

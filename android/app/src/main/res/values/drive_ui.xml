@@ -28,7 +28,7 @@
     <string name="df_local_folders">Selected folders: %1$d</string>
     <string name="df_login_intro">Sign in to your encrypted drive.</string>
     <string name="df_media">Photos and videos</string>
-    <string name="df_media_hint">Only folders containing photos or videos are shown. Other file types are skipped during upload.</string>
+    <string name="df_media_hint">Albums with newer media appear first. Tap a cover to browse, or use the checkmark to back up its photos and videos.</string>
     <string name="df_monitoring">Watching for changes</string>
     <string name="df_new_account">New here? Create an account</string>
     <string name="df_no_media">No folders containing photos or videos were found.</string>

@@ -14,4 +14,6 @@
     <string name="df_album_outside_depth">Outside scan depth · inactive</string>
     <string name="df_album_unavailable">Storage unavailable</string>
     <string name="df_album_single">1 item</string>
+    <string name="df_manage_album_scope">Manage selection covering %1$s</string>
+    <string name="df_album_storage">Storage</string>
 </resources>

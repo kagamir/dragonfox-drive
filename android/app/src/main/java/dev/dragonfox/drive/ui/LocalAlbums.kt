@@ -6,33 +6,39 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.*
 import androidx.compose.foundation.selection.triStateToggleable
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource as label
 import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import dev.dragonfox.drive.R
 import dev.dragonfox.drive.sync.FolderScanner
 import dev.dragonfox.drive.sync.MediaBucket
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 /** A saved recursive rule covers every visible item even when a shallower
@@ -42,12 +48,20 @@ internal fun MediaBucket.fullySelected(paths: Set<String>, recursivePaths: Set<S
     return path in paths && (!recursive || path in recursivePaths)
 }
 
+/** Remove the active rules that would continue to select this album after its
+ * checkbox is cleared. Inactive rules beyond the scan limit stay in Selected. */
+internal fun MediaBucket.rulesToClear(activePaths: Set<String>): Set<String> {
+    if (!recursive) return setOf(directory.absolutePath)
+    val root = directory.toPath()
+    return activePaths.filterTo(mutableSetOf()) { File(it).toPath().startsWith(root) }
+}
+
+internal fun MediaBucket.inheritedFrom(recursivePaths: Set<String>): Boolean =
+    generateSequence(directory.parentFile) { it.parentFile }.any { it.absolutePath in recursivePaths }
+
 @Composable
 internal fun AlbumGrid(albums: List<MediaBucket>, selection: Set<String>, recursive: Set<String>, state: LazyGridState,
-    onOpen: (MediaBucket) -> Unit, onToggle: (MediaBucket) -> Unit, modifier: Modifier = Modifier) {
-    val duplicateNames = remember(albums) {
-        albums.groupingBy { it.directory.name }.eachCount().filterValues { it > 1 }.keys
-    }
+    onOpen: (MediaBucket) -> Unit, onToggle: (MediaBucket) -> Unit, onManage: () -> Unit, modifier: Modifier = Modifier) {
     val selectedAncestors = remember(selection) {
         selection.flatMap { path -> generateSequence(File(path).parentFile) { it.parentFile }.map { it.absolutePath }.toList() }.toSet()
     }
@@ -56,20 +70,20 @@ internal fun AlbumGrid(albums: List<MediaBucket>, selection: Set<String>, recurs
         horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         items(albums, key = { it.directory.absolutePath }) { album ->
             val path = album.directory.absolutePath
-            val name = album.directory.name.ifEmpty { path }
+            val name = album.directory.name.ifEmpty { label(R.string.df_album_storage) }
             val explicit = path in selection
-            val checked = album.fullySelected(selection, recursive)
-            val includedByParent = generateSequence(album.directory.parentFile) { it.parentFile }.any { it.absolutePath in recursive }
-            val partial = !checked && (explicit || includedByParent || album.recursive && path in selectedAncestors)
+            val includedByParent = album.inheritedFrom(recursive)
+            val checked = includedByParent || album.fullySelected(selection, recursive)
+            val partial = !checked && (explicit || album.recursive && path in selectedAncestors)
             val state = when { checked -> ToggleableState.On; partial -> ToggleableState.Indeterminate; else -> ToggleableState.Off }
             Column(Modifier.testTag("local-album:$path").clickable { onOpen(album) }) {
                 Box(Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(18.dp))
                     .background(MaterialTheme.colorScheme.surfaceContainerHighest)) {
                     AlbumCover(album.covers)
-                    val description = label(R.string.df_select_album, name)
+                    val description = label(if (includedByParent) R.string.df_manage_album_scope else R.string.df_select_album, name)
                     Box(Modifier.align(Alignment.TopEnd).size(48.dp).testTag("local-select:$path")
                         .semantics { contentDescription = description }
-                        .triStateToggleable(state, role = Role.Checkbox) { onToggle(album) }
+                        .triStateToggleable(state, role = Role.Checkbox) { if (includedByParent) onManage() else onToggle(album) }
                         .padding(top = 7.dp, end = 7.dp), contentAlignment = Alignment.TopEnd) {
                         Box(Modifier.size(23.dp).background(
                             if (checked || partial) MaterialTheme.colorScheme.primary else Color.Black.copy(alpha = .35f), CircleShape)
@@ -93,9 +107,7 @@ internal fun AlbumGrid(albums: List<MediaBucket>, selection: Set<String>, recurs
                 }
                 if (scope != null) Text(label(scope), style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.primary)
-                if (name in duplicateNames) Text(album.directory.parent.orEmpty(), maxLines = 1,
-                    overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+
             }
         }
     }
@@ -110,50 +122,70 @@ private fun AlbumCover(files: List<File>) {
         }
         return
     }
-    val columns = if (cover.size <= 2) cover.map { listOf(it) } else cover.chunked(2)
-    Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(1.dp)) {
-        for (column in columns) Column(Modifier.weight(1f).fillMaxHeight(),
-            verticalArrangement = Arrangement.spacedBy(1.dp)) {
-            for (file in column) LocalMediaThumbnail(file, Modifier.fillMaxWidth().weight(1f)
+    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+        for (row in cover.chunked(2)) Row(Modifier.fillMaxWidth().weight(1f),
+            horizontalArrangement = Arrangement.spacedBy(1.dp)) {
+            for (file in row) LocalMediaThumbnail(file, Modifier.weight(1f).fillMaxHeight()
                 .testTag("local-cover:${file.absolutePath}"))
         }
     }
 }
 
 @Composable
-internal fun AlbumContents(album: MediaBucket, scanner: FolderScanner, onOpen: (File) -> Unit) {
-    val context = LocalContext.current
-    val files = remember(album) { mutableStateListOf<File>() }
-    var more by remember(album) { mutableStateOf(true) }
-    var error by remember(album) { mutableStateOf<String?>(null) }
-    var retry by remember(album) { mutableIntStateOf(0) }
+internal fun AlbumContents(album: MediaBucket, scanner: FolderScanner, onBack: () -> Unit) {
     val state = rememberLazyGridState()
-    // Keep the loading effect outside the lazy footer: scrolling the footer off
-    // screen should never drop a fetched page or reset the scanner's cursor.
-    val nearEnd by remember {
-        derivedStateOf { files.isEmpty() || (state.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1) >= files.lastIndex - 9 }
-    }
-    LaunchedEffect(album, retry) {
-        try {
-            while (more) {
-                snapshotFlow { nearEnd }.first { it }
-                val page = scanner.mediaPage(album, files.size, 60)
-                more = page.size == 60
-                files.addAll(page)
+    val scope = rememberCoroutineScope()
+    var previewIndex by rememberSaveable { mutableIntStateOf(-1) }
+    var previewPath by rememberSaveable { mutableStateOf<String?>(null) }
+    val index = previewIndex
+    val photo = if (index in 0 until album.count) album.fileAt(index).takeIf { it.absolutePath == previewPath } else null
+    // A fresh scan after rotation may insert, reorder, or remove files. Restore
+    // the original path if it still belongs to this album and scan depth.
+    LaunchedEffect(album, previewPath) {
+        val path = previewPath ?: return@LaunchedEffect
+        if (photo == null) {
+            val match = withContext(Dispatchers.Default) {
+                (0 until album.count).firstOrNull { album.fileAt(it).absolutePath == path }
             }
-        } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            error = e.localizedMessage ?: context.getString(R.string.df_request_failed)
+            previewIndex = match ?: -1
+            if (match == null) previewPath = null
         }
     }
-    LazyVerticalGrid(GridCells.Adaptive(100.dp), Modifier.fillMaxSize().testTag("local-media"), state = state,
+    fun openPreview(target: Int) {
+        previewIndex = target
+        previewPath = album.fileAt(target).absolutePath
+    }
+    fun closePreview() {
+        val gridIndex = previewIndex + 1 // the first grid item is the album path
+        previewIndex = -1
+        previewPath = null
+        if (state.layoutInfo.visibleItemsInfo.none { it.index == gridIndex }) {
+            scope.launch { state.scrollToItem(gridIndex) }
+        }
+    }
+    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(start = 4.dp, end = 16.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, label(R.string.df_back)) }
+        Text(album.directory.name.ifEmpty { label(R.string.df_album_storage) },
+            Modifier.weight(1f).semantics { heading() }, style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+    }
+    LazyVerticalGrid(GridCells.Adaptive(100.dp), Modifier.fillMaxWidth().testTag("local-media"), state = state,
         contentPadding = PaddingValues(12.dp), horizontalArrangement = Arrangement.spacedBy(5.dp),
         verticalArrangement = Arrangement.spacedBy(5.dp)) {
-        items(files, key = { it.absolutePath }) { file ->
+        item(span = { GridItemSpan(maxLineSpan) }, key = "album-path") {
+            SelectionContainer {
+                Text(album.directory.absolutePath, Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, bottom = 10.dp)
+                    .testTag("local-album-path"), style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, softWrap = true)
+            }
+        }
+        items(album.count, key = { album.fileAt(it).absolutePath }) { index ->
+            val file = album.fileAt(index)
             val description = file.name
             Box(Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(10.dp))
                 .background(MaterialTheme.colorScheme.surfaceContainerHighest).testTag("local-item:${file.absolutePath}")
-                .semantics { contentDescription = description }.clickable { onOpen(file) }) {
+                .semantics { contentDescription = description }.clickable { openPreview(index) }) {
                 LocalMediaThumbnail(file, Modifier.fillMaxSize())
                 if (scanner.mime(file).startsWith("video/")) {
                     Icon(Icons.Default.PlayArrow, label(R.string.df_video_clip), Modifier.align(Alignment.BottomStart)
@@ -162,12 +194,15 @@ internal fun AlbumContents(album: MediaBucket, scanner: FolderScanner, onOpen: (
                 }
             }
         }
-        if (error != null || more || files.isEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
-            when {
-                error != null -> RetryLine(error.orEmpty()) { error = null; retry++ }
-                more -> LoadingLine()
-                else -> Text(label(R.string.df_no_media), Modifier.padding(12.dp))
-            }
-        }
+    }
+    if (photo != null) Dialog(onDismissRequest = ::closePreview,
+        properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        val controls = MediaNavigation(
+            index = index,
+            total = album.count,
+            onPrevious = if (index > 0) ({ openPreview(index - 1) }) else null,
+            onNext = if (index + 1 < album.count) ({ openPreview(index + 1) }) else null,
+        )
+        Surface(Modifier.fillMaxSize()) { LocalMediaDetail(photo, controls, ::closePreview) }
     }
 }

@@ -69,7 +69,7 @@ internal fun sourceDirectories(paths: Set<String>): List<File> {
     return normalized.filter { dir -> generateSequence(dir.parentFile) { it.parentFile }.none { it in normalized } }
 }
 
-private fun containingVolume(dir: File, roots: List<File>) =
+internal fun containingVolume(dir: File, roots: List<File>) =
     roots.filter { dir.toPath().startsWith(it.toPath()) }.maxByOrNull { it.path.length }
 
 /** The storage volume itself is level 1; files use the depth of their parent directory. */
@@ -90,10 +90,11 @@ internal fun remotePath(directory: File, volumes: List<VolumeRoot>): List<String
 internal fun walkFiles(
     roots: List<File>, includeDirectory: (File) -> Boolean, checkActive: () -> Unit,
     unreadable: (File) -> Unit = {},
-    recursive: Boolean = true, ordered: Boolean = false,
+    recursive: Boolean = true,
     volumeRoots: List<File> = roots, maxDepth: Int = DEFAULT_SCAN_DEPTH,
 ): Sequence<File> = sequence {
     val hardLimit = maxDepth.coerceIn(SCAN_DEPTH_RANGE)
+    val mounts = volumeRoots.toSet()
     val stack = ArrayDeque<Pair<File, Int>>()
     for (source in roots) {
         val volume = containingVolume(source, volumeRoots) ?: continue
@@ -113,12 +114,11 @@ internal fun walkFiles(
             unreadable(dir)
             continue
         }
-        if (ordered) children.sortBy { it.name }
         for (child in children) {
             checkActive()
             if (Files.isSymbolicLink(child.toPath())) continue
             if (child.isDirectory) {
-                if (recursive && depth < hardLimit) stack.addLast(child to depth + 1)
+                if (recursive && depth < hardLimit && child !in mounts) stack.addLast(child to depth + 1)
             }
             else if (child.isFile) yield(child)
         }

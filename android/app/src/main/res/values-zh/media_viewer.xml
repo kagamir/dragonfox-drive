@@ -1,0 +1,14 @@
+<resources>
+    <string name="df_previous_media">上一项</string>
+    <string name="df_next_media">下一项</string>
+    <string name="df_media_position">%1$d / %2$d</string>
+    <string name="df_fit_photo">适应屏幕</string>
+    <string name="df_enlarge_photo">放大照片</string>
+    <string name="df_toggle_viewer_tools">显示或隐藏查看控件</string>
+    <string name="df_video_information">视频信息</string>
+    <string name="df_video_duration">时长</string>
+    <string name="df_media_size">文件大小</string>
+    <string name="df_pause_video">暂停视频</string>
+    <string name="df_play_video">播放视频</string>
+    <string name="df_seek_video">播放进度</string>
+</resources>

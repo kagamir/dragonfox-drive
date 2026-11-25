@@ -83,7 +83,12 @@ internal fun CloudBrowser(
     BackHandler(enabled = canGoBack, onBack = ::back)
     val grid = key(folderId) { rememberLazyGridState() }
     if (photo != null) {
-        PhotoDetail(photo, loadPhoto, onBack = ::back)
+        val images = remember(entries) { entries.filter { it.isImage } }
+        val index = images.indexOfFirst { it.id == photo.id }
+        val navigation = if (images.size > 1 && index >= 0) MediaNavigation(index, images.size,
+            images.getOrNull(index - 1)?.let { before -> { photoId = before.id } },
+            images.getOrNull(index + 1)?.let { after -> { photoId = after.id } }) else null
+        key(photo.id) { PhotoDetail(photo, loadPhoto, navigation, onBack = ::back) }
         return
     }
     Column(Modifier.fillMaxSize()) {

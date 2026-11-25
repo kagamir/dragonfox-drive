@@ -14,4 +14,6 @@
     <string name="df_album_outside_depth">超出扫描层数，暂不参与同步</string>
     <string name="df_album_unavailable">存储空间不可用</string>
     <string name="df_album_single">1 个项目</string>
+    <string name="df_manage_album_scope">管理包含 %1$s 的选择规则</string>
+    <string name="df_album_storage">存储空间</string>
 </resources>

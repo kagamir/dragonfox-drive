@@ -11,8 +11,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.nio.file.Files
 
@@ -29,8 +27,6 @@ object FileAccess {
 }
 
 class FolderScanner(private val context: Context, private val rootsOverride: List<File>? = null) {
-    private val pageLock = Mutex()
-    private var cursor: AlbumCursor? = null
     internal fun volumes(): List<VolumeRoot> =
         rootsOverride?.map { VolumeRoot(it, emptyList()) } ?: context.getSystemService(StorageManager::class.java).storageVolumes.mapNotNull { volume ->
             val dir = volume.directory ?: return@mapNotNull null
@@ -58,26 +54,10 @@ class FolderScanner(private val context: Context, private val rootsOverride: Lis
 
     private fun isMedia(file: File) = SyncMode.MEDIA.accepts(mime(file))
 
-    suspend fun mediaBuckets(maxDepth: Int): List<MediaBucket> = withContext(Dispatchers.IO) {
-        pageLock.withLock { cursor = null }
+    internal suspend fun mediaBuckets(maxDepth: Int): List<MediaBucket> = withContext(Dispatchers.IO) {
         val job = currentCoroutineContext()
         val volumes = volumes()
-        collectAlbums(volumes, maxDepth, { accessible(it, volumes) }, ::isMedia) { job.ensureActive() }
-    }
-
-    suspend fun mediaPage(bucket: MediaBucket, offset: Int, limit: Int): List<File> = withContext(Dispatchers.IO) {
-        val job = currentCoroutineContext()
-        pageLock.withLock {
-            val volumes = volumes()
-            val current = cursor?.takeIf { it.bucket == bucket && offset != 0 } ?: AlbumCursor(bucket, volumes.map { it.dir },
-                { accessible(it, volumes) }, ::isMedia).also { cursor = it }
-            try {
-                current.page(offset, limit) { job.ensureActive() }
-            } catch (e: Exception) {
-                // A sequence aborted mid-directory cannot safely resume.
-                cursor = null
-                throw e
-            }
-        }
+        val created = MediaCreatedTimes(context)
+        collectAlbums(volumes, maxDepth, { accessible(it, volumes) }, ::isMedia, created::read) { job.ensureActive() }
     }
 }

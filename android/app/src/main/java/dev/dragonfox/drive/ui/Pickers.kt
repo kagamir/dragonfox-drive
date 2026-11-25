@@ -17,8 +17,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource as label
 import androidx.compose.ui.semantics.Role
@@ -35,6 +33,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun LocalPicker(initialMode: SyncMode, previous: Set<String>, previousRecursive: Set<String>,
     maxDepth: Int, allowed: Boolean, request: () -> Unit, onBack: () -> Unit, scanner: FolderScanner? = null,
@@ -57,7 +56,6 @@ internal fun LocalPicker(initialMode: SyncMode, previous: Set<String>, previousR
     var albums by remember(maxDepth) { mutableStateOf<List<MediaBucket>>(emptyList()) }
     var openAlbum by rememberSaveable(maxDepth) { mutableStateOf<String?>(null) }
     val album = remember(openAlbum, albums) { albums.find { it.directory.absolutePath == openAlbum } }
-    var preview by remember(maxDepth, allowed) { mutableStateOf<String?>(null) }
     var manage by rememberSaveable { mutableStateOf(false) }
     var folders by remember { mutableStateOf<List<File>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
@@ -85,7 +83,6 @@ internal fun LocalPicker(initialMode: SyncMode, previous: Set<String>, previousR
         folders = emptyList()
         if (!allowed) {
             albums = emptyList()
-            preview = null
             return@LaunchedEffect
         }
         try {
@@ -103,14 +100,14 @@ internal fun LocalPicker(initialMode: SyncMode, previous: Set<String>, previousR
     }
     val inAlbum = allowed && !loading && error == null && mode == SyncMode.MEDIA && album != null
     Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
-        Header(if (inAlbum) album!!.directory.name.ifEmpty { album.directory.path } else label(R.string.df_choose_local), ::up)
         if (inAlbum) {
-            key(album!!.directory.absolutePath, album.recursive) {
-                AlbumContents(album, source) { preview = it.absolutePath }
+            key(album!!.directory.absolutePath, maxDepth) {
+                AlbumContents(album, source, ::up)
             }
         } else {
+            Header(label(R.string.df_choose_local), ::up)
             Column(Modifier.widthIn(max = 840.dp).fillMaxWidth().padding(horizontal = 16.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     SyncMode.entries.forEach { option ->
                         FilterChip(selected = mode == option, onClick = { modeName = option.name; openAlbum = null },
                             label = { Text(label(if (option == SyncMode.MEDIA) R.string.df_media else R.string.df_all_files)) })
@@ -119,17 +116,17 @@ internal fun LocalPicker(initialMode: SyncMode, previous: Set<String>, previousR
                 Text(if (mode == SyncMode.MEDIA) label(R.string.df_media_hint) else current ?: label(R.string.df_all_hint),
                     Modifier.padding(vertical = 4.dp), style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     if (mode == SyncMode.MEDIA && allowed && albums.isNotEmpty() && !loading && error == null) {
                         TextButton(onClick = {
-                            val paths = albums.map { it.directory.absolutePath }.toSet()
-                            val boundary = albums.filter { it.recursive }.map { it.directory.absolutePath }
-                            select(selection + paths, recursive + boundary)
+                            val newlySelected = albums.filterNot { it.fullySelected(selection, recursive) || it.inheritedFrom(recursive) }
+                            val paths = newlySelected.map { it.directory.absolutePath }
+                            val subtrees = newlySelected.filter { it.recursive }.map { it.directory.absolutePath }
+                            select(selection + paths, recursive + subtrees)
                         }) { Text(label(R.string.df_album_select_all)) }
                     }
                     if (selection.isNotEmpty()) {
                         TextButton(onClick = { select(emptySet(), emptySet()) }) { Text(label(R.string.df_album_clear)) }
-                        Spacer(Modifier.weight(1f))
                         TextButton(onClick = { manage = true }) { Text(label(R.string.df_manage_selection, selection.size)) }
                     }
                 }
@@ -142,9 +139,11 @@ internal fun LocalPicker(initialMode: SyncMode, previous: Set<String>, previousR
                 mode == SyncMode.MEDIA && albums.isEmpty() -> Text(label(R.string.df_no_media), content.padding(16.dp))
                 mode == SyncMode.MEDIA -> AlbumGrid(albums, activeSelection, recursive.intersect(activeSelection), albumScroll, { openAlbum = it.directory.absolutePath }, { item ->
                     val path = item.directory.absolutePath
-                    if (item.fullySelected(selection, recursive)) select(selection - path, recursive - path)
-                    else select(selection + path, if (item.recursive) recursive + path else recursive - path)
-                }, content)
+                    if (item.fullySelected(selection, recursive)) {
+                        val remove = item.rulesToClear(activeSelection)
+                        select(selection - remove, recursive - remove)
+                    } else select(selection + path, if (item.recursive) recursive + path else recursive)
+                }, { manage = true }, content)
                 else -> LazyColumn(content.testTag("local-folders"), contentPadding = PaddingValues(16.dp)) {
                     if (folders.isEmpty()) item { Text(label(R.string.df_empty_folder)) }
                     items(folders, key = { it.absolutePath }) { folder ->
@@ -198,11 +197,6 @@ internal fun LocalPicker(initialMode: SyncMode, previous: Set<String>, previousR
                 }
             }
         }, confirmButton = { TextButton(onClick = { manage = false }) { Text(label(R.string.df_album_done)) } })
-    val file = preview
-    if (allowed && inAlbum && file != null) Dialog(onDismissRequest = { preview = null },
-        properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Surface(Modifier.fillMaxSize()) { LocalMediaDetail(File(file)) { preview = null } }
-    }
 }
 
 @Composable

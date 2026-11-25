@@ -1,0 +1,14 @@
+<resources>
+    <string name="df_previous_media">Previous item</string>
+    <string name="df_next_media">Next item</string>
+    <string name="df_media_position">%1$d / %2$d</string>
+    <string name="df_fit_photo">Fit to screen</string>
+    <string name="df_enlarge_photo">Zoom in</string>
+    <string name="df_toggle_viewer_tools">Show or hide viewer controls</string>
+    <string name="df_video_information">Video information</string>
+    <string name="df_video_duration">Duration</string>
+    <string name="df_media_size">File size</string>
+    <string name="df_pause_video">Pause video</string>
+    <string name="df_play_video">Play video</string>
+    <string name="df_seek_video">Playback position</string>
+</resources>

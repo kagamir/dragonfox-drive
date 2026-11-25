@@ -11,7 +11,7 @@
     <string name="df_minutes">%1$d 分钟</string>
     <string name="df_levels">%1$d 层</string>
     <string name="df_interval_help">应用打开时两次自动检查之间的秒数，可设置为 %1$d 至 %2$d 秒。</string>
-    <string name="df_depth_help">存储卷根目录为第 1 层。超过上限的文件不会出现在选择器中，也不会上传。第 5 层至上限内的图片和视频归入各自的第 5 层相册。可设 %1$d 至 %2$d 层。</string>
+    <string name="df_depth_help">存储卷根目录为第 1 层。可设 %1$d 至 %2$d 层，超过上限的文件不会被扫描或上传。媒体归入路径上最先直接含有图片或视频的文件夹，相册最多展示到第 5 层。</string>
     <string name="df_about">关于</string>
     <string name="df_app_version">版本 %1$s</string>
     <string name="df_about_android">DragonFox Drive 的 Android 客户端，可浏览加密云盘文件并同步此设备上的文件夹。</string>
