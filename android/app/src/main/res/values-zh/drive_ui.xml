@@ -17,7 +17,7 @@
     <string name="df_confirm_password">确认密码</string>
     <string name="df_create_account">创建账号</string>
     <string name="df_destination">云端目标目录</string>
-    <string name="df_directory_hint">选中的文件夹包括其子文件夹，上传时保留目录结构。</string>
+    <string name="df_directory_hint">上传时保留本地目录结构。图片和视频模式会跳过其他类型的文件。</string>
     <string name="df_edit">编辑</string>
     <string name="df_empty_folder">此目录没有子文件夹。</string>
     <string name="df_existing_account">已有账号？去登录</string>

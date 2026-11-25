@@ -15,15 +15,23 @@ internal class SyncStorage(context: Context, accountScope: String) {
         override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
     }
 
-    fun load() = SyncConfig(
-        preferences.getStringSet("sources", emptySet()).orEmpty().toSet(),
-        preferences.getString("target", null),
-        if (preferences.getString("mode", null) == "ALL") SyncMode.ALL else SyncMode.MEDIA,
-        preferences.getBoolean("enabled", false),
-    )
+    fun load(): SyncConfig {
+        val sources = preferences.getStringSet("sources", emptySet()).orEmpty().toSet()
+        // Before explicit per-album scopes, every selected directory was recursive.
+        val recursive = preferences.getStringSet("recursiveFolders", sources).orEmpty().toSet()
+        return SyncConfig(
+            sources, preferences.getString("target", null),
+            if (preferences.getString("mode", null) == "ALL") SyncMode.ALL else SyncMode.MEDIA,
+            preferences.getBoolean("enabled", false),
+            preferences.getInt("maxDepth", DEFAULT_SCAN_DEPTH),
+            preferences.getInt("intervalSeconds", DEFAULT_SYNC_INTERVAL_SECONDS), recursive,
+        ).normalized()
+    }
 
     fun save(config: SyncConfig) = preferences.edit().putStringSet("sources", config.localFolders.toSet())
         .putString("target", config.remoteFolderId).putString("mode", config.mode.name)
+        .putStringSet("recursiveFolders", config.recursiveFolders.toSet())
+        .putInt("maxDepth", config.maxDepth).putInt("intervalSeconds", config.intervalSeconds)
         .putBoolean("enabled", config.enabled).apply()
 
     fun cachedDigest(key: String, version: String, calculate: () -> String): String {

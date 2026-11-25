@@ -10,7 +10,11 @@ The installable APK is at `app/build/outputs/apk/preview/app-preview.apk`. To ru
 
 Set `DRAGONFOX_TEST_BINARY` to the absolute path of a compiled DragonFox server to include the live-server interoperability test. To include the on-device sync and gallery tests, install the debug app, grant it All files access, and start an isolated local server with registration enabled. Run `adb reverse tcp:18080 tcp:18080`, and pass `-Pandroid.testInstrumentationRunnerArguments.syncServer=http://127.0.0.1:18080` to the device test task.
 
-Open **My files** from the main screen to browse cloud folders. Open a folder’s **⋮** menu to choose automatic, normal or photo display. Tap a photo to zoom and expand its camera details.
+The **Home** tab opens the cloud file browser. Open a folder’s **⋮** menu to choose automatic, normal or photo display. Tap a photo to zoom and expand its camera details.
+
+Use **Sync** to choose the backup source and destination, enable automatic uploads, and see current tasks. Tap an album cover to browse its photos and videos, or use its checkmark to select it. Albums are ordered by media count. The storage root counts as level **1**. The scanner stops at the configured depth (default **5**) for album discovery and uploads, including scheduled scans. The picker groups deeper media that falls within the scan limit under the level **5** album. With a limit below **5**, it displays only the levels actually scanned.
+
+Open **Account** to change the theme, scan interval or maximum folder depth, check the app version, or sign out.
 
 ## Publishing APKs
 

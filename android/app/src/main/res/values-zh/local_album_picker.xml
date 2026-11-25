@@ -1,0 +1,17 @@
+<resources>
+    <string name="df_album_count">%1$d 个项目</string>
+    <string name="df_select_album">选择 %1$s</string>
+    <string name="df_album_select_all">全选</string>
+    <string name="df_album_clear">清空</string>
+    <string name="df_manage_selection">已选 (%1$d)</string>
+    <string name="df_album_direct">仅此目录</string>
+    <string name="df_album_recursive">包含扫描范围内的子目录</string>
+    <string name="df_album_from_parent">已由上级目录包含</string>
+    <string name="df_album_partial">部分子目录已选</string>
+    <string name="df_album_remove">移除</string>
+    <string name="df_album_done">完成</string>
+    <string name="df_video_clip">视频</string>
+    <string name="df_album_outside_depth">超出扫描层数，暂不参与同步</string>
+    <string name="df_album_unavailable">存储空间不可用</string>
+    <string name="df_album_single">1 个项目</string>
+</resources>

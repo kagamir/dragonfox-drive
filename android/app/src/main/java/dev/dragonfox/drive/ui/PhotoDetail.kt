@@ -37,14 +37,19 @@ import kotlinx.coroutines.CancellationException
 
 @Composable
 internal fun PhotoDetail(file: CloudFile, load: suspend (CloudFile, Boolean) -> LoadedPhoto, onBack: () -> Unit) {
+    PhotoDetail(file.id, file.revision, file.name, { load(file, true) }, onBack)
+}
+
+@Composable
+internal fun PhotoDetail(id: String, revision: String, name: String, load: suspend () -> LoadedPhoto, onBack: () -> Unit) {
     val context = LocalContext.current
-    var result by remember(file.id, file.revision) { mutableStateOf<LoadedPhoto?>(null) }
-    var error by remember(file.id, file.revision) { mutableStateOf<String?>(null) }
+    var result by remember(id, revision) { mutableStateOf<LoadedPhoto?>(null) }
+    var error by remember(id, revision) { mutableStateOf<String?>(null) }
     var attempt by remember { mutableIntStateOf(0) }
-    var expanded by rememberSaveable(file.id) { mutableStateOf(false) }
-    LaunchedEffect(file.id, file.revision, attempt) {
+    var expanded by rememberSaveable(id) { mutableStateOf(false) }
+    LaunchedEffect(id, revision, attempt) {
         error = null
-        try { result = load(file, true) }
+        try { result = load() }
         catch (e: Exception) {
             if (e is CancellationException) throw e
             error = e.localizedMessage ?: context.getString(R.string.df_request_failed)
@@ -52,7 +57,7 @@ internal fun PhotoDetail(file: CloudFile, load: suspend (CloudFile, Boolean) -> 
     }
     BackHandler(expanded) { expanded = false }
     Column(Modifier.fillMaxSize()) {
-        Header(file.name, onBack) {
+        Header(name, onBack) {
             IconToggleButton(checked = expanded, onCheckedChange = { expanded = it }) {
                 Icon(Icons.Outlined.Info, label(R.string.df_camera_info))
             }
@@ -65,16 +70,16 @@ internal fun PhotoDetail(file: CloudFile, load: suspend (CloudFile, Boolean) -> 
                     val bitmap = result?.bitmap
                     when {
                         bitmap != null -> {
-                            var scale by remember(file.id) { mutableFloatStateOf(1f) }
-                            var pan by remember(file.id) { mutableStateOf(Offset.Zero) }
-                            Image(bitmap.asImageBitmap(), file.name, Modifier.fillMaxSize()
-                                .pointerInput(file.id) {
+                            var scale by remember(id) { mutableFloatStateOf(1f) }
+                            var pan by remember(id) { mutableStateOf(Offset.Zero) }
+                            Image(bitmap.asImageBitmap(), name, Modifier.fillMaxSize()
+                                .pointerInput(id) {
                                     detectTapGestures(onDoubleTap = {
                                         scale = if (scale > 1f) 1f else 2f
                                         pan = Offset.Zero
                                     })
                                 }
-                                .pointerInput(file.id) {
+                                .pointerInput(id) {
                                     detectTransformGestures { _, drag, zoom, _ ->
                                         scale = (scale * zoom).coerceIn(1f, 6f)
                                         val limitX = size.width * (scale - 1f) / 2

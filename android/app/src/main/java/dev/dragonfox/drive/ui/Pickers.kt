@@ -3,6 +3,7 @@ package dev.dragonfox.drive.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.toggleable
@@ -15,6 +16,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource as label
 import androidx.compose.ui.semantics.Role
@@ -23,6 +27,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.dragonfox.drive.R
 import dev.dragonfox.drive.sync.FolderScanner
+import dev.dragonfox.drive.sync.MediaBucket
+import dev.dragonfox.drive.sync.storageDepth
 import dev.dragonfox.drive.sync.SyncMode
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -30,101 +36,184 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 @Composable
-internal fun LocalPicker(initialMode: SyncMode, previous: Set<String>, allowed: Boolean, request: () -> Unit,
-    onBack: () -> Unit, onDone: (SyncMode, Set<String>) -> Unit) {
+internal fun LocalPicker(initialMode: SyncMode, previous: Set<String>, previousRecursive: Set<String>,
+    maxDepth: Int, allowed: Boolean, request: () -> Unit, onBack: () -> Unit, scanner: FolderScanner? = null,
+    onDone: (SyncMode, Set<String>, Set<String>) -> Unit) {
     val context = LocalContext.current
-    val scanner = remember { FolderScanner(context.applicationContext) }
+    val source = remember(scanner, context) { scanner ?: FolderScanner(context.applicationContext) }
     var modeName by rememberSaveable { mutableStateOf(initialMode.name) }
     val mode = SyncMode.valueOf(modeName)
-    var mediaSelection by rememberSaveable { mutableStateOf(ArrayList(if (initialMode == SyncMode.MEDIA) previous else emptySet())) }
-    var allSelection by rememberSaveable { mutableStateOf(ArrayList(if (initialMode == SyncMode.ALL) previous else emptySet())) }
-    val selection = if (mode == SyncMode.MEDIA) mediaSelection else allSelection
-    var history by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
+    var mediaPaths by rememberSaveable { mutableStateOf(ArrayList(if (initialMode == SyncMode.MEDIA) previous else emptySet())) }
+    var recursivePaths by rememberSaveable { mutableStateOf(ArrayList(if (initialMode == SyncMode.MEDIA) previousRecursive.intersect(previous) else emptySet())) }
+    var allPaths by rememberSaveable { mutableStateOf(ArrayList(if (initialMode == SyncMode.ALL) previous else emptySet())) }
+    val selection = remember(mode, mediaPaths, allPaths) { (if (mode == SyncMode.MEDIA) mediaPaths else allPaths).toSet() }
+    val recursive = remember(mode, recursivePaths, allPaths) { (if (mode == SyncMode.MEDIA) recursivePaths else allPaths).toSet() }
+    var scanRoots by remember(source, allowed, maxDepth) { mutableStateOf<List<File>>(emptyList()) }
+    val activeSelection = remember(selection, scanRoots, maxDepth) {
+        selection.filterTo(mutableSetOf()) { (storageDepth(File(it), scanRoots) ?: Int.MAX_VALUE) <= maxDepth }
+    }
+    var history by rememberSaveable(maxDepth) { mutableStateOf(arrayListOf<String>()) }
     val current = history.lastOrNull()
+    var albums by remember(maxDepth) { mutableStateOf<List<MediaBucket>>(emptyList()) }
+    var openAlbum by rememberSaveable(maxDepth) { mutableStateOf<String?>(null) }
+    val album = remember(openAlbum, albums) { albums.find { it.directory.absolutePath == openAlbum } }
+    var preview by remember(maxDepth, allowed) { mutableStateOf<String?>(null) }
+    var manage by rememberSaveable { mutableStateOf(false) }
     var folders by remember { mutableStateOf<List<File>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     var refresh by remember { mutableIntStateOf(0) }
+    val albumScroll = rememberLazyGridState()
     fun up() {
-        if (mode == SyncMode.ALL && history.isNotEmpty()) history = ArrayList(history.dropLast(1))
-        else onBack()
+        when {
+            mode == SyncMode.MEDIA && openAlbum != null -> openAlbum = null
+            mode == SyncMode.ALL && history.isNotEmpty() -> history = ArrayList(history.dropLast(1))
+            else -> onBack()
+        }
     }
-    BackHandler(mode == SyncMode.ALL && history.isNotEmpty()) { up() }
-    LaunchedEffect(mode, current, allowed, refresh) {
-        folders = emptyList()
+    fun select(paths: Set<String>, recursiveSelection: Set<String>) {
+        if (mode == SyncMode.ALL) allPaths = ArrayList(paths)
+        else {
+            mediaPaths = ArrayList(paths)
+            recursivePaths = ArrayList(recursiveSelection.intersect(paths))
+        }
+    }
+    BackHandler(mode == SyncMode.MEDIA && openAlbum != null || mode == SyncMode.ALL && history.isNotEmpty()) { up() }
+    LaunchedEffect(mode, current, allowed, maxDepth, refresh) {
         error = null
         loading = allowed
-        if (!allowed) return@LaunchedEffect
+        folders = emptyList()
+        if (!allowed) {
+            albums = emptyList()
+            preview = null
+            return@LaunchedEffect
+        }
         try {
-            folders = withContext(Dispatchers.IO) {
-                if (mode == SyncMode.MEDIA) scanner.mediaFolders()
-                else if (current == null) scanner.roots() else scanner.children(File(current))
+            scanRoots = withContext(Dispatchers.IO) { source.roots() }
+            if (mode == SyncMode.MEDIA) {
+                albums = source.mediaBuckets(maxDepth)
+                if (openAlbum != null && albums.none { it.directory.absolutePath == openAlbum }) openAlbum = null
+            } else folders = withContext(Dispatchers.IO) {
+                if (current == null) scanRoots else source.children(File(current))
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             error = e.localizedMessage ?: context.getString(R.string.df_request_failed)
         } finally { loading = false }
     }
+    val inAlbum = allowed && !loading && error == null && mode == SyncMode.MEDIA && album != null
     Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
-        Header(label(R.string.df_choose_local), ::up)
-        Column(Modifier.widthIn(max = 740.dp).fillMaxWidth().padding(horizontal = 16.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SyncMode.entries.forEach { option ->
-                    FilterChip(selected = mode == option, onClick = { modeName = option.name },
-                        label = { Text(label(if (option == SyncMode.MEDIA) R.string.df_media else R.string.df_all_files)) })
+        Header(if (inAlbum) album!!.directory.name.ifEmpty { album.directory.path } else label(R.string.df_choose_local), ::up)
+        if (inAlbum) {
+            key(album!!.directory.absolutePath, album.recursive) {
+                AlbumContents(album, source) { preview = it.absolutePath }
+            }
+        } else {
+            Column(Modifier.widthIn(max = 840.dp).fillMaxWidth().padding(horizontal = 16.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SyncMode.entries.forEach { option ->
+                        FilterChip(selected = mode == option, onClick = { modeName = option.name; openAlbum = null },
+                            label = { Text(label(if (option == SyncMode.MEDIA) R.string.df_media else R.string.df_all_files)) })
+                    }
+                }
+                Text(if (mode == SyncMode.MEDIA) label(R.string.df_media_hint) else current ?: label(R.string.df_all_hint),
+                    Modifier.padding(vertical = 4.dp), style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    if (mode == SyncMode.MEDIA && allowed && albums.isNotEmpty() && !loading && error == null) {
+                        TextButton(onClick = {
+                            val paths = albums.map { it.directory.absolutePath }.toSet()
+                            val boundary = albums.filter { it.recursive }.map { it.directory.absolutePath }
+                            select(selection + paths, recursive + boundary)
+                        }) { Text(label(R.string.df_album_select_all)) }
+                    }
+                    if (selection.isNotEmpty()) {
+                        TextButton(onClick = { select(emptySet(), emptySet()) }) { Text(label(R.string.df_album_clear)) }
+                        Spacer(Modifier.weight(1f))
+                        TextButton(onClick = { manage = true }) { Text(label(R.string.df_manage_selection, selection.size)) }
+                    }
                 }
             }
-            Text(if (mode == SyncMode.MEDIA) label(R.string.df_media_hint) else current ?: label(R.string.df_all_hint),
-                Modifier.padding(vertical = 8.dp), style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        LazyColumn(Modifier.widthIn(max = 740.dp).fillMaxWidth().weight(1f),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)) {
+            val content = Modifier.widthIn(max = 840.dp).fillMaxWidth().weight(1f)
             when {
-                !allowed -> item { PermissionPanel(request) }
-                loading -> item { LoadingLine() }
-                error != null -> item { RetryLine(error.orEmpty()) { refresh++ } }
-                folders.isEmpty() -> item { Text(label(if (mode == SyncMode.MEDIA) R.string.df_no_media else R.string.df_empty_folder)) }
-                else -> items(folders, key = { it.absolutePath }) { folder ->
-                    val path = folder.absolutePath
-                    val checked = path in selection
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Row(Modifier.weight(1f).toggleable(value = checked, role = Role.Checkbox) { selected ->
-                            val updated = ArrayList(if (selected) selection + path else selection - path)
-                            if (mode == SyncMode.MEDIA) mediaSelection = updated else allSelection = updated
-                        }.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Checkbox(checked, onCheckedChange = null)
-                            Column {
-                                Text(folder.name.ifEmpty { path }, fontWeight = FontWeight.Medium)
-                                Text(path, style = MaterialTheme.typography.bodySmall, maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                !allowed -> Box(content) { PermissionPanel(request) }
+                loading -> Box(content) { LoadingLine() }
+                error != null -> Column(content.padding(16.dp)) { RetryLine(error.orEmpty()) { refresh++ } }
+                mode == SyncMode.MEDIA && albums.isEmpty() -> Text(label(R.string.df_no_media), content.padding(16.dp))
+                mode == SyncMode.MEDIA -> AlbumGrid(albums, activeSelection, recursive.intersect(activeSelection), albumScroll, { openAlbum = it.directory.absolutePath }, { item ->
+                    val path = item.directory.absolutePath
+                    if (item.fullySelected(selection, recursive)) select(selection - path, recursive - path)
+                    else select(selection + path, if (item.recursive) recursive + path else recursive - path)
+                }, content)
+                else -> LazyColumn(content.testTag("local-folders"), contentPadding = PaddingValues(16.dp)) {
+                    if (folders.isEmpty()) item { Text(label(R.string.df_empty_folder)) }
+                    items(folders, key = { it.absolutePath }) { folder ->
+                        val path = folder.absolutePath
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Row(Modifier.weight(1f).testTag("local-select:$path")
+                                .toggleable(value = path in selection, role = Role.Checkbox) {
+                                    allPaths = ArrayList(if (it) selection + path else selection - path)
+                                }.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Checkbox(path in selection, onCheckedChange = null)
+                                Column {
+                                    Text(folder.name.ifEmpty { path }, fontWeight = FontWeight.Medium)
+                                    Text(path, style = MaterialTheme.typography.bodySmall, maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                            // Volume roots are at level one. The last visible row stays selectable.
+                            if (history.size + 1 < minOf(5, maxDepth)) IconButton(onClick = { history = ArrayList(history + path) },
+                                modifier = Modifier.testTag("local-open:$path")) {
+                                Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, label(R.string.df_open_folder, folder.name))
                             }
                         }
-                        if (mode == SyncMode.ALL) IconButton(onClick = { history = ArrayList(history + path) }) {
-                            Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, label(R.string.df_open_folder, folder.name))
-                        }
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     }
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 }
             }
+            Button(onClick = { onDone(mode, selection, recursive) }, enabled = allowed,
+                modifier = Modifier.widthIn(max = 840.dp).fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                Text(label(R.string.df_use_selected, activeSelection.size))
+            }
         }
-        Button(onClick = { onDone(mode, selection.toSet()) }, enabled = allowed,
-            modifier = Modifier.widthIn(max = 740.dp).fillMaxWidth().padding(16.dp)) {
-            Text(label(R.string.df_use_selected, selection.size))
-        }
+    }
+    if (manage) AlertDialog(onDismissRequest = { manage = false }, title = { Text(label(R.string.df_manage_selection, selection.size)) },
+        text = {
+            LazyColumn {
+                items(selection.sorted(), key = { it }) { path ->
+                    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(path, style = MaterialTheme.typography.bodyMedium)
+                            val depth = storageDepth(File(path), scanRoots)
+                            Text(label(when {
+                                depth == null -> R.string.df_album_unavailable
+                                depth > maxDepth -> R.string.df_album_outside_depth
+                                path in recursive -> R.string.df_album_recursive
+                                else -> R.string.df_album_direct
+                            }), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        TextButton(onClick = { select(selection - path, recursive - path) }) { Text(label(R.string.df_album_remove)) }
+                    }
+                }
+            }
+        }, confirmButton = { TextButton(onClick = { manage = false }) { Text(label(R.string.df_album_done)) } })
+    val file = preview
+    if (allowed && inAlbum && file != null) Dialog(onDismissRequest = { preview = null },
+        properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(Modifier.fillMaxSize()) { LocalMediaDetail(File(file)) { preview = null } }
     }
 }
 
 @Composable
-private fun LoadingLine() {
+internal fun LoadingLine() {
     Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.Center) {
         CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 3.dp)
     }
 }
 
 @Composable
-private fun RetryLine(error: String, retry: () -> Unit) {
+internal fun RetryLine(error: String, retry: () -> Unit) {
     Text(error, color = MaterialTheme.colorScheme.error)
     TextButton(onClick = retry) { Text(label(R.string.df_retry)) }
 }

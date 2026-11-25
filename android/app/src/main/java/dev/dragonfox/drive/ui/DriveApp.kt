@@ -21,6 +21,7 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,7 +41,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.dragonfox.drive.R
 import dev.dragonfox.drive.sync.FileAccess
-import dev.dragonfox.drive.sync.SyncConfig
+import dev.dragonfox.drive.sync.SyncEngine
 import dev.dragonfox.drive.sync.SyncMode
 import kotlinx.coroutines.launch
 
@@ -62,95 +63,155 @@ private val darkPalette = darkColorScheme(
 )
 
 @Composable
-internal fun DriveApp(model: DriveModel) {
-    MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkPalette else lightPalette) {
+internal fun DriveApp(model: DriveModel, onDarkModeChanged: (Boolean) -> Unit = {}) {
+    val dark = when (model.theme) {
+        ThemeChoice.SYSTEM -> isSystemInDarkTheme()
+        ThemeChoice.LIGHT -> false
+        ThemeChoice.DARK -> true
+    }
+    LaunchedEffect(dark) { onDarkModeChanged(dark) }
+    MaterialTheme(colorScheme = if (dark) darkPalette else lightPalette) {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             val engine = model.engine
             when {
                 model.restoring -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
                 engine == null -> Login(model)
-                else -> key(model.account?.server, model.account?.userId) {
-                    val config by engine.config.collectAsStateWithLifecycle()
-                    val status by engine.status.collectAsStateWithLifecycle()
-                    val context = androidx.compose.ui.platform.LocalContext.current
-                    var allowed by remember { mutableStateOf(FileAccess.granted(context)) }
-                    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
-                    DisposableEffect(lifecycle, context) {
-                        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-                            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) allowed = FileAccess.granted(context)
-                        }
-                        lifecycle.addObserver(observer)
-                        onDispose { lifecycle.removeObserver(observer) }
-                    }
-                    var page by rememberSaveable { mutableStateOf("home") }
-                    var mode by rememberSaveable { mutableStateOf(SyncMode.MEDIA.name) }
-                    var folders by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
-                    var target by rememberSaveable { mutableStateOf<String?>(null) }
-                    var enableOnSave by rememberSaveable { mutableStateOf(false) }
-                    var confirmLogout by rememberSaveable { mutableStateOf(false) }
-                    val notifier = remember { SnackbarHostState() }
-                    val scope = rememberCoroutineScope()
-                    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-                        allowed = FileAccess.granted(context)
-                    }
-                    fun requestAccess() {
-                        try { launcher.launch(FileAccess.requestIntent(context)) }
-                        catch (_: android.content.ActivityNotFoundException) {
-                            try { launcher.launch(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)) }
-                            catch (_: android.content.ActivityNotFoundException) {
-                                scope.launch { notifier.showSnackbar(context.getString(R.string.df_permission_settings_missing)) }
+                else -> key(model.account?.server, model.account?.userId) { SignedInApp(model, engine) }
+            }
+        }
+    }
+}
+
+private enum class DriveTab(val title: Int, val tag: String) {
+    HOME(R.string.df_tab_home, "tab-home"),
+    SYNC(R.string.df_tab_sync, "tab-sync"),
+    ACCOUNT(R.string.df_account, "tab-account")
+}
+
+@Composable
+private fun SignedInApp(model: DriveModel, engine: SyncEngine) {
+    var tab by rememberSaveable { mutableStateOf(DriveTab.HOME) }
+    val holder = rememberSaveableStateHolder()
+    val config by engine.config.collectAsStateWithLifecycle()
+    BackHandler(tab != DriveTab.HOME) { tab = DriveTab.HOME }
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        bottomBar = {
+            NavigationBar {
+                DriveTab.entries.forEach { entry ->
+                    NavigationBarItem(selected = tab == entry, onClick = { tab = entry },
+                        icon = {
+                            when (entry) {
+                                DriveTab.HOME -> Icon(Icons.Outlined.Home, null)
+                                DriveTab.SYNC -> Icon(painterResource(R.drawable.df_sync), null)
+                                DriveTab.ACCOUNT -> Icon(Icons.Outlined.AccountCircle, null)
                             }
-                        }
+                        },
+                        label = { Text(label(entry.title)) },
+                        modifier = Modifier.testTag(entry.tag))
+                }
+            }
+        },
+    ) { insets ->
+        Box(Modifier.fillMaxSize().padding(insets).consumeWindowInsets(insets)) {
+            holder.SaveableStateProvider(tab.name) {
+                when (tab) {
+                    DriveTab.HOME -> model.photoLoader?.let { loader ->
+                        CloudBrowser(model.cloudFolders, model.cloudFiles, model::refreshDrive, model::setFolderType,
+                            loader::load)
                     }
-                    fun edit(turnOn: Boolean) {
-                        mode = config.mode.name
-                        folders = ArrayList(config.localFolders)
-                        target = config.remoteFolderId
-                        enableOnSave = turnOn
-                        page = "edit"
-                    }
-                    fun back() { page = if (page == "local" || page == "cloud") "edit" else "home" }
-                    BackHandler(page != "home") { back() }
-                    LaunchedEffect(engine) { runCatching { model.refreshFolders() } }
-                    Scaffold(containerColor = MaterialTheme.colorScheme.background, snackbarHost = { SnackbarHost(notifier) }) { insets ->
-                        AnimatedContent(page, Modifier.fillMaxSize().padding(insets), transitionSpec = { fadeIn() togetherWith fadeOut() }, label = "page") { visiblePage ->
-                            when (visiblePage) {
-                                "home" -> Dashboard(config, status, model.account?.username.orEmpty(), model.account?.server.orEmpty(),
-                                    remoteLabel(config.remoteFolderId, model.cloudFolders), allowed,
-                                    onEdit = { edit(false) }, onRefresh = engine::rescan,
-                                    onBrowse = { page = "drive" }, onPermission = ::requestAccess, onLogout = { confirmLogout = true },
-                                    onEnabled = { enabled ->
-                                        if (enabled && (!allowed || config.localFolders.isEmpty())) edit(true)
-                                        else engine.configure(config.copy(enabled = enabled))
-                                    })
-                                "drive" -> model.photoLoader?.let { loader ->
-                                    CloudBrowser(model.cloudFolders, model.cloudFiles, model::refreshDrive, model::setFolderType,
-                                        loader::load, onExit = ::back)
-                                }
-                                "edit" -> SyncEditor(SyncMode.valueOf(mode), folders, remoteLabel(target, model.cloudFolders),
-                                    allowed, ::requestAccess, { page = "local" }, { page = "cloud" }, ::back,
-                                    onSave = {
-                                        engine.configure(SyncConfig(localFolders = folders.toSet(), remoteFolderId = target,
-                                            mode = SyncMode.valueOf(mode), enabled = enableOnSave || config.enabled))
-                                        page = "home"
-                                    })
-                                "local" -> LocalPicker(SyncMode.valueOf(mode), folders.toSet(), allowed, ::requestAccess, ::back) { m, paths ->
-                                    mode = m.name
-                                    folders = ArrayList(paths)
-                                    page = "edit"
-                                }
-                                "cloud" -> CloudPicker(model, target, ::back) { id -> target = id; page = "edit" }
-                            }
-                        }
-                    }
-                    if (confirmLogout) AlertDialog(onDismissRequest = { confirmLogout = false },
-                        title = { Text(label(R.string.df_signout)) },
-                        text = { Text(label(R.string.df_signout_body)) },
-                        confirmButton = { TextButton(onClick = { confirmLogout = false; model.signOut() }) { Text(label(R.string.df_signout)) } },
-                        dismissButton = { TextButton(onClick = { confirmLogout = false }) { Text(label(R.string.df_cancel)) } })
+                    DriveTab.SYNC -> SyncTab(model, engine)
+                    DriveTab.ACCOUNT -> AccountTab(
+                        username = model.account?.username.orEmpty(), server = model.account?.server.orEmpty(),
+                        theme = model.theme, selectTheme = model::selectTheme, config = config,
+                        setInterval = { engine.configure(engine.config.value.copy(intervalSeconds = it)) },
+                        setDepth = { engine.configure(engine.config.value.copy(maxDepth = it)) },
+                        signOut = { model.signOut() })
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SyncTab(model: DriveModel, engine: SyncEngine) {
+    val config by engine.config.collectAsStateWithLifecycle()
+    val status by engine.status.collectAsStateWithLifecycle()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    var allowed by remember { mutableStateOf(FileAccess.granted(context)) }
+    DisposableEffect(lifecycle, context) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) allowed = FileAccess.granted(context)
+        }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
+    }
+    LaunchedEffect(engine, config.remoteFolderId) {
+        if (config.remoteFolderId != null && model.cloudFolders.none { it.id == config.remoteFolderId }) {
+            try { model.refreshFolders() }
+            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (_: Exception) { /* The saved ID remains usable if its display name is unavailable. */ }
+        }
+    }
+    var page by rememberSaveable { mutableStateOf("sync") }
+    var mode by rememberSaveable { mutableStateOf(SyncMode.MEDIA.name) }
+    var folders by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
+    var recursiveFolders by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
+    var target by rememberSaveable { mutableStateOf<String?>(null) }
+    var enableOnSave by rememberSaveable { mutableStateOf(false) }
+    val notifier = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        allowed = FileAccess.granted(context)
+    }
+    fun requestAccess() {
+        try { launcher.launch(FileAccess.requestIntent(context)) }
+        catch (_: android.content.ActivityNotFoundException) {
+            try { launcher.launch(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)) }
+            catch (_: android.content.ActivityNotFoundException) {
+                scope.launch { notifier.showSnackbar(context.getString(R.string.df_permission_settings_missing)) }
+            }
+        }
+    }
+    fun edit(turnOn: Boolean) {
+        mode = config.mode.name
+        folders = ArrayList(config.localFolders)
+        recursiveFolders = ArrayList(config.recursiveFolders)
+        target = config.remoteFolderId
+        enableOnSave = turnOn
+        page = "edit"
+    }
+    fun back() { page = if (page == "local" || page == "cloud") "edit" else "sync" }
+    BackHandler(page != "sync") { back() }
+    Box(Modifier.fillMaxSize()) {
+        AnimatedContent(page, Modifier.fillMaxSize(), transitionSpec = { fadeIn() togetherWith fadeOut() }, label = "sync-page") { destination ->
+            when (destination) {
+                "sync" -> Dashboard(config, status, remoteLabel(config.remoteFolderId, model.cloudFolders), allowed,
+                    onEdit = { edit(false) }, onRefresh = engine::rescan, onPermission = ::requestAccess,
+                    onEnabled = { enabled ->
+                        if (enabled && (!allowed || config.localFolders.isEmpty())) edit(true)
+                        else engine.configure(config.copy(enabled = enabled))
+                    })
+                "edit" -> SyncEditor(SyncMode.valueOf(mode), folders, config.maxDepth, remoteLabel(target, model.cloudFolders),
+                    allowed, ::requestAccess, { page = "local" }, { page = "cloud" }, ::back, onSave = {
+                        engine.configure(engine.config.value.copy(localFolders = folders.toSet(), recursiveFolders = recursiveFolders.toSet(), remoteFolderId = target,
+                            mode = SyncMode.valueOf(mode), enabled = enableOnSave || config.enabled))
+                        page = "sync"
+                    })
+                "local" -> key(config.maxDepth) {
+                    LocalPicker(SyncMode.valueOf(mode), folders.toSet(), recursiveFolders.toSet(), config.maxDepth,
+                        allowed, ::requestAccess, ::back) { chosenMode, paths, recursive ->
+                        mode = chosenMode.name
+                        folders = ArrayList(paths)
+                        recursiveFolders = ArrayList(recursive)
+                        page = "edit"
+                    }
+                }
+                "cloud" -> CloudPicker(model, target, ::back) { id -> target = id; page = "edit" }
+            }
+        }
+        SnackbarHost(notifier, Modifier.align(Alignment.BottomCenter))
     }
 }
 

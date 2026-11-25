@@ -8,12 +8,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ExitToApp
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource as label
@@ -25,9 +25,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.dragonfox.drive.R
 import dev.dragonfox.drive.protocol.CloudFolder
+import dev.dragonfox.drive.sync.FolderScanner
+import dev.dragonfox.drive.sync.storageDepth
 import dev.dragonfox.drive.sync.SyncConfig
 import dev.dragonfox.drive.sync.SyncMode
 import dev.dragonfox.drive.sync.SyncStatus
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 
 @Composable
@@ -70,10 +74,8 @@ internal fun PermissionPanel(onGrant: () -> Unit) {
 }
 
 @Composable
-internal fun Dashboard(config: SyncConfig, status: SyncStatus, user: String, server: String,
-    target: String, allowed: Boolean, onEdit: () -> Unit, onRefresh: () -> Unit, onPermission: () -> Unit,
-    onBrowse: () -> Unit, onLogout: () -> Unit, onEnabled: (Boolean) -> Unit) {
-    var menu by remember { mutableStateOf(false) }
+internal fun Dashboard(config: SyncConfig, status: SyncStatus, target: String, allowed: Boolean,
+    onEdit: () -> Unit, onRefresh: () -> Unit, onPermission: () -> Unit, onEnabled: (Boolean) -> Unit) {
     val colors = MaterialTheme.colorScheme
     val context = LocalContext.current
     val state = when {
@@ -87,24 +89,7 @@ internal fun Dashboard(config: SyncConfig, status: SyncStatus, user: String, ser
         else -> R.string.df_monitoring
     }
     Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
-        Header("DragonFox Drive") {
-            TextButton(onClick = onBrowse) {
-                Icon(painterResource(R.drawable.df_folder), null, Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
-                Text(label(R.string.df_root))
-            }
-            Box {
-                IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.AccountCircle, label(R.string.df_account)) }
-                DropdownMenu(menu, { menu = false }) {
-                    Text(user, Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp), fontWeight = FontWeight.SemiBold)
-                    Text(server, Modifier.widthIn(max = 260.dp).padding(horizontal = 16.dp, vertical = 4.dp),
-                        style = MaterialTheme.typography.bodySmall)
-                    DropdownMenuItem(text = { Text(label(R.string.df_signout)) }, leadingIcon = {
-                        Icon(Icons.AutoMirrored.Outlined.ExitToApp, null)
-                    }, onClick = { menu = false; onLogout() })
-                }
-            }
-        }
+        Header(label(R.string.df_tab_sync))
         LazyColumn(Modifier.widthIn(max = 740.dp).fillMaxWidth(), contentPadding = PaddingValues(start = 16.dp,
             end = 16.dp, top = 8.dp, bottom = 32.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             item {
@@ -137,7 +122,7 @@ internal fun Dashboard(config: SyncConfig, status: SyncStatus, user: String, ser
                 Panel {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) { Section(label(R.string.df_plan)) }
-                        TextButton(onEdit) { Text(label(R.string.df_edit)) }
+                        TextButton(onEdit, Modifier.testTag("sync-edit")) { Text(label(R.string.df_edit)) }
                     }
                     Detail(R.drawable.df_folder, label(R.string.df_local_folders, config.localFolders.size),
                         label(if (config.mode == SyncMode.ALL) R.string.df_all_files else R.string.df_media))
@@ -179,8 +164,16 @@ private fun Detail(icon: Int, title: String, subtitle: String) {
 }
 
 @Composable
-internal fun SyncEditor(mode: SyncMode, folders: List<String>, target: String, allowed: Boolean, onGrant: () -> Unit,
+internal fun SyncEditor(mode: SyncMode, folders: List<String>, maxDepth: Int, target: String, allowed: Boolean, onGrant: () -> Unit,
     onLocal: () -> Unit, onCloud: () -> Unit, onBack: () -> Unit, onSave: () -> Unit) {
+    val context = LocalContext.current
+    val eligible by produceState<List<String>?>(null, folders, maxDepth, allowed) {
+        value = null
+        if (allowed) value = withContext(Dispatchers.IO) {
+            val roots = FolderScanner(context.applicationContext).roots()
+            folders.filter { (storageDepth(File(it), roots) ?: 0) in 1..maxDepth }.sorted()
+        }
+    }
     Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
         Header(label(R.string.df_plan), onBack)
         LazyColumn(Modifier.widthIn(max = 740.dp).fillMaxWidth().weight(1f), contentPadding = PaddingValues(16.dp),
@@ -190,9 +183,13 @@ internal fun SyncEditor(mode: SyncMode, folders: List<String>, target: String, a
                 Panel {
                     Detail(R.drawable.df_folder, label(R.string.df_local_folders, folders.size),
                         label(if (mode == SyncMode.ALL) R.string.df_all_files else R.string.df_media))
-                    folders.sorted().take(3).forEach { Text(it, style = MaterialTheme.typography.bodySmall, maxLines = 2) }
-                    if (folders.size > 3) Text(label(R.string.df_other_folders, folders.size - 3), style = MaterialTheme.typography.bodySmall)
-                    OutlinedButton(onClick = onLocal, enabled = allowed) { Text(label(R.string.df_choose_local)) }
+                    eligible?.let { paths ->
+                        paths.take(3).forEach { Text(it, style = MaterialTheme.typography.bodySmall, maxLines = 2) }
+                        if (paths.size > 3) Text(label(R.string.df_other_folders, paths.size - 3), style = MaterialTheme.typography.bodySmall)
+                        if (paths.size < folders.size) Text(label(R.string.df_inactive_sources, folders.size - paths.size),
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    OutlinedButton(onClick = onLocal, enabled = allowed, modifier = Modifier.testTag("sync-local")) { Text(label(R.string.df_choose_local)) }
                 }
             }
             item { Panel {

@@ -17,7 +17,7 @@
     <string name="df_confirm_password">Confirm password</string>
     <string name="df_create_account">Create account</string>
     <string name="df_destination">Cloud destination</string>
-    <string name="df_directory_hint">Selected folders include their subfolders. Their directory structure is preserved in the cloud.</string>
+    <string name="df_directory_hint">Your folder structure is preserved in the cloud. Photos and videos mode skips other file types.</string>
     <string name="df_edit">Edit</string>
     <string name="df_empty_folder">No subfolders here.</string>
     <string name="df_existing_account">Already registered? Sign in</string>

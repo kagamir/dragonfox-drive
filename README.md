@@ -9,7 +9,7 @@ A self-hosted, end-to-end encrypted cloud drive. Organize files, share links, an
 
 ## Folder views
 
-Open a folder on the web or under **My files** on Android. In **Automatic** mode it opens as a photo gallery when more than half of its directly contained files are images. A tie or an empty folder uses the ordinary view. Subfolders do not count toward the total and stay visible in either view. The drive root always uses the ordinary view.
+Open a folder on the web or in the **Home** tab on Android. In **Automatic** mode it opens as a photo gallery when more than half of its directly contained files are images. A tie or an empty folder uses the ordinary view. Subfolders do not count toward the total and stay visible in either view. The drive root always uses the ordinary view.
 
 To choose a view yourself, use the folder type selector beside the folder name on the web, or open the folder’s **⋮** menu on Android. Choose an ordinary folder or a photo folder to keep that view as the contents change. Choose **Automatic** to resume detection. Manual choices are encrypted and sync across devices. Update the server to this version before saving a choice.
 
@@ -17,12 +17,12 @@ In a photo folder, select a thumbnail to open and zoom the image. Expand the det
 
 ## Android auto-sync
 
-The native Kotlin client runs on Android 11 and later. Project releases built with Android support include a signed APK alongside the server binaries on the [Releases page](https://github.com/kagamir/dragonfox-drive/releases). [Download the standalone preview APK](https://github.com/kagamir/dragonfox-drive/releases/tag/android-v0.1.0-preview.2). The preview installs alongside the production app. Preview builds can have different signing certificates, so installing a later preview may require uninstalling the previous one and selecting the folders again.
+The native Kotlin client runs on Android 11 and later. Project releases built with Android support include a signed APK alongside the server binaries on the [Releases page](https://github.com/kagamir/dragonfox-drive/releases). [Download the standalone preview APK](https://github.com/kagamir/dragonfox-drive/releases/tag/android-v0.1.0-preview.3). The preview installs alongside the production app. Preview builds can have different signing certificates, so installing a later preview may require uninstalling the previous one and selecting the folders again.
 
 1. Open the app, enter the HTTPS address of your DragonFox server, and sign in or register.
-2. Grant **All files access** in Android settings. Under **Photos and videos**, select from folders containing media. Under **All files**, browse storage and select any folders you want to back up.
-3. Choose a cloud destination and enable auto-sync. The client scans selected folders recursively and preserves their storage-relative paths under the destination. Media mode checks the filename extension against Android MIME types and supported camera formats for every upload, including files added later.
-4. Keep the app open to follow scan and upload progress. It pauses when offline or in the background and checks again when you return. The number of concurrent uploads adapts to network metering and estimated upstream bandwidth.
+2. Open **Sync**, grant **All files access**, then choose local folders. **Photos and videos** shows albums sorted by media count. Tap a cover to browse its contents or use the checkmark to select it. **All files** lets you choose folders for recursive backup.
+3. Choose the cloud destination and enable auto-sync. Uploads preserve each file’s storage-relative path. The **Sync** tab shows current tasks and progress. Sync pauses in the background and offline, and adjusts upload concurrency to the connection.
+4. In **Account**, set the theme, time between scans and maximum scan depth (default **5**). The root of each storage volume counts as level **1**. Files below the scan limit are skipped in the picker and in every sync pass. The picker shows albums up to level **5**. With a scan depth of **10**, for example, `/downloads/pic/4/5/6/7/8/9/test.jpeg` appears in the album **5** and uploads with its original path. With a scan depth of **5**, the same file is skipped.
 
 Sync uploads missing content. Deleting a local file leaves the cloud copy in place. Deleting a cloud copy while the local file is still selected makes it eligible for upload again. A server built with zero-byte upload support is required to sync empty files.
 

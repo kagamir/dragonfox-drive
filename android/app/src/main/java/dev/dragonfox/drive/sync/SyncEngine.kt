@@ -52,6 +52,7 @@ class SyncEngine(context: Context, private val client: DriveClient, accountScope
         scope.launch {
             combine(config, visible, capacity.map { it > 0 }.distinctUntilChanged()) { cfg, foreground, online ->
                 cfg.takeIf { foreground && online && it.enabled && it.localFolders.isNotEmpty() }
+                    ?.copy(intervalSeconds = DEFAULT_SYNC_INTERVAL_SECONDS)
             }.distinctUntilChanged().collectLatest { cfg ->
                 if (cfg == null) {
                     state.update { it.copy(scanning = false, running = false, tasks = emptyList()) }
@@ -74,14 +75,14 @@ class SyncEngine(context: Context, private val client: DriveClient, accountScope
                     } finally {
                         state.update { it.copy(scanning = false, running = false, tasks = emptyList()) }
                     }
-                    withTimeoutOrNull(45_000) { wake.receive() }
+                    awaitNextScan(config.map { it.intervalSeconds }.distinctUntilChanged(), wake.receiveAsFlow())
                 }
             }
         }
     }
 
     fun configure(config: SyncConfig) {
-        val copy = config.copy(localFolders = config.localFolders.toSet())
+        val copy = config.normalized()
         storage.save(copy)
         mutableConfig.value = copy
     }
@@ -98,12 +99,12 @@ class SyncEngine(context: Context, private val client: DriveClient, accountScope
     private suspend fun reconcile(cfg: SyncConfig) {
         val job = currentCoroutineContext()
         val volumes = scanner.volumes()
-        val roots = sourceDirectories(cfg.localFolders)
+        val roots = cfg.localFolders.map(::File)
         val index = CloudIndex(client.listFolders(), client.listFiles())
         check(index.containsFolder(cfg.remoteFolderId)) { "云端目标目录已被移除，请重新选择" }
         roots.filterNot { scanner.accessible(it, volumes) }.forEach { report("存储设备不可用：${it.path}") }
         val pending = mutableListOf<Pending>()
-        val files = walkFiles(roots, { scanner.accessible(it, volumes) }, { job.ensureActive() }) {
+        val files = selectedFiles(cfg, volumes.map { it.dir }, { scanner.accessible(it, volumes) }, { job.ensureActive() }) {
             report("无法读取目录：${it.path}")
         }
         for (file in files) {

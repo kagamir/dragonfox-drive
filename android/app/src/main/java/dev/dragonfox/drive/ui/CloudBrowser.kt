@@ -42,7 +42,7 @@ internal fun CloudBrowser(
     refresh: suspend () -> Unit,
     changeType: suspend (String, FolderType) -> Unit,
     loadPhoto: suspend (CloudFile, Boolean) -> LoadedPhoto,
-    onExit: () -> Unit,
+    onExit: (() -> Unit)? = null,
 ) {
     var folderId by rememberSaveable { mutableStateOf<String?>(null) }
     var photoId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -77,16 +77,17 @@ internal fun CloudBrowser(
     fun back() {
         if (photoId != null) photoId = null
         else if (folderId != null) folderId = folder?.parentId
-        else onExit()
+        else onExit?.invoke()
     }
-    BackHandler(onBack = ::back)
+    val canGoBack = photoId != null || folderId != null || onExit != null
+    BackHandler(enabled = canGoBack, onBack = ::back)
     val grid = key(folderId) { rememberLazyGridState() }
     if (photo != null) {
         PhotoDetail(photo, loadPhoto, onBack = ::back)
         return
     }
     Column(Modifier.fillMaxSize()) {
-        Header(folder?.name ?: label(R.string.df_root), ::back) {
+        Header(folder?.name ?: label(R.string.df_root), if (canGoBack) ::back else null) {
             if (folder != null) Box {
                 IconButton(onClick = { showTypes = true }, enabled = !loading && !saving) {
                     Icon(Icons.Outlined.MoreVert, label(R.string.df_folder_display))

@@ -2,6 +2,7 @@ package dev.dragonfox.drive
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.core.view.WindowCompat
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.lifecycle.ViewModelProvider
@@ -14,7 +15,14 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         model = ViewModelProvider(this)[DriveModel::class.java]
-        setContent { DriveApp(model) }
+        setContent {
+            DriveApp(model) { dark ->
+                WindowCompat.getInsetsController(window, window.decorView).apply {
+                    isAppearanceLightStatusBars = !dark
+                    isAppearanceLightNavigationBars = !dark
+                }
+            }
+        }
     }
     override fun onStart() { super.onStart(); model.setVisible(true) }
     override fun onStop() { model.setVisible(false); super.onStop() }

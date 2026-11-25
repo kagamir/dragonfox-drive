@@ -1,6 +1,7 @@
 package dev.dragonfox.drive.ui
 
 import android.app.Application
+import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -23,6 +24,15 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 internal class DriveModel(private val app: Application) : AndroidViewModel(app) {
+    private val preferences = app.getSharedPreferences("appearance", Context.MODE_PRIVATE)
+    var theme by mutableStateOf(ThemeChoice.entries.find { it.name == preferences.getString("theme", null) } ?: ThemeChoice.SYSTEM)
+        private set
+
+    fun selectTheme(choice: ThemeChoice) {
+        preferences.edit().putString("theme", choice.name).apply()
+        theme = choice
+    }
+
     private val vault = SessionVault(app)
     private val sessionLock = Any()
     private var generation = 0L
