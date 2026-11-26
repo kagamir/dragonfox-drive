@@ -1,0 +1,26 @@
+<resources>
+    <string name="df_home_add">Create or upload</string>
+    <string name="df_home_new_folder">New folder</string>
+    <string name="df_home_new_text">New text file</string>
+    <string name="df_home_upload_files">Upload files</string>
+    <string name="df_home_upload_folder">Upload folder</string>
+    <string name="df_home_name">Name</string>
+    <string name="df_home_content">File contents</string>
+    <string name="df_home_create">Create</string>
+    <string name="df_home_rename">Rename</string>
+    <string name="df_home_move">Move</string>
+    <string name="df_home_delete">Delete</string>
+    <string name="df_home_select">Select</string>
+    <string name="df_home_select_all">Select all</string>
+    <string name="df_home_clear">Clear selection</string>
+    <string name="df_home_download">Download</string>
+    <string name="df_home_edit_text">Edit text</string>
+    <string name="df_home_share">Share</string>
+    <string name="df_home_actions_for">Actions for %1$s</string>
+    <string name="df_home_move_here">Move here</string>
+    <string name="df_home_selected">%1$d selected</string>
+    <string name="df_home_delete_one">Permanently delete “%1$s”?</string>
+    <string name="df_home_delete_many">Permanently delete the %1$d selected items?</string>
+    <string name="df_home_delete_tree">Files and subfolders inside the selected folders will also be deleted.</string>
+    <string name="df_home_check_after_restart">Check the refreshed folder before submitting the previous operation again.</string>
+</resources>

@@ -1,0 +1,17 @@
+<resources>
+    <string name="transfer_uploading">正在上传</string>
+    <string name="transfer_downloading">正在保存下载文件</string>
+    <string name="transfer_done">传输完成</string>
+    <string name="transfer_cancelled">传输已取消</string>
+    <string name="transfer_failed">传输失败</string>
+    <string name="transfer_cancel">取消</string>
+    <string name="transfer_dismiss">关闭</string>
+    <string name="transfer_retry">重试</string>
+    <string name="transfer_count">已完成 %1$d / %2$d 个文件</string>
+    <string name="transfer_bytes">%1$s / %2$s</string>
+    <string name="transfer_folder_missing">找不到目标云端文件夹。</string>
+    <string name="transfer_choose_empty">请选择新的空文件保存下载内容。</string>
+    <string name="transfer_file_changed">云端文件已更改，请重新打开并下载最新版本。</string>
+    <string name="transfer_digest_failed">下载的文件未通过完整性校验。</string>
+    <string name="transfer_no_picker">无法打开系统文件选择器。</string>
+</resources>

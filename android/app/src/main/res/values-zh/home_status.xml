@@ -1,0 +1,4 @@
+<resources>
+    <string name="df_home_refresh_failed">未能刷新文件列表，请点刷新查看最新状态。</string>
+    <string name="df_home_batch_failed">已完成 %1$d / %2$d 项。%3$s — %4$s</string>
+</resources>

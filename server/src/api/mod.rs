@@ -8,6 +8,7 @@ pub mod folders;
 pub mod health;
 pub mod public;
 pub mod shares;
+mod tree_snapshot;
 
 use axum::{
     routing::{get, post},

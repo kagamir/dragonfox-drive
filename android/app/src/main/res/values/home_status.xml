@@ -1,0 +1,4 @@
+<resources>
+    <string name="df_home_refresh_failed">Could not refresh the file list. Tap Refresh to see the latest changes.</string>
+    <string name="df_home_batch_failed">Completed %1$d of %2$d. %3$s — %4$s</string>
+</resources>

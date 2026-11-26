@@ -1,0 +1,17 @@
+<resources>
+    <string name="transfer_uploading">Uploading</string>
+    <string name="transfer_downloading">Saving download</string>
+    <string name="transfer_done">Transfer complete</string>
+    <string name="transfer_cancelled">Transfer cancelled</string>
+    <string name="transfer_failed">Transfer failed</string>
+    <string name="transfer_cancel">Cancel</string>
+    <string name="transfer_dismiss">Dismiss</string>
+    <string name="transfer_retry">Retry</string>
+    <string name="transfer_count">%1$d of %2$d files complete</string>
+    <string name="transfer_bytes">%1$s / %2$s</string>
+    <string name="transfer_folder_missing">This cloud folder is no longer available.</string>
+    <string name="transfer_choose_empty">Choose a new, empty file to save this download.</string>
+    <string name="transfer_file_changed">The cloud file has changed. Open it again to download the latest version.</string>
+    <string name="transfer_digest_failed">The downloaded file failed its integrity check.</string>
+    <string name="transfer_no_picker">The system document picker is unavailable.</string>
+</resources>

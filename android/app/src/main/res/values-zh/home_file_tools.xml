@@ -1,0 +1,25 @@
+<resources>
+    <string name="df_edit_draft">我的文本</string>
+    <string name="df_edit_latest">云端最新文本</string>
+    <string name="df_edit_encoding">此文件无法按 UTF-8 文本编辑。</string>
+    <string name="df_edit_load_error">无法读取此版本，请重新打开文件以获取最新内容。</string>
+    <string name="df_edit_save_error">未能保存，你的草稿仍在此处。</string>
+    <string name="df_edit_too_large">文本大小不能超过 2 MiB。</string>
+    <string name="df_edit_save">保存文本</string>
+    <string name="df_edit_conflict">云端文件已被修改。请对照最新内容检查草稿，再保存更改。</string>
+    <string name="df_edit_compare">对照云端版本</string>
+    <string name="df_edit_discard_question">舍弃未保存的更改？</string>
+    <string name="df_edit_discard">舍弃</string>
+    <string name="df_edit_keep">继续编辑</string>
+    <string name="df_link_title">分享文件</string>
+    <string name="df_link_password">访问密码（选填）</string>
+    <string name="df_link_days">有效天数（选填）</string>
+    <string name="df_link_limit">最多打开次数（选填）</string>
+    <string name="df_link_create_error">未能创建分享链接。</string>
+    <string name="df_link_private">持有此链接的人均可打开文件。</string>
+    <string name="df_link_password_hint">请通过其他方式将访问密码告知收件人。</string>
+    <string name="df_link_copied">已复制</string>
+    <string name="df_link_copy">复制链接</string>
+    <string name="df_link_send">分享…</string>
+    <string name="df_link_create">创建链接</string>
+</resources>

@@ -18,12 +18,20 @@ import dev.dragonfox.drive.protocol.StatusException
 import dev.dragonfox.drive.sync.SyncEngine
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import dev.dragonfox.drive.transfer.ManualTransfers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.job
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-internal class DriveModel(private val app: Application) : AndroidViewModel(app) {
+internal class DriveModel(private val app: Application) : AndroidViewModel(app), HomeManagement {
     private val preferences = app.getSharedPreferences("appearance", Context.MODE_PRIVATE)
     var theme by mutableStateOf(ThemeChoice.entries.find { it.name == preferences.getString("theme", null) } ?: ThemeChoice.SYSTEM)
         private set
@@ -37,7 +45,18 @@ internal class DriveModel(private val app: Application) : AndroidViewModel(app) 
     private val sessionLock = Any()
     private var generation = 0L
     private var visible = false
-    private var client: DriveClient? = null
+    @Volatile private var client: DriveClient? = null
+    private var homeScope: CoroutineScope? = null
+    private val cloudChanges = Mutex()
+    val homeTextDraft = HomeTextDraft()
+    val homeShareDraft = HomeShareDraft()
+    override val submissions = HomeSubmissions(viewModelScope)
+    override var newTextBody by mutableStateOf("")
+    var manualTransfers by mutableStateOf<ManualTransfers?>(null)
+        private set
+    var homeRefreshNotice by mutableStateOf<String?>(null)
+        private set
+    fun dismissHomeNotice() { homeRefreshNotice = null }
     private var expiryObserver: Job? = null
     var engine by mutableStateOf<SyncEngine?>(null)
         private set
@@ -75,6 +94,19 @@ internal class DriveModel(private val app: Application) : AndroidViewModel(app) 
 
     private fun attach(api: DriveClient) {
         client = api
+        val scope = CoroutineScope(viewModelScope.coroutineContext + SupervisorJob(viewModelScope.coroutineContext.job))
+        homeScope = scope
+        manualTransfers = ManualTransfers(app, api, scope,
+            onChanged = {
+                if (client === api) {
+                    try { refreshDrive() }
+                    catch (e: CancellationException) { throw e }
+                    catch (_: Exception) {
+                        if (client === api) homeRefreshNotice = app.getString(R.string.df_home_refresh_failed)
+                    }
+                }
+            },
+            onExpired = { if (client === api) signOut(expired = true) })
         photoLoader = PhotoLoader(app, api)
         val session = api.session
         account = session
@@ -113,31 +145,102 @@ internal class DriveModel(private val app: Application) : AndroidViewModel(app) 
         }
     }
 
-    private suspend fun <T> withDrive(
-        request: (DriveClient) -> T,
-        apply: (T) -> Unit,
-    ) {
-        val api = client ?: throw CancellationException()
+    private fun currentApi(): DriveClient = client ?: throw CancellationException()
+
+    private suspend fun <T> onServer(api: DriveClient, request: (DriveClient) -> T): T {
+        if (client !== api) throw CancellationException()
         try {
             val result = withContext(Dispatchers.IO) { request(api) }
             if (client !== api) throw CancellationException()
-            apply(result)
+            return result
         } catch (e: StatusException) {
             if (client === api && e.status == 401) signOut(expired = true)
             throw e
         }
     }
 
-    suspend fun refreshFolders() = withDrive(DriveClient::listFolders) { cloudFolders = it }
+    suspend fun <T> homeRead(request: (DriveClient) -> T): T = onServer(currentApi(), request)
 
-    suspend fun refreshDrive() = withDrive({ api -> api.listFolders() to api.listFiles() }) { (folders, files) ->
+    private suspend fun reload(api: DriveClient) {
+        val (folders, files) = onServer(api) { it.listFolders() to it.listFiles() }
         cloudFolders = folders
         cloudFiles = files
+        homeRefreshNotice = null
     }
 
-    suspend fun setFolderType(id: String, type: FolderType) {
-        withDrive({ api -> api.setFolderType(id, type) }) {
-            cloudFolders = cloudFolders.map { if (it.id == id) it.copy(type = type) else it }
+    suspend fun refreshFolders() {
+        val api = currentApi()
+        cloudChanges.withLock { cloudFolders = onServer(api, DriveClient::listFolders) }
+    }
+
+    suspend fun refreshDrive() {
+        val api = currentApi()
+        cloudChanges.withLock { reload(api) }
+    }
+
+    // Once submitted, finish and refresh even when the user rotates or leaves Home.
+    // A failed refresh must not turn an already committed create into a retry.
+    suspend fun <T> homeWrite(request: (DriveClient) -> T): T {
+        val api = currentApi()
+        val scope = homeScope ?: throw CancellationException()
+        return scope.async {
+            cloudChanges.withLock {
+                try {
+                    onServer(api, request)
+                } finally {
+                    if (client === api) {
+                        try { reload(api) }
+                        catch (e: CancellationException) { throw e }
+                        catch (e: Exception) {
+                            if (client === api) homeRefreshNotice = app.getString(R.string.df_home_refresh_failed)
+                        }
+                    }
+                }
+            }
+        }.await()
+    }
+
+    suspend fun setFolderType(id: String, type: FolderType) = homeWrite { it.setFolderType(id, type) }
+
+    override suspend fun createFolder(parentId: String?, name: String) {
+        homeWrite { it.createFolder(parentId, name) }
+    }
+
+    override suspend fun createText(parentId: String?, name: String, content: String) {
+        homeWrite { it.createTextFile(parentId, name, content) }
+    }
+
+    override suspend fun rename(item: HomeItem, name: String) {
+        homeWrite { if (item.isFolder) it.renameFolder(item.id, name) else it.renameFile(item.id, name) }
+    }
+
+    override suspend fun move(items: List<HomeItem>, parentId: String?) = applyBatch(items) { api, item ->
+        if (item.isFolder) api.moveFolder(item.id, parentId) else api.moveFile(item.id, parentId)
+    }
+
+    override suspend fun delete(items: List<HomeItem>) = applyBatch(items) { api, item ->
+        if (item.isFolder) api.deleteFolder(item.id) else api.deleteFile(item.id)
+    }
+
+    private suspend fun applyBatch(items: List<HomeItem>, action: (DriveClient, HomeItem) -> Unit) {
+        // Home selections contain siblings. Each selected subtree is one server operation.
+        homeWrite { api ->
+            val failures = linkedMapOf<HomeItem, String>()
+            val selection = items.distinctBy(HomeItem::key)
+            for (item in selection) {
+                if (client !== api) throw CancellationException()
+                try { action(api, item) }
+                catch (e: CancellationException) { throw e }
+                catch (e: Exception) {
+                    if (e is StatusException && e.status == 401) throw e
+                    failures[item] = e.localizedMessage ?: app.getString(R.string.df_request_failed)
+                }
+            }
+            if (failures.isNotEmpty()) {
+                val first = failures.entries.first()
+                throw HomeBatchException(failures.keys, app.getString(R.string.df_home_batch_failed,
+                    selection.size - failures.size, selection.size, first.key.name, first.value))
+            }
         }
     }
 
@@ -151,6 +254,15 @@ internal class DriveModel(private val app: Application) : AndroidViewModel(app) 
         synchronized(sessionLock) { generation++ }
         expiryObserver?.cancel()
         expiryObserver = null
+        manualTransfers?.close()
+        manualTransfers = null
+        submissions.clear()
+        homeTextDraft.clear()
+        homeShareDraft.clear()
+        newTextBody = ""
+        homeRefreshNotice = null
+        homeScope?.cancel()
+        homeScope = null
         engine?.close()
         engine = null
         client = null
@@ -170,7 +282,15 @@ internal class DriveModel(private val app: Application) : AndroidViewModel(app) 
     }
 
     override fun onCleared() {
+        manualTransfers?.close()
+        submissions.clear()
+        homeTextDraft.clear()
+        homeShareDraft.clear()
+        newTextBody = ""
+        homeScope?.cancel()
         engine?.close()
         super.onCleared()
     }
 }
+
+internal class HomeBatchException(val remaining: Set<HomeItem>, message: String) : Exception(message)

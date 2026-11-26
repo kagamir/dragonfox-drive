@@ -54,6 +54,7 @@ pub async fn list(
     State(state): State<AppState>,
     user: AuthUser,
 ) -> ApiResult<Json<Value>> {
+    let mut tx = state.db.begin().await?;
     let rows: Vec<FolderRow> = sqlx::query_as(
         "SELECT id, encrypted_parent_id, encrypted_parent_id_nonce, \
          encrypted_folder_key, encrypted_folder_key_nonce, \
@@ -61,10 +62,12 @@ pub async fn list(
          FROM folders WHERE owner_id = ? ORDER BY created_at ASC",
     )
     .bind(&user.user_id)
-    .fetch_all(&state.db)
+    .fetch_all(&mut *tx)
     .await?;
+    let snapshot = super::tree_snapshot::Listing::Folders.token(&mut tx, &user.user_id).await?;
+    tx.commit().await?;
     let folders: Vec<FolderMeta> = rows.into_iter().map(FolderMeta::from).collect();
-    Ok(Json(json!({ "folders": folders })))
+    Ok(Json(json!({ "folders": folders, "snapshot": snapshot })))
 }
 
 // A type update must be atomic. Omitted keys preserve the current preference;
@@ -106,6 +109,8 @@ pub async fn create(
     };
 
     let id = uuid::Uuid::new_v4().to_string();
+    let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+    super::tree_snapshot::check(&mut tx, &user.user_id, &req).await?;
     sqlx::query(
         "INSERT INTO folders (id, owner_id, encrypted_parent_id, encrypted_parent_id_nonce, \
          encrypted_folder_key, encrypted_folder_key_nonce, \
@@ -122,8 +127,9 @@ pub async fn create(
     .bind(&encrypted_name_nonce)
     .bind(obj.get("encrypted_type").and_then(Value::as_str))
     .bind(obj.get("encrypted_type_nonce").and_then(Value::as_str))
-    .execute(&state.db)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(Json(json!({ "id": id })))
 }
 
@@ -181,10 +187,13 @@ pub async fn patch(
             q = q.bind(v);
         }
     }
-    let res = q.bind(&id).bind(&user.user_id).execute(&state.db).await?;
+    let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+    super::tree_snapshot::check(&mut tx, &user.user_id, &req).await?;
+    let res = q.bind(&id).bind(&user.user_id).execute(&mut *tx).await?;
     if res.rows_affected() == 0 {
         return Err(ApiError::NotFound);
     }
+    tx.commit().await?;
     let mut response = json!({ "ok": true });
     if obj.contains_key("encrypted_type") {
         response["folder_type_updated"] = json!(true);
@@ -217,7 +226,8 @@ pub async fn delete(
         return Err(ApiError::BadRequest("target id must be included in folder_ids".into()));
     }
 
-    let mut tx = state.db.begin().await?;
+    let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+    super::tree_snapshot::check(&mut tx, &user.user_id, &req).await?;
     {
         let mut qb = sqlx::QueryBuilder::new("DELETE FROM folders WHERE owner_id = ");
         qb.push_bind(&user.user_id).push(" AND id IN (");
@@ -365,6 +375,35 @@ mod tests {
         let _ = update("owner", json!({ "encrypted_type": null, "encrypted_type_nonce": null })).await.unwrap();
         let cleared = read_row().await;
         assert!(cleared["encrypted_type"].is_null() && cleared["encrypted_type_nonce"].is_null());
+    }
+
+    #[tokio::test]
+    async fn concurrent_changes_invalidate_the_tree_used_for_moves_and_recursive_deletes() {
+        let (state, _guard) = folders_state().await;
+        seed_user(&state, "owner").await;
+        let root = create(State(state.clone()), auth("owner"), Json(create_body(None))).await.unwrap().0["id"]
+            .as_str().unwrap().to_owned();
+        let folders = || async { list(State(state.clone()), auth("owner")).await.unwrap().0["snapshot"].clone() };
+        let files = || async { crate::api::files::list(State(state.clone()), auth("owner")).await.unwrap().0["snapshot"].clone() };
+        let old_tree = folders().await;
+        let _ = create(State(state.clone()), auth("owner"), Json(create_body(Some("cipher")))).await.unwrap();
+        let mut stale_create = create_body(Some("cipher"));
+        stale_create["expected_folder_snapshot"] = old_tree.clone();
+        assert!(matches!(create(State(state.clone()), auth("owner"), Json(stale_create)).await, Err(ApiError::Conflict(_))));
+        let change = |expected| patch(State(state.clone()), auth("owner"), Path(root.clone()),
+            Json(json!({ "expected_folder_snapshot": expected, "encrypted_name": "new", "encrypted_name_nonce": "n" })));
+        assert!(matches!(change(old_tree).await, Err(ApiError::Conflict(_))));
+        change(folders().await).await.unwrap();
+        let tree = folders().await;
+        let old_files = files().await;
+        sqlx::query("INSERT INTO files (id, owner_id, total_size, chunk_count) VALUES ('new', 'owner', 0, 1)")
+            .execute(&state.db).await.unwrap();
+        let remove = |expected| delete(State(state.clone()), auth("owner"), Path(root.clone()),
+            Json(json!({ "expected_folder_snapshot": tree, "expected_file_snapshot": expected,
+                "folder_ids": [&root], "file_ids": [] })));
+        assert!(matches!(remove(old_files).await, Err(ApiError::Conflict(_))));
+        assert_eq!(tree, folders().await);
+        remove(files().await).await.unwrap();
     }
 
     #[test]

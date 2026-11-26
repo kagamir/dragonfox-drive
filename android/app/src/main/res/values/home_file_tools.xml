@@ -1,0 +1,25 @@
+<resources>
+    <string name="df_edit_draft">Your text</string>
+    <string name="df_edit_latest">Latest cloud text</string>
+    <string name="df_edit_encoding">This file cannot be edited as UTF-8 text.</string>
+    <string name="df_edit_load_error">Could not read this version. Reopen the file to load its current contents.</string>
+    <string name="df_edit_save_error">Could not save. Your draft is still here.</string>
+    <string name="df_edit_too_large">Text must fit within 2 MiB.</string>
+    <string name="df_edit_save">Save text</string>
+    <string name="df_edit_conflict">Another change reached the cloud first. Review the latest version alongside your draft before saving.</string>
+    <string name="df_edit_compare">Compare with cloud</string>
+    <string name="df_edit_discard_question">Discard unsaved changes?</string>
+    <string name="df_edit_discard">Discard</string>
+    <string name="df_edit_keep">Keep editing</string>
+    <string name="df_link_title">Share file</string>
+    <string name="df_link_password">Password (optional)</string>
+    <string name="df_link_days">Expires after days (optional)</string>
+    <string name="df_link_limit">Maximum opens (optional)</string>
+    <string name="df_link_create_error">Could not create the share link.</string>
+    <string name="df_link_private">Anyone with this link can open the file.</string>
+    <string name="df_link_password_hint">Send the password separately to the people receiving this link.</string>
+    <string name="df_link_copied">Copied</string>
+    <string name="df_link_copy">Copy link</string>
+    <string name="df_link_send">Share…</string>
+    <string name="df_link_create">Create link</string>
+</resources>

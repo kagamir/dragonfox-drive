@@ -58,6 +58,7 @@ impl From<FileRow> for FileMeta {
 }
 
 pub async fn list(State(state): State<AppState>, user: AuthUser) -> ApiResult<Json<Value>> {
+    let mut tx = state.db.begin().await?;
     let rows: Vec<FileRow> = sqlx::query_as(
         "SELECT id, owner_id, status, total_size, chunk_count, \
          encrypted_manifest, encrypted_manifest_nonce, \
@@ -67,13 +68,16 @@ pub async fn list(State(state): State<AppState>, user: AuthUser) -> ApiResult<Js
          FROM files WHERE owner_id = ? AND status != 'deleted' \
          ORDER BY created_at DESC")
         .bind(&user.user_id)
-        .fetch_all(&state.db).await?;
+        .fetch_all(&mut *tx).await?;
+    let snapshot = super::tree_snapshot::Listing::Files.token(&mut tx, &user.user_id).await?;
+    tx.commit().await?;
     let files: Vec<FileMeta> = rows.into_iter().map(FileMeta::from).collect();
-    Ok(Json(json!({ "files": files })))
+    Ok(Json(json!({ "files": files, "snapshot": snapshot })))
 }
 
 #[derive(Debug, Deserialize)]
 pub struct CreateFileRequest {
+    pub expected_folder_snapshot: Option<String>,
     pub total_size: u64,
     pub chunk_count: u32,
     pub encrypted_file_key: String,
@@ -100,6 +104,8 @@ pub async fn create(
         return Err(ApiError::PayloadTooLarge);
     }
     let id = uuid::Uuid::new_v4().to_string();
+    let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+    super::tree_snapshot::Listing::Folders.verify(&mut tx, &user.user_id, req.expected_folder_snapshot.as_deref()).await?;
     sqlx::query(
         "INSERT INTO files (id, owner_id, status, total_size, chunk_count, \
          encrypted_file_key, encrypted_file_key_nonce, \
@@ -113,7 +119,8 @@ pub async fn create(
         .bind(&req.encrypted_file_key_nonce)
         .bind(&req.encrypted_parent_id)
         .bind(&req.encrypted_parent_id_nonce)
-        .execute(&state.db).await?;
+        .execute(&mut *tx).await?;
+    tx.commit().await?;
     Ok(Json(json!({
         "id": id,
         "upload_url": format!("/api/files/{}/chunks/{{idx}}", id),
@@ -144,6 +151,7 @@ pub async fn get_manifest(
 pub struct PutManifestRequest {
     pub encrypted_manifest: String,
     pub encrypted_manifest_nonce: String,
+    pub expected_updated_at: Option<String>,
 }
 
 pub async fn put_manifest(
@@ -155,15 +163,18 @@ pub async fn put_manifest(
     let now = chrono::Utc::now().to_rfc3339();
     let res = sqlx::query(
         "UPDATE files SET encrypted_manifest = ?, encrypted_manifest_nonce = ?, updated_at = ? \
-         WHERE id = ? AND owner_id = ?")
+         WHERE id = ? AND owner_id = ? AND (? IS NULL OR updated_at = ?)")
         .bind(&req.encrypted_manifest)
         .bind(&req.encrypted_manifest_nonce)
         .bind(&now)
         .bind(&id)
         .bind(&user.user_id)
+        .bind(&req.expected_updated_at).bind(&req.expected_updated_at)
         .execute(&state.db).await?;
     if res.rows_affected() == 0 {
-        return Err(ApiError::NotFound);
+        return Err(if req.expected_updated_at.is_some() {
+            ApiError::Conflict("File changed since it was loaded".into())
+        } else { ApiError::NotFound });
     }
     Ok(Json(json!({ "ok": true })))
 }
@@ -320,19 +331,27 @@ pub async fn patch_move(
         Some(_) => (Some(get_str("encrypted_parent_id")?), Some(get_str("encrypted_parent_id_nonce")?)),
     };
 
+    let expected = req.get("expected_updated_at").map(|v| v.as_str()
+        .ok_or_else(|| ApiError::BadRequest("expected_updated_at must be a string".into()))).transpose()?;
+    let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+    super::tree_snapshot::check(&mut tx, &user.user_id, &req).await?;
     let res = sqlx::query(
         "UPDATE files SET encrypted_file_key = ?, encrypted_file_key_nonce = ?, \
          encrypted_parent_id = ?, encrypted_parent_id_nonce = ?, updated_at = ? \
-         WHERE id = ? AND owner_id = ?")
+         WHERE id = ? AND owner_id = ? AND (? IS NULL OR updated_at = ?)")
         .bind(&encrypted_file_key)
         .bind(&encrypted_file_key_nonce)
         .bind(&encrypted_parent_id)
         .bind(&encrypted_parent_id_nonce)
         .bind(&now).bind(&id).bind(&user.user_id)
-        .execute(&state.db).await?;
+        .bind(expected).bind(expected)
+        .execute(&mut *tx).await?;
     if res.rows_affected() == 0 {
-        return Err(ApiError::NotFound);
+        return Err(if expected.is_some() {
+            ApiError::Conflict("File changed since it was loaded".into())
+        } else { ApiError::NotFound });
     }
+    tx.commit().await?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -537,6 +556,7 @@ mod tests {
         let (state, _guard) = files_state().await;
         seed_user(&state, "u1").await;
         let req = CreateFileRequest {
+            expected_folder_snapshot: None,
             total_size: 123,
             chunk_count: 1,
             encrypted_file_key: "k".into(),
@@ -560,6 +580,7 @@ mod tests {
         let (state, _guard) = files_state().await;
         seed_user(&state, "u1").await;
         let request = |chunk_count| CreateFileRequest {
+            expected_folder_snapshot: None,
             total_size: 0, chunk_count,
             encrypted_file_key: "k".into(), encrypted_file_key_nonce: "kn".into(),
             encrypted_parent_id: None, encrypted_parent_id_nonce: None,
@@ -583,6 +604,7 @@ mod tests {
         let (state, _guard) = files_state().await;
         seed_user(&state, "u1").await;
         let req = CreateFileRequest {
+            expected_folder_snapshot: None,
             total_size: 10, chunk_count: 0,
             encrypted_file_key: "k".into(), encrypted_file_key_nonce: "kn".into(),
             encrypted_parent_id: None, encrypted_parent_id_nonce: None,
@@ -596,6 +618,7 @@ mod tests {
         let (state, _guard) = files_state().await;
         seed_user(&state, "u1").await;
         let req = CreateFileRequest {
+            expected_folder_snapshot: None,
             total_size: state.settings.limits.max_file_bytes + 1,
             chunk_count: 1,
             encrypted_file_key: "k".into(), encrypted_file_key_nonce: "kn".into(),
@@ -622,6 +645,7 @@ mod tests {
         put_manifest(
             State(state.clone()), auth("u1"), Path("f1".into()),
             Json(PutManifestRequest {
+                expected_updated_at: None,
                 encrypted_manifest: "EM".into(),
                 encrypted_manifest_nonce: "EN".into(),
             }),
@@ -629,6 +653,24 @@ mod tests {
         let res = get_manifest(State(state.clone()), auth("u1"), Path("f1".into())).await.unwrap();
         assert_eq!(res.0["encrypted_manifest"], "EM");
         assert_eq!(res.0["encrypted_manifest_nonce"], "EN");
+    }
+
+    #[tokio::test]
+    async fn stale_file_revision_cannot_replace_a_newer_manifest_or_move_its_old_key() {
+        let (state, _guard) = files_state().await;
+        seed_user(&state, "owner").await;
+        seed_ready_file(&state, "file", "owner").await;
+        let old = list(State(state.clone()), auth("owner")).await.unwrap().0["files"][0]["updated_at"].clone();
+        let update = |stamp: &Value, manifest: &str| put_manifest(State(state.clone()), auth("owner"), Path("file".into()),
+            Json(PutManifestRequest { encrypted_manifest: manifest.into(), encrypted_manifest_nonce: "nonce".into(),
+                expected_updated_at: Some(stamp.as_str().unwrap().into()) }));
+        update(&old, "new").await.unwrap();
+        assert!(matches!(update(&old, "stale").await, Err(ApiError::Conflict(_))));
+        let moved = patch_move(State(state.clone()), auth("owner"), Path("file".into()),
+            Json(json!({ "expected_updated_at": old, "encrypted_file_key": "stale-key", "encrypted_file_key_nonce": "nonce" }))).await;
+        assert!(matches!(moved, Err(ApiError::Conflict(_))));
+        let result = get_manifest(State(state), auth("owner"), Path("file".into())).await.unwrap();
+        assert_eq!(result.0["encrypted_manifest"], "new");
     }
 
     #[tokio::test]
@@ -647,7 +689,7 @@ mod tests {
         seed_user(&state, "u1").await;
         let err = put_manifest(
             State(state.clone()), auth("u1"), Path("nope".into()),
-            Json(PutManifestRequest { encrypted_manifest: "x".into(), encrypted_manifest_nonce: "y".into() }),
+            Json(PutManifestRequest { expected_updated_at: None, encrypted_manifest: "x".into(), encrypted_manifest_nonce: "y".into() }),
         ).await.unwrap_err();
         assert!(matches!(err, ApiError::NotFound));
     }

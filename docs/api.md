@@ -186,7 +186,12 @@ Response:
 `total_size` must be `<= limits.max_file_bytes` (default 10 GiB) or the server
 responds `413`.
 
+The file and folder listing responses include an opaque `snapshot` of that list’s IDs and revisions. A client creating or moving a file or folder can pass the folder listing’s token as `expected_folder_snapshot`. A recursive folder deletion can pass both `expected_folder_snapshot` and `expected_file_snapshot` from the listings used to compute its deletion set. If either list has changed, the server returns `409` before applying the operation. Older clients may omit these fields.
+
 ### `PUT /api/files/:id/manifest`
+
+For a rename, clients can send the file’s `updated_at` as `expected_updated_at`. The same guard is supported by `PATCH /api/files/:id` for a move. A stale revision returns `409`, allowing the client to reload the file before retrying.
+
 
 ```json
 {

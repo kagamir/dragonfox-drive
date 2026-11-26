@@ -92,10 +92,19 @@ private enum class DriveTab(val title: Int, val tag: String) {
 private fun SignedInApp(model: DriveModel, engine: SyncEngine) {
     var tab by rememberSaveable { mutableStateOf(DriveTab.HOME) }
     val holder = rememberSaveableStateHolder()
+    val homeNotices = remember { SnackbarHostState() }
+    val refreshNotice = model.homeRefreshNotice
+    LaunchedEffect(refreshNotice) {
+        if (refreshNotice != null) {
+            homeNotices.showSnackbar(refreshNotice)
+            model.dismissHomeNotice()
+        }
+    }
     val config by engine.config.collectAsStateWithLifecycle()
     BackHandler(tab != DriveTab.HOME) { tab = DriveTab.HOME }
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
+        snackbarHost = { SnackbarHost(homeNotices) },
         bottomBar = {
             NavigationBar {
                 DriveTab.entries.forEach { entry ->
@@ -118,7 +127,8 @@ private fun SignedInApp(model: DriveModel, engine: SyncEngine) {
                 when (tab) {
                     DriveTab.HOME -> model.photoLoader?.let { loader ->
                         CloudBrowser(model.cloudFolders, model.cloudFiles, model::refreshDrive, model::setFolderType,
-                            loader::load)
+                            loader::load, management = model, transferManager = model.manualTransfers,
+                            itemTool = { tool, file, dismiss -> HomeItemTool(tool, file, model, dismiss) })
                     }
                     DriveTab.SYNC -> SyncTab(model, engine)
                     DriveTab.ACCOUNT -> AccountTab(

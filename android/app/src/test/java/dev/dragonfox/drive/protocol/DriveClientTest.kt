@@ -116,6 +116,53 @@ class DriveClientTest {
         }
     }
 
+    @Test fun staleListingDoesNotDeleteAnUploadWhoseFinalizeResponseWasLost() {
+        val finalizing = CountDownLatch(1)
+        val listingStarted = CountDownLatch(1)
+        val uploadFinished = CountDownLatch(1)
+        val deletes = AtomicInteger()
+        withServer({ request ->
+            when (request.method to request.path) {
+                "POST" to "/api/files" -> reply(200, """{"id":"f"}""")
+                "PUT" to "/api/files/f/manifest", "PUT" to "/api/files/f/chunks/0" -> reply(200, "{}")
+                "POST" to "/api/files/f/finalize" -> {
+                    finalizing.countDown()
+                    assertTrue(listingStarted.await(5, TimeUnit.SECONDS))
+                    reply(503, "{}")
+                }
+                "GET" to "/api/files" -> {
+                    listingStarted.countDown()
+                    assertTrue(uploadFinished.await(5, TimeUnit.SECONDS))
+                    reply(200, """{"files":[{"id":"f","status":"uploading"}]}""")
+                }
+                "DELETE" to "/api/files/f" -> { deletes.incrementAndGet(); reply(200, "{}") }
+                else -> error("Unexpected request: ${request.path}")
+            }
+        }) { base ->
+            val client = DriveClient(session(base)) {}
+            val pool = Executors.newSingleThreadExecutor()
+            try {
+                val attempt = pool.submit(Callable {
+                    try {
+                        client.createTextFile(null, "document.txt", "hello")
+                        fail("Expected a lost finalize response")
+                    } catch (e: StatusException) {
+                        assertEquals(503, e.status)
+                    } finally {
+                        uploadFinished.countDown()
+                    }
+                })
+                assertTrue(finalizing.await(5, TimeUnit.SECONDS))
+                assertTrue(client.listFiles().isEmpty())
+                attempt.get(5, TimeUnit.SECONDS)
+                assertEquals(0, deletes.get())
+                assertEquals(setOf("f"), client.session.pendingUploads)
+            } finally {
+                pool.shutdownNow()
+            }
+        }
+    }
+
     private fun JSONObject.sealed(name: String, key: ByteArray, plain: ByteArray): JSONObject {
         val enc = WireCrypto.seal(key, plain)
         return put(name, WireCrypto.b64(enc.bytes)).put(name + "_nonce", WireCrypto.b64(enc.iv))
@@ -124,8 +171,9 @@ class DriveClientTest {
     @Test fun restoredSessionCleansOnlyItsOwnIncompleteUploads() {
         val key = WireCrypto.random(32)
         val manifest = JSONObject().put("name", "finished.txt").put("size", 3)
+            .put("iv_base", WireCrypto.b64(WireCrypto.random(12))).put("content_id", "restored")
             .put("plaintext_sha256", "a".repeat(64))
-        val ready = JSONObject().put("id", "finished").put("status", "ready")
+        val ready = JSONObject().put("id", "finished").put("status", "ready").put("chunk_count", 1)
             .sealed("encrypted_file_key", master, key)
             .sealed("encrypted_manifest", key, WireCrypto.pad(manifest.toString().toByteArray(), 256))
         val rows = JSONArray().put(ready)

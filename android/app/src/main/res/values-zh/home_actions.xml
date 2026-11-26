@@ -1,0 +1,26 @@
+<resources>
+    <string name="df_home_add">新建或上传</string>
+    <string name="df_home_new_folder">新建文件夹</string>
+    <string name="df_home_new_text">新建文本文件</string>
+    <string name="df_home_upload_files">上传文件</string>
+    <string name="df_home_upload_folder">上传文件夹</string>
+    <string name="df_home_name">名称</string>
+    <string name="df_home_content">文件内容</string>
+    <string name="df_home_create">创建</string>
+    <string name="df_home_rename">重命名</string>
+    <string name="df_home_move">移动</string>
+    <string name="df_home_delete">删除</string>
+    <string name="df_home_select">选择</string>
+    <string name="df_home_select_all">全选</string>
+    <string name="df_home_clear">清除选择</string>
+    <string name="df_home_download">下载</string>
+    <string name="df_home_edit_text">编辑文本</string>
+    <string name="df_home_share">分享</string>
+    <string name="df_home_actions_for">%1$s 的操作</string>
+    <string name="df_home_move_here">移动到此处</string>
+    <string name="df_home_selected">已选 %1$d 项</string>
+    <string name="df_home_delete_one">永久删除“%1$s”？</string>
+    <string name="df_home_delete_many">永久删除这 %1$d 个项目？</string>
+    <string name="df_home_delete_tree">所选文件夹中的文件和子文件夹也会被删除。</string>
+    <string name="df_home_check_after_restart">请先检查刷新的目录，再决定是否重新提交上一次操作。</string>
+</resources>
