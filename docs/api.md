@@ -124,6 +124,7 @@ Response:
     {
       "id": "uuid",
       "name": "Chrome 120 · macOS",
+      "ip_address": "2001:db8::42",
       "last_seen_at": "2026-06-25T10:00:00Z",
       "created_at": "2026-06-20T08:00:00Z"
     }
@@ -131,9 +132,35 @@ Response:
 }
 ```
 
-`name` is parsed server-side from the request's `User-Agent` header at login
-time. `last_seen_at` is updated by the auth extractor at most once per 60
-seconds per device.
+The server derives `name` from the client's `User-Agent`. The native Android
+client reports its installed app version and Android release, for example
+`DragonFox Drive 0.1.0-preview.7 · Android 15`. Older clients did not report
+an app version. The web device list labels those sessions without guessing one.
+
+`ip_address` is the most recently recorded IPv4 or IPv6 address for that
+session. Registration and login record it immediately. Authenticated
+requests and successful token refreshes update the address when it changes.
+For otherwise unchanged devices, activity timestamps are refreshed at most
+once per minute. Older rows with no observation return `null`. Logging out
+or revoking a session deletes its row and address.
+
+By default the server records the TCP peer. Behind a reverse proxy such as
+Caddy, set `trusted_proxies` under `[server]` to the source addresses or CIDRs
+of the proxies connecting to this server. For example, a Caddy instance that
+connects over loopback can use this configuration:
+
+```toml
+[server]
+trusted_proxies = ["127.0.0.1", "::1"]
+```
+
+The equivalent Docker environment variable is
+`DRAGONFOX__SERVER__TRUSTED_PROXIES=127.0.0.1,::1`.
+
+For requests from a trusted peer the server reads `X-Forwarded-For` from
+right to left, skipping trusted proxies. With containers, use the proxy's
+address as seen by the backend. Clients connecting directly keep their TCP
+peer address.
 
 ### `DELETE /api/devices/:id`
 

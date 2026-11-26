@@ -5,6 +5,11 @@
 [server]
 host = "0.0.0.0"
 port = 8080
+# Reverse proxies that maintain X-Forwarded-For. Use the addresses the server
+# sees on its TCP connection, e.g. ["127.0.0.1", "::1"] for a local Caddy.
+# Exact IPs and CIDRs are accepted. Default: always use the TCP peer address.
+# Env: DRAGONFOX__SERVER__TRUSTED_PROXIES=127.0.0.1,::1
+trusted_proxies = []
 
 # Directory where encrypted file chunks are stored on disk.
 [storage]

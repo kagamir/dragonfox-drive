@@ -86,7 +86,8 @@ export default {
     revokeDevice: "Revoke", deviceRevoked: "Revoked", revokeFailed: "Failed to revoke.",
     devicesLoadFailed: "Failed to load device list.",
     noDevices: "No registered devices.", currentDevice: "Current device",
-    lastSeen: "Last seen",
+    lastSeen: "Last seen", ipAddress: "IP address", ipNotRecorded: "Not recorded",
+    legacyAndroid: "Android (version not recorded)",
   },
   toast: {
     uploaded: "Upload complete", deleted: "Deleted", moved: "Moved",

@@ -6,10 +6,11 @@ use crate::auth::AuthUser;
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct DeviceItem {
     pub id: String,
     pub name: String,
+    pub ip_address: Option<String>,
     pub last_seen_at: Option<String>,
     pub created_at: String,
 }
@@ -28,20 +29,13 @@ pub async fn list(
     State(state): State<AppState>,
     user: AuthUser,
 ) -> ApiResult<Json<ListDevicesResponse>> {
-    let rows: Vec<(String, String, Option<String>, String)> = sqlx::query_as(
-        "SELECT id, name, last_seen_at, created_at \
+    let devices = sqlx::query_as::<_, DeviceItem>(
+        "SELECT id, name, ip_address, last_seen_at, created_at \
          FROM devices WHERE user_id = ? ORDER BY created_at DESC",
     )
     .bind(&user.user_id)
     .fetch_all(&state.db)
     .await?;
-
-    let devices = rows
-        .into_iter()
-        .map(|(id, name, last_seen_at, created_at)| DeviceItem {
-            id, name, last_seen_at, created_at,
-        })
-        .collect();
     Ok(Json(ListDevicesResponse { devices }))
 }
 
@@ -118,6 +112,7 @@ mod tests {
         assert_eq!(res.0.devices.len(), 2);
         assert_eq!(res.0.devices[0].id, "dev-new", "newest device must come first");
         assert_eq!(res.0.devices[1].id, "dev-old");
+        assert!(res.0.devices[1].ip_address.is_none());
     }
 
     #[tokio::test]

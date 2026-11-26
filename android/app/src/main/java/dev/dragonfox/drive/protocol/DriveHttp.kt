@@ -1,5 +1,7 @@
 package dev.dragonfox.drive.protocol
 
+import android.os.Build
+import dev.dragonfox.drive.BuildConfig
 import org.json.JSONObject
 import java.io.IOException
 import okhttp3.MediaType.Companion.toMediaType
@@ -13,7 +15,14 @@ import java.util.Locale
 
 class StatusException(val status: Int, message: String) : IOException(message)
 
+internal fun androidUserAgent(androidRelease: String?): String {
+    val release = androidRelease?.takeIf { it.length <= 64 && it.matches(Regex("[A-Za-z0-9][A-Za-z0-9._-]*")) }
+    val platform = if (release == null) "Android" else "Android $release"
+    return "DragonFoxDrive/${BuildConfig.VERSION_NAME} ($platform)"
+}
+
 internal class DriveHttp(address: String) {
+    private val userAgent = androidUserAgent(Build.VERSION.RELEASE)
     val base: String
 
     init {
@@ -38,7 +47,7 @@ internal class DriveHttp(address: String) {
         method: String, path: String, token: String? = null, body: ByteArray? = null,
         binary: Boolean = false, expectedBytes: Int? = null, checkRead: (() -> Unit)? = null, onSent: ((Int) -> Unit)? = null
     ): ByteArray {
-        val request = Request.Builder().url(base + path).header("User-Agent", "DragonFox Drive Android")
+        val request = Request.Builder().url(base + path).header("User-Agent", userAgent)
         if (token != null) request.header("Authorization", "Bearer $token")
         val data = body ?: if (method in setOf("POST", "PUT", "PATCH")) ByteArray(0) else null
         val payload = data?.let { bytes ->

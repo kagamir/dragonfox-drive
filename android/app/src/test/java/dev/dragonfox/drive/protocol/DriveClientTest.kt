@@ -1,5 +1,7 @@
 package dev.dragonfox.drive.protocol
 
+import android.os.Build
+import dev.dragonfox.drive.BuildConfig
 import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -44,6 +46,17 @@ class DriveClientTest {
             test(server.url("/").toString().trimEnd('/'))
             failed.get()?.let { throw it }
         }
+    }
+
+    @Test fun sendsInstalledAppVersionAndAndroidRelease() {
+        val product = "DragonFoxDrive/${BuildConfig.VERSION_NAME}"
+        assertEquals("$product (Android 15)", androidUserAgent("15"))
+        assertEquals("$product (Android)", androidUserAgent(null))
+        assertEquals("$product (Android)", androidUserAgent("15\ninvalid"))
+        withServer({ request ->
+            assertEquals(androidUserAgent(Build.VERSION.RELEASE), request.getHeader("User-Agent"))
+            reply(200, """{"files":[]}""")
+        }) { base -> DriveClient(session(base)) {}.listFiles() }
     }
 
     @Test fun concurrentExpiredRequestsShareOneRefresh() {

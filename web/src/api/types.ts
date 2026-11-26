@@ -211,5 +211,6 @@ export interface DeviceItem {
   id: string;
   name: string;
   last_seen_at: string | null;
+  ip_address?: string | null;
   created_at: string;
 }

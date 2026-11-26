@@ -3,9 +3,37 @@ pub fn parse_user_agent(ua: Option<&str>) -> String {
         Some(s) if !s.is_empty() => s,
         _ => return "Unknown browser · Unknown OS".into(),
     };
+    if let Some(name) = native_android_name(ua) {
+        return name;
+    }
     let browser = parse_browser(ua);
     let os = parse_os(ua);
     format!("{browser} · {os}")
+}
+
+/// Only accept the app's product token. Chrome and other browsers on Android
+/// must keep their own browser identity.
+pub fn native_android_name(ua: &str) -> Option<String> {
+    if ua == "DragonFox Drive Android" {
+        return Some("DragonFox Drive · Android".into());
+    }
+    let (version, platform) = ua.strip_prefix("DragonFoxDrive/")?.split_once(" (")?;
+    let platform = platform.strip_suffix(')')?;
+    let valid_version = |v: &str| {
+        v.len() <= 64 && v.starts_with(|c: char| c.is_ascii_digit())
+            && v.bytes().all(|b| b.is_ascii_alphanumeric() || b".+-_".contains(&b))
+    };
+    if !valid_version(version) {
+        return None;
+    }
+    let os = match platform.strip_prefix("Android")? {
+        "" => "Android".to_owned(),
+        suffix => {
+            let release = suffix.strip_prefix(' ')?;
+            if valid_version(release) { format!("Android {release}") } else { "Android".to_owned() }
+        }
+    };
+    Some(format!("DragonFox Drive {version} · {os}"))
 }
 
 fn parse_browser(ua: &str) -> String {
@@ -58,6 +86,17 @@ fn version_after(ua: &str, marker: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_native_android_releases_and_legacy_sessions() {
+        assert_eq!(parse_user_agent(Some("DragonFoxDrive/0.1.0-preview.7 (Android 15)")),
+            "DragonFox Drive 0.1.0-preview.7 · Android 15");
+        assert_eq!(parse_user_agent(Some("DragonFoxDrive/1.2.0 (Android)")),
+            "DragonFox Drive 1.2.0 · Android");
+        assert_eq!(parse_user_agent(Some("DragonFox Drive Android")), "DragonFox Drive · Android");
+        assert!(native_android_name("Mozilla/5.0 (Android 15)").is_none());
+        assert!(native_android_name("DragonFoxDrive/1.2 unrelated text (Android 15)").is_none());
+    }
 
     #[test]
     fn handles_none_input() {

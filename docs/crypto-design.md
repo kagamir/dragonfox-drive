@@ -153,6 +153,11 @@ hard-block chunks. `download_count` increments once per key disclosure.
 
 ## Threat model
 
+Device management stores the device label, last recorded IP address and
+activity timestamp in the account's device row. These fields are visible
+to the server and to the signed-in account. Logging out or revoking the
+session removes its row.
+
 | Adversary                  | What they can learn                          |
 |----------------------------|----------------------------------------------|
 | Storage provider / DB+disk | Account existence, file sizes, chunk count,  |

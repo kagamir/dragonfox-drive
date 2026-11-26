@@ -118,6 +118,30 @@ describe("SettingsView Devices card", () => {
     expect(w.find('[data-testid="revoke-device-btn"]').exists()).toBe(true);
   });
 
+  it("shows the native app version and last IP for each device, including IPv6", async () => {
+    listMock.mockResolvedValueOnce([
+      { id: "app", name: "DragonFox Drive 0.1.0-preview.7 · Android 15", ip_address: "2001:db8:1234:5678:abcd:ef12:3456:789a" },
+      { id: "browser", name: "Chrome 158 · Android", ip_address: "198.51.100.42" },
+      { id: "desktop", name: "Chrome 158 · macOS", ip_address: null },
+      { id: "legacy", name: "Unknown browser · Android" },
+    ]);
+    const w = mountWith("desktop");
+    await flushPromises();
+    await switchToDevices(w);
+
+    const [app, browser, desktop, legacy] = w.findAll("li");
+    expect(app.text()).toContain("DragonFox Drive 0.1.0-preview.7 · Android 15");
+    expect(app.get('dd[dir="ltr"]').text()).toBe("2001:db8:1234:5678:abcd:ef12:3456:789a");
+    expect(browser.text()).toContain("Chrome 158 · Android");
+    expect(browser.get('dd[dir="ltr"]').text()).toBe("198.51.100.42");
+    expect(desktop.text()).toContain(i18n.global.t("settings.ipNotRecorded"));
+    expect(legacy.text()).toContain(i18n.global.t("settings.legacyAndroid"));
+    expect(legacy.text()).not.toContain("Unknown browser");
+    expect(legacy.text()).not.toContain("0.1.0");
+    for (const row of [app, browser, legacy]) expect(row.find('[data-device-icon="android"]').exists()).toBe(true);
+    expect(desktop.find('[data-device-icon="android"]').exists()).toBe(false);
+  });
+
   it("clicking revoke calls devicesApi.revoke, refetches, and toasts success", async () => {
     listMock.mockResolvedValueOnce([
       { id: "cur",   name: "A", last_seen_at: null, created_at: "t" },

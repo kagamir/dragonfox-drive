@@ -8,15 +8,15 @@
 use axum::{
     async_trait,
     extract::{FromRequestParts, State},
-    http::request::Parts,
+    http::{header::USER_AGENT, request::Parts, HeaderMap},
 };
 use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
-use std::time::Instant;
 
 use crate::error::ApiError;
 use crate::state::AppState;
+use crate::util::{client_ip::ClientIp, ua::native_android_name};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccessClaims {
@@ -116,6 +116,42 @@ pub async fn revoke_refresh_token(state: &AppState, token_hash: &str) -> AuthRes
     Ok(())
 }
 
+/// Verify the session still belongs to this user on every request. The same read
+/// checks whether activity needs persisting, avoiding a write on each chunk.
+pub async fn record_activity(
+    state: &AppState, user_id: &str, device_id: &str, headers: &HeaderMap, ip: ClientIp,
+) -> AuthResult<()> {
+    let observed_ip = ip.0.map(|address| address.to_string());
+    let app_name = headers.get(USER_AGENT).and_then(|v| v.to_str().ok()).and_then(native_android_name);
+    let (name, stored_ip, due): (String, Option<String>, bool) = sqlx::query_as(
+        "SELECT name, ip_address, COALESCE(unixepoch(last_seen_at) <= unixepoch('now') - 60, 1) \
+         FROM devices WHERE id = ? AND user_id = ?",
+    )
+    .bind(device_id)
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or(ApiError::Unauthorized)?;
+
+    let ip_changed = observed_ip.is_some() && observed_ip != stored_ip;
+    let version_changed = app_name.as_ref().is_some_and(|value| value != &name);
+    if due || ip_changed || version_changed {
+        // Metadata is best effort. Missing observations must not erase known values.
+        let _ = sqlx::query(
+            "UPDATE devices SET last_seen_at = ?, ip_address = COALESCE(?, ip_address), \
+             name = COALESCE(?, name) WHERE id = ? AND user_id = ?",
+        )
+        .bind(Utc::now().to_rfc3339())
+        .bind(observed_ip)
+        .bind(app_name)
+        .bind(device_id)
+        .bind(user_id)
+        .execute(&state.db)
+        .await;
+    }
+    Ok(())
+}
+
 /// Extractor that authenticates a request via `Authorization: Bearer <jwt>`.
 #[derive(Debug, Clone)]
 pub struct AuthUser {
@@ -145,44 +181,7 @@ impl FromRequestParts<AppState> for AuthUser {
 
         let device_id = claims.dev;
 
-        // Per-request revocation check: the JWT's `dev` claim MUST reference a
-        // devices row that still exists and is owned by `sub`. A missing row
-        // means the device was hard-deleted (revoke/logout) → 401. This is
-        // what makes revocation immediate: the very next request after
-        // `DELETE FROM devices` is rejected.
-        let exists: Option<(i32,)> = sqlx::query_as(
-            "SELECT 1 FROM devices WHERE id = ? AND user_id = ?",
-        )
-        .bind(&device_id)
-        .bind(&claims.sub)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?;
-
-        match exists {
-            None => return Err(ApiError::Unauthorized),
-            Some(_) => {}
-        }
-
-        // Throttled `last_seen_at` write: at most one UPDATE per device per 60s.
-        // The write is fire-and-forget — a failure here MUST NOT fail the
-        // request (last_seen_at is best-effort telemetry, not a security gate).
-        let now = Instant::now();
-        let should_update = {
-            let cache = state.last_seen.read().await;
-            cache
-                .get(&device_id)
-                .map_or(true, |last| now.duration_since(*last).as_secs() >= 60)
-        };
-        if should_update {
-            let _ = sqlx::query("UPDATE devices SET last_seen_at = ? WHERE id = ?")
-                .bind(Utc::now().to_rfc3339())
-                .bind(&device_id)
-                .execute(&state.db)
-                .await;
-            state.last_seen.write().await.insert(device_id.clone(), now);
-        }
-
+        record_activity(state, &claims.sub, &device_id, &parts.headers, ClientIp::from_parts(parts, state)).await?;
         Ok(AuthUser {
             user_id: claims.sub,
             device_id,
@@ -318,6 +317,31 @@ mod tests {
             AuthUser::from_request_parts(&mut parts, &state).await,
             Err(ApiError::Unauthorized)
         ));
+    }
+
+    #[tokio::test]
+    async fn active_legacy_device_gets_its_current_address_and_app_version() {
+        use axum::extract::ConnectInfo;
+        use std::net::SocketAddr;
+        let (state, _dir) = test_state_with_db().await;
+        seed_user(&state, "owner").await;
+        sqlx::query("INSERT INTO devices (id, user_id, name) VALUES ('phone','owner','Unknown browser · Android')")
+            .execute(&state.db).await.unwrap();
+        let pair = issue_token_pair(&state, "owner", "phone").unwrap();
+        for remote in ["192.0.2.2:1234", "[2001:db8::42]:1234"] {
+            let req = Request::builder()
+                .extension(ConnectInfo(remote.parse::<SocketAddr>().unwrap()))
+                .header("authorization", format!("Bearer {}", pair.access_token))
+                .header("user-agent", "DragonFoxDrive/1.2.3 (Android 14)")
+                .body(()).unwrap();
+            let (mut parts, _) = req.into_parts();
+            AuthUser::from_request_parts(&mut parts, &state).await.unwrap();
+        }
+        let valid = AuthUser { user_id: "owner".into(), device_id: "phone".into() };
+        let list = crate::api::devices::list(State(state.clone()), valid).await.unwrap();
+        assert_eq!(list.0.devices[0].ip_address.as_deref(), Some("2001:db8::42"));
+        assert_eq!(list.0.devices[0].name, "DragonFox Drive 1.2.3 · Android 14");
+        assert!(list.0.devices[0].last_seen_at.is_some());
     }
 
     /// A migrated file-backed AppState (refresh_tokens requires real tables).

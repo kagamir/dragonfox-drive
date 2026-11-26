@@ -1,10 +1,11 @@
 //! Strongly-typed configuration loaded from `config.toml` and environment.
 
-use std::path::PathBuf;
+use std::{net::IpAddr, path::PathBuf};
 
 use anyhow::{Context, Result};
 use config::{Config, ConfigError, File, Environment};
-use serde::{Deserialize, Serialize};
+use ipnet::IpNet;
+use serde::{Deserialize, Deserializer, Serialize};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
@@ -22,6 +23,26 @@ pub struct Settings {
 pub struct ServerSettings {
     pub host: String,
     pub port: u16,
+    #[serde(deserialize_with = "deserialize_trusted_proxies")]
+    pub trusted_proxies: Vec<IpNet>,
+}
+
+fn deserialize_trusted_proxies<'de, D>(deserializer: D) -> Result<Vec<IpNet>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Vec::<String>::deserialize(deserializer)?
+        .into_iter()
+        .map(|entry| {
+            let value = entry.trim();
+            if let Ok(ip) = value.parse::<IpAddr>() {
+                return Ok(IpNet::from(ip.to_canonical()));
+            }
+            value.parse::<IpNet>().map_err(|_| serde::de::Error::custom(
+                format!("invalid trusted proxy IP or CIDR: {entry}"),
+            ))
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -79,6 +100,7 @@ impl Default for ServerSettings {
         Self {
             host: "0.0.0.0".into(),
             port: 8080,
+            trusted_proxies: Vec::new(),
         }
     }
 }
@@ -149,6 +171,8 @@ impl Settings {
                 Environment::with_prefix("DRAGONFOX")
                     .prefix_separator("__")
                     .separator("__")
+                    .list_separator(",")
+                    .with_list_parse_key("server.trusted_proxies")
                     .try_parsing(true),
             );
 
@@ -184,6 +208,7 @@ mod tests {
         let s = Settings::default();
         assert_eq!(s.server.host, "0.0.0.0");
         assert_eq!(s.server.port, 8080);
+        assert!(s.server.trusted_proxies.is_empty());
         assert_eq!(s.storage.data_dir, std::path::PathBuf::from("./data"));
         assert_eq!(s.database.url, "sqlite://./data/dragonfox.db?mode=rwc");
         assert_eq!(s.jwt.access_ttl_seconds, 900);
@@ -195,6 +220,25 @@ mod tests {
             s.security.allow_registration,
             "registration must be open by default"
         );
+    }
+
+    #[test]
+    fn trusted_proxies_parse_exact_ips_and_cidrs_and_reject_invalid_entries() {
+        let parse = |entries: &str| {
+            Config::builder()
+                .add_source(File::from_str(&format!("[server]\ntrusted_proxies = {entries}"), config::FileFormat::Toml))
+                .build()
+                .unwrap()
+                .try_deserialize::<Settings>()
+        };
+        let settings = parse(r#"["127.0.0.1", "::1", "172.18.0.0/24", "fd00::/64"]"#).unwrap();
+        let proxies = settings.server.trusted_proxies;
+        assert_eq!(proxies[0].to_string(), "127.0.0.1/32");
+        assert_eq!(proxies[1].to_string(), "::1/128");
+        assert!(proxies[2].contains(&"172.18.0.254".parse::<IpAddr>().unwrap()));
+        assert!(proxies[3].contains(&"fd00::10".parse::<IpAddr>().unwrap()));
+        assert!(parse(r#"["192.168.0.0/33"]"#).is_err());
+        assert!(parse(r#"["localhost"]"#).is_err());
     }
 
     #[test]
@@ -216,6 +260,7 @@ mod tests {
             fn drop(&mut self) {
                 let _ = std::env::set_current_dir(&self.cwd);
                 std::env::remove_var("DRAGONFOX__SERVER__HOST");
+                std::env::remove_var("DRAGONFOX__SERVER__TRUSTED_PROXIES");
             }
         }
         let _guard = Restore {
@@ -229,11 +274,13 @@ mod tests {
         .unwrap();
         std::env::set_current_dir(dir.path()).unwrap();
         std::env::set_var("DRAGONFOX__SERVER__HOST", "127.0.0.1");
+        std::env::set_var("DRAGONFOX__SERVER__TRUSTED_PROXIES", "127.0.0.1, ::1");
 
         let settings = Settings::load().unwrap();
 
         assert_eq!(settings.server.port, 9999);
         assert_eq!(settings.server.host, "127.0.0.1");
+        assert_eq!(settings.server.trusted_proxies.len(), 2);
     }
 
     /// Regression guard: a `[limits]` section in config.toml MUST override the

@@ -33,6 +33,8 @@ const busyId = ref<string | null>(null);
 const busySignOut = ref(false);
 const checking = ref(false);
 
+const androidDevice = /(?:^| · )Android(?: [\w.-]+)?$/;
+
 async function onCheckForUpdate(): Promise<void> {
   checking.value = true;
   try {
@@ -112,18 +114,39 @@ onMounted(async () => {
             :key="d.id"
             class="flex items-center gap-3 rounded-lg border border-border p-3"
           >
-            <Laptop class="h-5 w-5 text-fg-muted" />
+            <svg
+              v-if="androidDevice.test(d.name)"
+              data-device-icon="android"
+              aria-hidden="true"
+              viewBox="0 0 24 24"
+              class="size-5 shrink-0 text-success"
+            >
+              <path d="m6 4 2.4 4.1m9.6-4.1-2.4 4.1" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+              <path fill="currentColor" fill-rule="evenodd" d="M1 18.5a11 11 0 0 1 22 0Zm6-5a1 1 0 1 0 2 0 1 1 0 0 0-2 0Zm8 0a1 1 0 1 0 2 0 1 1 0 0 0-2 0Z" />
+            </svg>
+            <Laptop v-else aria-hidden="true" class="size-5 shrink-0 text-fg-muted" />
             <div class="min-w-0 flex-1">
-              <p class="flex items-center gap-2 text-sm font-medium text-fg">
-                {{ d.name }}
+              <p class="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-medium text-fg">
+                <span class="[overflow-wrap:anywhere]">{{ d.name === "Unknown browser · Android" ? t("settings.legacyAndroid") : d.name }}</span>
                 <DfBadge v-if="d.id === auth.deviceId" variant="proc">{{ t("settings.currentDevice") }}</DfBadge>
               </p>
-              <p class="text-xs text-fg-muted">{{ t("settings.lastSeen") }} {{ relativeTime(d.last_seen_at) }}</p>
+              <dl class="mt-1 flex flex-col gap-y-0.5 text-xs text-fg-muted sm:flex-row sm:flex-wrap sm:gap-x-4">
+                <div class="flex flex-wrap gap-x-1">
+                  <dt>{{ t("settings.lastSeen") }}</dt>
+                  <dd>{{ relativeTime(d.last_seen_at) }}</dd>
+                </div>
+                <div class="flex min-w-0 flex-wrap gap-x-1">
+                  <dt>{{ t("settings.ipAddress") }}</dt>
+                  <dd v-if="d.ip_address" dir="ltr" class="font-mono select-all [overflow-wrap:anywhere]">{{ d.ip_address }}</dd>
+                  <dd v-else>{{ t("settings.ipNotRecorded") }}</dd>
+                </div>
+              </dl>
             </div>
             <DfButton
               v-if="d.id === auth.deviceId"
               variant="ghost"
               size="sm"
+              class="shrink-0"
               data-testid="sign-out-btn"
               :loading="busySignOut"
               @click="onSignOut"
@@ -132,6 +155,7 @@ onMounted(async () => {
               v-else
               variant="danger"
               size="sm"
+              class="shrink-0"
               data-testid="revoke-device-btn"
               :loading="busyId === d.id"
               @click="onRevokeDevice(d.id)"

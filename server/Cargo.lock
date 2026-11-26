@@ -506,6 +506,7 @@ dependencies = [
  "hmac",
  "hyper",
  "hyper-util",
+ "ipnet",
  "jsonwebtoken",
  "libsqlite3-sys",
  "mime_guess",
@@ -1167,6 +1168,15 @@ checksum = "d466e9454f08e4a911e14806c24e16fba1b4c121d1ea474396f396069cf949d9"
 dependencies = [
  "equivalent",
  "hashbrown 0.17.1",
+]
+
+[[package]]
+name = "ipnet"
+version = "2.12.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "791930b43c0d5973160d90a8f3894509f2b273430f5c5c73b668636d0287c5c0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

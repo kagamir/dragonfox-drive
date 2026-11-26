@@ -86,7 +86,8 @@ export default {
     revokeDevice: "吊销", deviceRevoked: "已吊销", revokeFailed: "吊销失败。",
     devicesLoadFailed: "加载设备列表失败。",
     noDevices: "没有已注册设备。", currentDevice: "当前设备",
-    lastSeen: "最后在线",
+    lastSeen: "最后在线", ipAddress: "IP 地址", ipNotRecorded: "未记录",
+    legacyAndroid: "Android（版本未记录）",
   },
   toast: {
     uploaded: "上传完成", deleted: "已删除", moved: "已移动",
