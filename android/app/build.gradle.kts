@@ -9,6 +9,8 @@ plugins {
 val versions = Properties().apply {
     rootProject.file("version.properties").inputStream().use { load(it) }
 }
+// CI supplies the version from the same Git tag used to publish the APK.
+val publishedVersion = providers.gradleProperty("dragonfoxVersionName").orNull
 val releaseStore = providers.environmentVariable("ANDROID_KEYSTORE_PATH")
 
 android {
@@ -20,7 +22,7 @@ android {
         minSdk = 30
         targetSdk = 35
         versionCode = versions.getProperty("versionCode").toInt()
-        versionName = versions.getProperty("versionName")
+        versionName = publishedVersion ?: versions.getProperty("versionName")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -42,7 +44,7 @@ android {
         create("preview") {
             initWith(getByName("release"))
             applicationIdSuffix = ".preview"
-            versionNameSuffix = "-preview." + versions.getProperty("preview")
+            if (publishedVersion == null) versionNameSuffix = "-preview." + versions.getProperty("preview")
             signingConfig = signingConfigs.getByName("debug")
             matchingFallbacks += "release"
         }

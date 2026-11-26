@@ -46,19 +46,12 @@ jobs:
         id: version
         run: |
           set -euo pipefail
-          version=$(sed -n 's/^versionName=//p' android/version.properties)
-          preview=$(sed -n 's/^preview=//p' android/version.properties)
-          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$preview" =~ ^[0-9]+$ ]]
-          variant=preview
-          tag="android-v$version-preview.$preview"
-          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
-            # Android-only releases use the app version; project releases use the server tag.
-            [[ "$GITHUB_REF_NAME" == v* || "$GITHUB_REF_NAME" == "android-v$version" ]]
-            variant=release
-            tag="$GITHUB_REF_NAME"
-          fi
-          echo "variant=$variant" >> "$GITHUB_OUTPUT"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          bash android/test-release-version.sh
+          bash android/release-version.sh >> "$GITHUB_OUTPUT"
+      - name: Set Android build version
+        env:
+          VERSION_NAME: ${{ steps.version.outputs.version_name }}
+        run: echo "ORG_GRADLE_PROJECT_dragonfoxVersionName=$VERSION_NAME" >> "$GITHUB_ENV"
 
       - name: Build Rust API server for interoperability tests
         run: |
@@ -142,7 +135,15 @@ jobs:
           output="DragonFox-Drive-$TAG.apk"
           cp "android/app/build/outputs/apk/$VARIANT/app-$VARIANT.apk" "dist/$output"
           cd dist
-          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose --print-certs "$output"
+          build_tools="$ANDROID_HOME/build-tools/34.0.0"
+          expected="${TAG#android-}"
+          expected="${expected#v}"
+          packaged=$("$build_tools/aapt" dump badging "$output" | sed -n "s/^package: .* versionName='\([^']*\)'.*/\1/p")
+          if [[ "$packaged" != "$expected" ]]; then
+            echo "::error::APK version '$packaged' differs from release tag '$TAG'"
+            exit 1
+          fi
+          "$build_tools/apksigner" verify --verbose --print-certs "$output"
           # The project publisher computes one checksum manifest across all platforms.
           if [[ "$TAG" == android-v* ]]; then
             sha256sum "$output" > SHA256SUMS

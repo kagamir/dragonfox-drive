@@ -1,6 +1,5 @@
 package dev.dragonfox.drive.ui
 
-import android.content.Context
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -18,13 +17,13 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource as label
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import dev.dragonfox.drive.BuildConfig
 import dev.dragonfox.drive.R
 import dev.dragonfox.drive.sync.SCAN_DEPTH_RANGE
 import dev.dragonfox.drive.sync.SYNC_INTERVAL_RANGE
@@ -42,8 +41,7 @@ private enum class Preference { THEME, INTERVAL, DEPTH, ABOUT, SIGN_OUT }
 internal fun AccountTab(username: String, server: String, theme: ThemeChoice,
     selectTheme: (ThemeChoice) -> Unit, config: SyncConfig, setInterval: (Int) -> Unit,
     setDepth: (Int) -> Unit, signOut: () -> Unit) {
-    val context = LocalContext.current
-    val version = remember(context) { installedVersion(context) }
+    val version = BuildConfig.VERSION_NAME
     var dialog by rememberSaveable { mutableStateOf<Preference?>(null) }
     val colors = MaterialTheme.colorScheme
     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxSize()) {
@@ -122,12 +120,6 @@ internal fun AccountTab(username: String, server: String, theme: ThemeChoice,
             dismissButton = { TextButton(onClick = close) { Text(label(R.string.df_cancel)) } })
         null -> Unit
     }
-}
-
-@Suppress("DEPRECATION")
-private fun installedVersion(context: Context): String {
-    val info = context.packageManager.getPackageInfo(context.packageName, 0)
-    return info.versionName ?: info.longVersionCode.toString()
 }
 
 @Composable

@@ -19,6 +19,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.dragonfox.drive.protocol.DriveClient
 import dev.dragonfox.drive.ui.SessionVault
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assume.assumeNotNull
 import org.junit.Rule
@@ -56,6 +57,15 @@ class SignedInTabsTest {
                 screen.onNodeWithTag("tab-sync").performClick().assertIsSelected()
                 row("sync-edit").assertIsDisplayed()
                 screen.onNodeWithTag("tab-account").performClick().assertIsSelected()
+                @Suppress("DEPRECATION")
+                val version = requireNotNull(context.packageManager.getPackageInfo(context.packageName, 0).versionName)
+                row("account-about").assertTextContains(version).performClick()
+                screen.onNodeWithText(context.getString(R.string.df_app_version, version)).assertIsDisplayed()
+                screen.onNodeWithText(context.getString(R.string.df_close)).performClick()
+                val devices = client.json("GET", "/api/devices").getJSONArray("devices")
+                val deviceName = devices.getJSONObject(0).getString("name")
+                assertEquals("DragonFox Drive $version", deviceName.substringBefore(" · "))
+
                 row("preference-theme").performClick()
                 screen.onNodeWithText(dark).performClick()
                 row("preference-theme").assertTextContains(dark)

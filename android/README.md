@@ -24,10 +24,18 @@ Open **Account** to change the theme, scan interval or maximum folder depth, che
 
 ## Publishing APKs
 
-- **Preview** — increase `versionCode` and update `versionName` or `preview` in [version.properties](version.properties) on `master`. After the tests pass, the Android workflow publishes an `android-vX.Y.Z-preview.N` prerelease with an APK and its SHA-256 checksum. The preview application ID is `dev.dragonfox.drive.preview`. Each CI build uses a temporary Android test key, so moving between previews may require uninstalling the old app and configuring sync again.
-- **Project release** — push the usual project tag (for example, `v0.3.2`). CI tests and signs the Android app from the tagged commit, then publishes `DragonFox-Drive-v0.3.2.apk` alongside the server archives. The project release waits for both builds and includes the APK in its shared `SHA256SUMS`.
-- **Android-only release** — push an `android-vX.Y.Z` tag matching the app’s `versionName` to publish a standalone signed APK.
+The version shown under **Account → About** and reported to the server comes from the installed APK. CI derives its `versionName` from the GitHub release tag, including prerelease and build suffixes, and checks the packaged manifest before publishing.
 
-Both production paths use the application ID `dev.dragonfox.drive` and the same four repository secrets: `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and `ANDROID_KEY_PASSWORD`. The installed app version comes from [version.properties](version.properties). Increase `versionCode` when shipping an updated client and keep the same signing key.
+| Release channel | Example GitHub tag | App and reported version |
+| --- | --- | --- |
+| Project release | `v0.4.2` | `0.4.2` |
+| Android-only release | `android-v0.4.2` | `0.4.2` |
+| Android preview | `android-v0.4.2-preview.8` | `0.4.2-preview.8` |
+
+- **Preview** — on `master`, CI uses the highest stable project version tagged in the commit's history and the `preview` counter in [version.properties](version.properties). Increase the counter when publishing another preview for that version. The preview application ID is `dev.dragonfox.drive.preview`. CI uses a temporary signing key, so moving between previews may require uninstalling the old app and configuring sync again.
+- **Project release** — push the usual project tag. CI publishes the signed APK alongside the server archives with a shared `SHA256SUMS`.
+- **Android-only release** — push an `android-vX.Y.Z` tag to publish a standalone signed APK. Its release page includes the APK and its SHA-256 checksum.
+
+Both production channels use `dev.dragonfox.drive` and the same four repository secrets: `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and `ANDROID_KEY_PASSWORD`. Increase the numeric `versionCode` in [version.properties](version.properties) when shipping an updated client. The file's `versionName` is the fallback for local builds and for previews before the first project tag. For a local build matching a release, pass the version explicitly, for example `./gradlew -PdragonfoxVersionName=0.4.2 assembleRelease`.
 
 To verify a downloaded APK against the release manifest on Linux, run `sha256sum --ignore-missing -c SHA256SUMS` in the directory containing the APK and the manifest.
