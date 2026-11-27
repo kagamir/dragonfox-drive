@@ -38,7 +38,7 @@
     <string name="df_open_folder">Open %1$s</string>
     <string name="df_other_folders">And %1$d more</string>
     <string name="df_password">Password</string>
-    <string name="df_pause_hint">Choose local folders and a cloud destination to sync them while the app is open.</string>
+    <string name="df_pause_hint">Choose local folders and a cloud destination for automatic uploads.</string>
     <string name="df_paused">Sync is off</string>
     <string name="df_permission_settings_missing">Open Android Settings → Special app access → All files access.</string>
     <string name="df_plan">Sync settings</string>
@@ -49,7 +49,7 @@
     <string name="df_rescan">Scan now</string>
     <string name="df_retry">Retry</string>
     <string name="df_root">My files</string>
-    <string name="df_runs_in_app">Changes are checked while the app is open.</string>
+    <string name="df_runs_in_app">Active uploads continue with the screen off. Android schedules further checks in the background.</string>
     <string name="df_save">Save sync settings</string>
     <string name="df_saved_folder">Saved destination</string>
     <string name="df_scanning">Scanning folders</string>
@@ -65,4 +65,5 @@
     <string name="df_use_destination">Use this cloud folder</string>
     <string name="df_use_selected">Use selected folders (%1$d)</string>
     <string name="df_username">Username</string>
+    <string name="df_transfer_enable_notifications">Show transfer notifications</string>
 </resources>

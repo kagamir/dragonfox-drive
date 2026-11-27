@@ -1,0 +1,6 @@
+<resources>
+    <string name="bg_transfer_channel">进行中的传输</string>
+    <string name="bg_transfer_title">正在传输文件</string>
+    <string name="bg_transfer_open">打开 DragonFox Drive 查看进度</string>
+    <string name="bg_transfer_progress">已完成 %1$d / %2$d 个文件</string>
+</resources>

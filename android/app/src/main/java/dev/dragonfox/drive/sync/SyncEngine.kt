@@ -12,12 +12,17 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
 import java.io.File
 
-class SyncEngine(context: Context, private val client: DriveClient, accountScope: String) : AutoCloseable {
+class SyncEngine(
+    context: Context,
+    private val client: DriveClient,
+    accountScope: String,
+    beginForegroundPass: (cancel: () -> Unit) -> AutoCloseable? = { AutoCloseable { } },
+) : AutoCloseable {
     private val app = context.applicationContext
     private val storage = SyncStorage(app, accountScope)
     private val scanner = FolderScanner(app)
     private val manager = app.getSystemService(ConnectivityManager::class.java)
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val mutableConfig = MutableStateFlow(storage.load())
     private val state = MutableStateFlow(SyncStatus())
     private val visible = MutableStateFlow(false)
@@ -25,6 +30,10 @@ class SyncEngine(context: Context, private val client: DriveClient, accountScope
     private val wake = Channel<Unit>(Channel.CONFLATED)
     val config = mutableConfig.asStateFlow()
     val status = state.asStateFlow()
+
+    private val passes = SyncPasses(scope, beginForegroundPass) { cfg ->
+        withContext(Dispatchers.IO) { performPass(cfg) }
+    }
 
     private fun applyCapabilities(caps: NetworkCapabilities?) {
         val count = if (caps == null) 0 else uploadLimit(true,
@@ -48,36 +57,59 @@ class SyncEngine(context: Context, private val client: DriveClient, accountScope
     }
 
     init {
+        applyCapabilities(manager.getNetworkCapabilities(manager.activeNetwork))
         manager.registerDefaultNetworkCallback(callback)
+        val eligible = combine(config, capacity) { cfg, count -> cfg.scanSettings(count) }.distinctUntilChanged()
         scope.launch {
-            combine(config, visible, capacity.map { it > 0 }.distinctUntilChanged()) { cfg, foreground, online ->
-                cfg.takeIf { foreground && online && it.enabled && it.localFolders.isNotEmpty() }
-                    ?.copy(intervalSeconds = DEFAULT_SYNC_INTERVAL_SECONDS)
-            }.distinctUntilChanged().collectLatest { cfg ->
-                if (cfg == null) {
-                    state.update { it.copy(scanning = false, running = false, tasks = emptyList()) }
-                    return@collectLatest
-                }
-                while (isActive) {
-                    state.update { it.copy(running = true, scanning = true, tasks = emptyList(),
-                        completed = 0, total = 0, errors = emptyList(), sessionExpired = false) }
-                    try {
-                        check(FileAccess.granted(app)) { "请授权访问全部文件后再同步" }
-                        reconcile(cfg)
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        report(e.message ?: e.javaClass.simpleName)
-                        if (e is StatusException && e.status == 401) {
-                            state.update { it.copy(sessionExpired = true) }
-                            return@collectLatest
+            eligible.collect { passes.cancelUnless(config.value.scanSettings(capacity.value)) }
+        }
+        scope.launch {
+            combine(eligible, visible) { cfg, foreground -> cfg.takeIf { foreground } }
+                .distinctUntilChanged().collectLatest { cfg ->
+                    if (cfg == null) return@collectLatest
+                    while (isActive && !state.value.sessionExpired) {
+                        passes.run(cfg, foreground = true) {
+                            visible.value && config.value.scanSettings(capacity.value) == cfg
                         }
-                    } finally {
-                        state.update { it.copy(scanning = false, running = false, tasks = emptyList()) }
+                        awaitNextScan(config.map { it.intervalSeconds }.distinctUntilChanged(), wake.receiveAsFlow())
                     }
-                    awaitNextScan(config.map { it.intervalSeconds }.distinctUntilChanged(), wake.receiveAsFlow())
                 }
+        }
+    }
+
+    // The interval changes when to schedule another scan, not the scope of an active one.
+    private fun SyncConfig.scanSettings(count: Int): SyncConfig? =
+        takeIf { enabled && localFolders.isNotEmpty() && count > 0 }
+            ?.copy(intervalSeconds = DEFAULT_SYNC_INTERVAL_SECONDS)
+
+    /** One system-scheduled pass. A false result lets the scheduler back off and retry. */
+    suspend fun runScheduled(): Boolean = withContext(Dispatchers.Main.immediate) {
+        val cfg = config.value
+        if (!cfg.enabled || cfg.localFolders.isEmpty() || state.value.sessionExpired) return@withContext true
+        val settings = cfg.scanSettings(capacity.value) ?: return@withContext false
+        passes.run(settings, foreground = false) { config.value.scanSettings(capacity.value) == settings }
+    }
+
+    private suspend fun performPass(cfg: SyncConfig): Boolean {
+        state.update { it.copy(running = true, scanning = true, tasks = emptyList(),
+            completed = 0, total = 0, errors = emptyList()) }
+        return try {
+            if (!FileAccess.granted(app)) {
+                report("请授权访问全部文件后再同步")
+                true
+            } else {
+                reconcile(cfg)
+                state.value.errors.isEmpty()
             }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            report(e.message ?: e.javaClass.simpleName)
+            val expired = e is StatusException && e.status == 401
+            if (expired) state.update { it.copy(sessionExpired = true) }
+            expired
+        } finally {
+            state.update { it.copy(scanning = false, running = false, tasks = emptyList()) }
         }
     }
 

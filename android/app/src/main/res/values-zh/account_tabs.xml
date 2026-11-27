@@ -10,7 +10,7 @@
     <string name="df_seconds">%1$d 秒</string>
     <string name="df_minutes">%1$d 分钟</string>
     <string name="df_levels">%1$d 层</string>
-    <string name="df_interval_help">应用打开时两次自动检查之间的秒数，可设置为 %1$d 至 %2$d 秒。</string>
+    <string name="df_interval_help">前台检查间隔可设为 %1$d 至 %2$d 秒。后台检查由 Android 调度，间隔最短为 15 分钟，省电时可能延后。</string>
     <string name="df_depth_help">存储卷根目录为第 1 层。可设 %1$d 至 %2$d 层，超过上限的文件不会被扫描或上传。图片和视频按所在文件夹分相册。第 5 层以内分别展示，更深处的媒体归入第 5 层相册。</string>
     <string name="df_about">关于</string>
     <string name="df_app_version">版本 %1$s</string>

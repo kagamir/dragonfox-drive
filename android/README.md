@@ -20,6 +20,10 @@ Use **Sync** to choose the backup source and destination, enable automatic uploa
 
 In **All files**, tap a folder name to browse, tick its checkbox to back it up, or tap a file to preview it. The parent entry stays at the top, including when the folder is empty. You can browse the actual file tree through the configured scan depth. Images, videos, audio, PDFs and common text files open in the app. Other files show their type and size.
 
+An active sync, manual upload or download continues when you switch apps or lock the screen. On Android 13 and later, tap **Show transfer notifications** to see progress in the notification shade. Disabling automatic sync stops its current scan and future scheduled checks. Signing out stops that account’s transfers.
+
+While the app is visible, automatic sync uses the interval in **Account**. In the background, Android schedules network-connected checks at the longer of that interval and 15 minutes. Doze, battery restrictions and system quotas can delay a check. Scheduled sync can restore the signed-in session after a process restart or reboot. Manual transfers use the running service and can be started again if Android stops the app. After a force-stop, open the app to resume automatic scheduling.
+
 Open **Account** to change the theme, scan interval or maximum folder depth, check the app version, or sign out.
 
 ## Publishing APKs

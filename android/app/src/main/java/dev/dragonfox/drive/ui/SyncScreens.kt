@@ -138,6 +138,7 @@ internal fun Dashboard(config: SyncConfig, status: SyncStatus, target: String, a
                 }
                 Text(label(R.string.df_concurrent, status.concurrency), style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
             }
+            if (config.enabled) item { TransferNotificationPermission() }
             if (status.tasks.isEmpty()) item {
                 Panel { Text(label(R.string.df_no_upload), style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant) }
             }

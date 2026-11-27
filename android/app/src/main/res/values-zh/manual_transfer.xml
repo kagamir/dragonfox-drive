@@ -14,4 +14,5 @@
     <string name="transfer_file_changed">云端文件已更改，请重新打开并下载最新版本。</string>
     <string name="transfer_digest_failed">下载的文件未通过完整性校验。</string>
     <string name="transfer_no_picker">无法打开系统文件选择器。</string>
+    <string name="transfer_background_unavailable">Android 未能启动传输。请返回 DragonFox Drive 并点按“重试”。</string>
 </resources>

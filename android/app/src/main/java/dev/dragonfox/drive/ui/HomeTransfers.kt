@@ -114,6 +114,7 @@ internal fun TransferPanel(manager: ManualTransfers, transfers: HomeTransfers, m
                     Text(stringResource(R.string.transfer_bytes, Formatter.formatShortFileSize(context, state.bytes),
                         Formatter.formatShortFileSize(context, size)), style = MaterialTheme.typography.labelSmall)
                 } else LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                TransferNotificationPermission()
             }
             state.total?.let { total ->
                 if (total > 0) Text(stringResource(R.string.transfer_count, state.completed, total), style = MaterialTheme.typography.labelSmall)

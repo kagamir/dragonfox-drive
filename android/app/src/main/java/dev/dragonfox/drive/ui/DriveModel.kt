@@ -7,6 +7,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import dev.dragonfox.drive.background.AccountTransfers
+import dev.dragonfox.drive.background.TransferRuntime
 import dev.dragonfox.drive.R
 import dev.dragonfox.drive.gallery.PhotoLoader
 import dev.dragonfox.drive.protocol.CloudFile
@@ -26,8 +28,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.job
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -41,10 +42,7 @@ internal class DriveModel(private val app: Application) : AndroidViewModel(app),
         theme = choice
     }
 
-    private val vault = SessionVault(app)
-    private val sessionLock = Any()
-    private var generation = 0L
-    private var visible = false
+    private val runtime = TransferRuntime.get(app)
     @Volatile private var client: DriveClient? = null
     private var homeScope: CoroutineScope? = null
     private val cloudChanges = Mutex()
@@ -57,7 +55,6 @@ internal class DriveModel(private val app: Application) : AndroidViewModel(app),
     var homeRefreshNotice by mutableStateOf<String?>(null)
         private set
     fun dismissHomeNotice() { homeRefreshNotice = null }
-    private var expiryObserver: Job? = null
     var engine by mutableStateOf<SyncEngine?>(null)
         private set
     var account by mutableStateOf<DriveSession?>(null)
@@ -78,45 +75,38 @@ internal class DriveModel(private val app: Application) : AndroidViewModel(app),
     init {
         viewModelScope.launch {
             try {
-                val saved = withContext(Dispatchers.IO) { synchronized(sessionLock) { vault.read() } }
-                if (saved != null) attach(DriveClient(saved, writer(generation)))
+                runtime.restore(forUi = true)
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                withContext(Dispatchers.IO) { synchronized(sessionLock) { vault.clear() } }
                 authError = app.getString(R.string.df_unlock_failed)
             } finally { restoring = false }
+            runtime.current.collect(::bindAccount)
         }
     }
 
-    private fun writer(id: Long): (DriveSession) -> Unit = { session ->
-        synchronized(sessionLock) { if (id == generation) vault.save(session) }
-    }
-
-    private fun attach(api: DriveClient) {
-        client = api
-        val scope = CoroutineScope(viewModelScope.coroutineContext + SupervisorJob(viewModelScope.coroutineContext.job))
-        homeScope = scope
-        manualTransfers = ManualTransfers(app, api, scope,
-            onChanged = {
-                if (client === api) {
-                    try { refreshDrive() }
-                    catch (e: CancellationException) { throw e }
-                    catch (_: Exception) {
-                        if (client === api) homeRefreshNotice = app.getString(R.string.df_home_refresh_failed)
+    private fun bindAccount(active: AccountTransfers?) {
+        if (active?.client !== client) {
+            clearHome()
+            client = active?.client
+            engine = active?.engine
+            manualTransfers = active?.manual
+            account = active?.client?.session
+            if (active != null) {
+                val scope = CoroutineScope(viewModelScope.coroutineContext + SupervisorJob(viewModelScope.coroutineContext.job))
+                homeScope = scope
+                photoLoader = PhotoLoader(app, active.client)
+                scope.launch {
+                    active.cloudChanges.drop(1).collect {
+                        try { refreshDrive() }
+                        catch (e: CancellationException) { throw e }
+                        catch (_: Exception) {
+                            if (client === active.client) homeRefreshNotice = app.getString(R.string.df_home_refresh_failed)
+                        }
                     }
                 }
-            },
-            onExpired = { if (client === api) signOut(expired = true) })
-        photoLoader = PhotoLoader(app, api)
-        val session = api.session
-        account = session
-        val active = SyncEngine(app, api, session.server + "\n" + session.userId)
-        engine = active
-        active.setVisible(visible)
-        expiryObserver = viewModelScope.launch {
-            active.status.first { it.sessionExpired }
-            if (engine === active) signOut(expired = true)
+            }
         }
+        if (active == null && runtime.expired) authError = app.getString(R.string.df_expired)
     }
 
     fun clearAuthError() { authError = null }
@@ -125,15 +115,9 @@ internal class DriveModel(private val app: Application) : AndroidViewModel(app),
         if (busy) return
         busy = true
         authError = null
-        val id = synchronized(sessionLock) { ++generation }
         viewModelScope.launch {
             try {
-                val api = withContext(Dispatchers.IO) {
-                    val save = writer(id)
-                    if (register) DriveClient.register(server.trim(), user.trim(), password, save)
-                        else DriveClient.login(server.trim(), user.trim(), password, save)
-                }
-                if (id == generation) attach(api)
+                runtime.authenticate(server.trim(), user.trim(), password, register)
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 authError = when ((e as? StatusException)?.status) {
@@ -148,10 +132,10 @@ internal class DriveModel(private val app: Application) : AndroidViewModel(app),
     private fun currentApi(): DriveClient = client ?: throw CancellationException()
 
     private suspend fun <T> onServer(api: DriveClient, request: (DriveClient) -> T): T {
-        if (client !== api) throw CancellationException()
+        if (runtime.current.value?.client !== api) throw CancellationException()
         try {
             val result = withContext(Dispatchers.IO) { request(api) }
-            if (client !== api) throw CancellationException()
+            if (runtime.current.value?.client !== api) throw CancellationException()
             return result
         } catch (e: StatusException) {
             if (client === api && e.status == 401) signOut(expired = true)
@@ -228,7 +212,7 @@ internal class DriveModel(private val app: Application) : AndroidViewModel(app),
             val failures = linkedMapOf<HomeItem, String>()
             val selection = items.distinctBy(HomeItem::key)
             for (item in selection) {
-                if (client !== api) throw CancellationException()
+                if (runtime.current.value?.client !== api) throw CancellationException()
                 try { action(api, item) }
                 catch (e: CancellationException) { throw e }
                 catch (e: Exception) {
@@ -244,18 +228,13 @@ internal class DriveModel(private val app: Application) : AndroidViewModel(app),
         }
     }
 
-    fun setVisible(value: Boolean) {
-        visible = value
-        engine?.setVisible(value)
-    }
+    fun setVisible(value: Boolean) = runtime.setVisible(this, value)
 
     fun signOut(expired: Boolean = false) {
-        val old = client ?: return
-        synchronized(sessionLock) { generation++ }
-        expiryObserver?.cancel()
-        expiryObserver = null
-        manualTransfers?.close()
-        manualTransfers = null
+        client?.let { runtime.signOut(it, expired) }
+    }
+
+    private fun clearHome() {
         submissions.clear()
         homeTextDraft.clear()
         homeShareDraft.clear()
@@ -263,32 +242,15 @@ internal class DriveModel(private val app: Application) : AndroidViewModel(app),
         homeRefreshNotice = null
         homeScope?.cancel()
         homeScope = null
-        engine?.close()
-        engine = null
-        client = null
-        account = null
         photoLoader?.clear()
         photoLoader = null
         cloudFiles = emptyList()
         cloudFolders = emptyList()
-        busy = true
-        authError = if (expired) app.getString(R.string.df_expired) else null
-        viewModelScope.launch {
-            try {
-                withContext(Dispatchers.IO) { synchronized(sessionLock) { vault.clear() } }
-            } finally { busy = false }
-            if (!expired) withContext(Dispatchers.IO) { runCatching { old.logout() } }
-        }
     }
 
     override fun onCleared() {
-        manualTransfers?.close()
-        submissions.clear()
-        homeTextDraft.clear()
-        homeShareDraft.clear()
-        newTextBody = ""
-        homeScope?.cancel()
-        engine?.close()
+        runtime.setVisible(this, false)
+        clearHome()
         super.onCleared()
     }
 }

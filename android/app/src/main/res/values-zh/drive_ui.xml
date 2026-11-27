@@ -38,7 +38,7 @@
     <string name="df_open_folder">打开 %1$s</string>
     <string name="df_other_folders">另有 %1$d 个文件夹</string>
     <string name="df_password">密码</string>
-    <string name="df_pause_hint">选择本地文件夹和云端目录，在使用应用时自动上传。</string>
+    <string name="df_pause_hint">选择本地文件夹和云端目录，自动上传新增文件。</string>
     <string name="df_paused">同步已关闭</string>
     <string name="df_permission_settings_missing">请在系统设置的“特殊应用权限”中打开“所有文件访问权限”。</string>
     <string name="df_plan">同步配置</string>
@@ -49,7 +49,7 @@
     <string name="df_rescan">立即扫描</string>
     <string name="df_retry">重试</string>
     <string name="df_root">我的文件</string>
-    <string name="df_runs_in_app">应用打开期间会自动检查变化。</string>
+    <string name="df_runs_in_app">锁屏后，当前上传会继续。后续后台检查由 Android 调度。</string>
     <string name="df_save">保存同步配置</string>
     <string name="df_saved_folder">已保存的目标目录</string>
     <string name="df_scanning">正在扫描文件夹</string>
@@ -65,4 +65,5 @@
     <string name="df_use_destination">使用此云端目录</string>
     <string name="df_use_selected">使用选中的文件夹（%1$d）</string>
     <string name="df_username">用户名</string>
+    <string name="df_transfer_enable_notifications">显示传输通知</string>
 </resources>

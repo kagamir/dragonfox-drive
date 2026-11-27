@@ -1,6 +1,8 @@
 package dev.dragonfox.drive.transfer
 
+import android.content.ClipData
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import dev.dragonfox.drive.R
 import dev.dragonfox.drive.protocol.CloudFile
@@ -20,6 +22,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -39,15 +42,34 @@ data class TransferState(
 private sealed interface TransferRequest {
     class Upload(val parentId: String?, val uris: List<Uri>, val tree: Uri?) : TransferRequest
     class Download(val file: CloudFile, val output: Uri) : TransferRequest
+
+    /** Copy just the chosen URIs to the transfer service for the lifetime of its start command. */
+    fun serviceGrants(): Intent {
+        val access = when (this) {
+            is Upload -> if (tree != null) Intent.FLAG_GRANT_PREFIX_URI_PERMISSION else 0
+            is Download -> Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+        }
+        val selected = when (this) {
+            is Upload -> tree?.let(::listOf) ?: uris
+            is Download -> listOf(output)
+        }
+        val clip = ClipData.newRawUri(null, selected.first())
+        for (index in 1 until selected.size) clip.addItem(ClipData.Item(selected[index]))
+        return Intent().apply {
+            clipData = clip
+            flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or access
+        }
+    }
 }
 
-/** The signed-in model owns this manager. Start, cancel and close from its main-thread scope. */
+/** The signed-in transfer runtime owns this manager. Start, cancel and close on the main thread. */
 class ManualTransfers(
     context: Context,
     private val client: DriveClient,
     private val scope: CoroutineScope,
     private val onChanged: suspend () -> Unit,
     private val onExpired: () -> Unit,
+    private val beginTransfer: (grants: Intent, cancel: () -> Unit) -> AutoCloseable = { _, _ -> AutoCloseable {} },
 ) {
     private val app = context.applicationContext
     private val documents = SafDocuments(app.contentResolver)
@@ -89,7 +111,11 @@ class ManualTransfers(
             var downloadStarted = false
             var complete = false
             var failure: Exception? = null
+            var lease: AutoCloseable? = null
             try {
+                val transferJob = currentCoroutineContext().job
+                // Reserve foreground execution while the system picker result is being delivered.
+                lease = beginTransfer(task.serviceGrants()) { transferJob.cancel() }
                 withContext(Dispatchers.IO) {
                     val context = currentCoroutineContext()
                     val checkActive = { context.ensureActive() }
@@ -105,20 +131,23 @@ class ManualTransfers(
             } catch (_: CancellationException) {
                 // withContext may be cancelled on its way back to Main after publishing the complete result.
                 if (!complete) phase = TransferPhase.CANCELLED
-                if (task is TransferRequest.Download && !downloadStarted) {
-                    withContext(NonCancellable + Dispatchers.IO) {
-                        runCatching { if (documents.isEmpty(task.output)) documents.discardOutput(task.output) }
-                    }
-                }
             } catch (e: Exception) {
-                failure = e
+                failure = if (lease == null) IOException(app.getString(R.string.transfer_background_unavailable), e) else e
                 phase = TransferPhase.FAILED
             } finally {
+                if (task is TransferRequest.Download && !downloadStarted) {
+                    withContext(NonCancellable) {
+                        withContext(Dispatchers.IO) {
+                            runCatching { if (documents.isEmpty(task.output)) documents.discardOutput(task.output) }
+                        }
+                    }
+                }
+                lease?.close()
                 if (!closed) {
                     if (phase == TransferPhase.DONE) request = null
                     active.update { it.copy(phase = phase, error = failure?.localizedMessage) }
                     if ((failure as? StatusException)?.status == 401) onExpired()
-                    else if (task is TransferRequest.Upload) scope.launch {
+                    else if (task is TransferRequest.Upload && lease != null) scope.launch {
                         // A cancelled batch may already have finalized files or created its directory.
                         try { onChanged() } catch (e: StatusException) { if (e.status == 401) onExpired() }
                         catch (e: CancellationException) { throw e }

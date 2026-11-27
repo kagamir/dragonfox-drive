@@ -1,0 +1,6 @@
+<resources>
+    <string name="bg_transfer_channel">Active transfers</string>
+    <string name="bg_transfer_title">Transferring files</string>
+    <string name="bg_transfer_open">Open DragonFox Drive to see progress</string>
+    <string name="bg_transfer_progress">%1$d of %2$d files complete</string>
+</resources>

@@ -5,6 +5,7 @@ import android.content.ContentResolver
 import android.content.ContentValues
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.Intent
 import android.database.Cursor
 import android.database.MatrixCursor
 import android.net.Uri
@@ -28,6 +29,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assume.assumeNotNull
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -48,12 +50,24 @@ class HomeTransferTest {
             override fun getApplicationContext(): Context = this
         }
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-        val transfer = withContext(Dispatchers.Main.immediate) { ManualTransfers(context, api, scope, {}, {}) }
+        lateinit var grants: Intent
+        var holdingLease = false
+        var denyStart = false
+        var stopOnStart = false
+        val transfer = ManualTransfers(context, api, scope, {}, {}, beginTransfer = { handoff, stop ->
+            if (denyStart) throw IllegalStateException("Foreground service start denied")
+            check(!holdingLease)
+            grants = handoff
+            holdingLease = true
+            if (stopOnStart) stop()
+            AutoCloseable { holdingLease = false }
+        })
         suspend fun awaitPhase(expected: TransferPhase) {
             val final = withTimeout(60_000) {
                 transfer.state.first { it.phase in setOf(TransferPhase.DONE, TransferPhase.FAILED, TransferPhase.CANCELLED) }
             }
             assertEquals(final.error, expected, final.phase)
+            assertFalse("Transfer lease retained at ${final.phase}", holdingLease)
         }
         suspend fun runTask(expected: TransferPhase = TransferPhase.DONE, start: () -> Unit) {
             withContext(Dispatchers.Main.immediate) {
@@ -72,7 +86,18 @@ class HomeTransferTest {
             val outer = File(root, "same.txt").apply { writeText("top") }
             val inner = File(nested, "same.txt").apply { writeText("another file — 東京") }
 
-            runTask { transfer.uploadFolder(destination.id, provider.tree(root)) }
+            denyStart = true
+            runTask(TransferPhase.FAILED) { transfer.uploadFolder(destination.id, provider.tree(root)) }
+            assertEquals(app.getString(R.string.transfer_background_unavailable), transfer.state.value.error)
+            denyStart = false
+            stopOnStart = true
+            withContext(Dispatchers.Main.immediate) { transfer.retry() }
+            awaitPhase(TransferPhase.CANCELLED)
+            stopOnStart = false
+            withContext(Dispatchers.Main.immediate) { transfer.retry() }
+            awaitPhase(TransferPhase.DONE)
+            assertEquals(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION, grants.flags)
+            assertEquals(provider.tree(root), grants.clipData!!.getItemAt(0).uri)
             assertEquals(3, transfer.state.value.completed)
             assertEquals(3, transfer.state.value.total)
             val folders = api.listFolders()
@@ -86,7 +111,12 @@ class HomeTransferTest {
             val source = uploaded.single { it.parentId == child.id && it.name == inner.name }
 
             val output = File(base, "saved.txt").apply { check(createNewFile()) }
+            stopOnStart = true
+            runTask(TransferPhase.CANCELLED) { transfer.download(source, provider.document(output)) }
+            stopOnStart = false
             runTask { transfer.download(source, provider.document(output)) }
+            assertEquals(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION, grants.flags)
+            assertEquals(provider.document(output), grants.clipData!!.getItemAt(0).uri)
             assertArrayEquals(inner.readBytes(), output.readBytes())
             assertEquals(inner.length(), transfer.state.value.bytes)
 
@@ -96,6 +126,9 @@ class HomeTransferTest {
             runTask(TransferPhase.FAILED) {
                 transfer.uploadFiles(null, listOf(provider.document(looseA), provider.document(looseB)))
             }
+            assertEquals(Intent.FLAG_GRANT_READ_URI_PERMISSION, grants.flags)
+            val clip = requireNotNull(grants.clipData)
+            assertEquals(listOf(provider.document(looseA), provider.document(looseB)), (0 until clip.itemCount).map { clip.getItemAt(it).uri })
             val successfulId = api.listFiles().single { it.parentId == null }.id
             withContext(Dispatchers.Main.immediate) { transfer.retry() }
             awaitPhase(TransferPhase.DONE)
