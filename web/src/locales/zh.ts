@@ -41,6 +41,7 @@ export default {
     actions: "{name} 的操作",
   },
   drive: {
+    unreadableLocations: "有 {n} 个文件的所属目录无法读取，可以刷新重试。",
     textReadError: "无法读取此文本文件。",
     myFiles: "我的文件", newFolder: "新建文件夹", searchHere: "搜索当前文件夹…",
     upload: "上传", uploading: "上传中", name: "名称", size: "大小", status: "状态",

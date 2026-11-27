@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { setActivePinia, createPinia } from "pinia";
-import { toBase64 } from "@/crypto/file";
+import { flushPromises } from "@vue/test-utils";
+import { toBase64, type Manifest } from "@/crypto/file";
+import type { FileMeta } from "@/api/types";
 
 const {
   createMock,
@@ -28,7 +30,7 @@ const { refreshAuthTokenMock } = vi.hoisted(() => ({
 
 const { currentFolderIdMock, folderKeyOfMock, filesMoveMock } = vi.hoisted(() => ({
   currentFolderIdMock: { value: null as string | null },
-  folderKeyOfMock: vi.fn(() => undefined),
+  folderKeyOfMock: vi.fn<() => Uint8Array | undefined>(() => undefined),
   filesMoveMock: vi.fn().mockResolvedValue({ ok: true }),
 }));
 
@@ -63,6 +65,7 @@ vi.mock("@/workers/crypto", () => ({
     encryptParentId: vi.fn().mockImplementation(async (_k: unknown, p: string | null) =>
       p === null ? null : { ciphertext: new Uint8Array([11]), iv: new Uint8Array([12]) },
     ),
+    decryptParentId: vi.fn(),
     encryptChunk: vi.fn().mockResolvedValue(new Uint8Array([5])),
     decryptManifestWithKey: vi.fn().mockResolvedValue({
       name: "dl.txt", mime: "text/plain", size: 2,
@@ -97,6 +100,21 @@ import { useAuthStore } from "./auth";
 import { cryptoApi } from "@/workers/crypto";
 import { filesApi } from "@/api/files";
 import { ApiError } from "@/api/client";
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+function listingFile(id: string): FileMeta {
+  return {
+    id, owner_id: "u", status: "ready", total_size: 2, chunk_count: 1,
+    encrypted_manifest: "YQ==", encrypted_manifest_nonce: "YQ==",
+    encrypted_file_key: "YQ==", encrypted_file_key_nonce: "YQ==",
+    encrypted_parent_id: null, encrypted_parent_id_nonce: null, created_at: "", updated_at: "",
+  };
+}
 
 describe("files store", () => {
   beforeEach(() => {
@@ -140,6 +158,94 @@ describe("files store", () => {
     await files.refresh();
     expect(files.displayMimes.f1).toBeUndefined();
     expect(files.displayNames.f1).toBeUndefined();
+  });
+
+  it.each(["cold load", "refresh"])("keeps unresolved rows out of the root during a %s", async (phase) => {
+    useAuthStore().masterKey = new Uint8Array(32);
+    const files = useFilesStore();
+    const rootFile = listingFile("00000000-0000-4000-8000-000000000001");
+    const child = {
+      ...rootFile, id: "00000000-0000-4000-8000-000000000002", encrypted_manifest: "Yg==",
+      encrypted_parent_id: "Yw==", encrypted_parent_id_nonce: "YQ==",
+    };
+    const rootName = "00000000-0000-4000-8000-000000000003"; // A real UUID-shaped filename.
+    const manifest = (name: string): Manifest => ({
+      version: 1, name, mime: "text/plain", size: 2, chunk_size: 4 * 1024 * 1024,
+      iv_base: "", content_id: "", created_at: "",
+    });
+    const listing = (parent: string | null) =>
+      files.filesWithParent(parent).map((f) => files.displayNames[f.id] ?? f.id);
+    const previous = phase === "refresh" ? ["old.txt"] : [];
+    if (phase === "refresh") {
+      vi.mocked(filesApi.list).mockResolvedValueOnce({ files: [{ ...rootFile, encrypted_manifest: "ZA==" }] });
+      vi.mocked(cryptoApi.decryptManifestWithKey).mockResolvedValueOnce(manifest("old.txt"));
+      await files.refresh();
+    }
+
+    const parent = deferred<string>();
+    const names = deferred<void>();
+    vi.mocked(cryptoApi.decryptParentId).mockReturnValueOnce(parent.promise);
+    folderKeyOfMock.mockReturnValueOnce(new Uint8Array(32));
+    vi.mocked(filesApi.list).mockResolvedValueOnce({ files: [child, rootFile] });
+    const decryptName = async (_key: Uint8Array, ciphertext: string) => {
+      await names.promise;
+      return manifest(ciphertext === rootFile.encrypted_manifest ? rootName : "trip.jpg");
+    };
+    vi.mocked(cryptoApi.decryptManifestWithKey).mockImplementationOnce(decryptName).mockImplementationOnce(decryptName);
+
+    const refresh = files.refresh();
+    await flushPromises();
+    const beforeParent = listing(null);
+    parent.resolve("album");
+    await flushPromises();
+    const beforeNames = { root: listing(null), album: listing("album") };
+    names.resolve();
+    await refresh;
+
+    expect(beforeParent).toEqual(previous);
+    expect(beforeNames).toEqual({ root: previous, album: [] });
+    expect(listing(null)).toEqual([rootName]);
+    expect(listing("album")).toEqual(["trip.jpg"]);
+  });
+
+  it("retries an unreadable parent on refresh without assigning its file to the root", async () => {
+    useAuthStore().masterKey = new Uint8Array(32);
+    const files = useFilesStore();
+    const child = { ...listingFile("child"), encrypted_parent_id: "YQ==", encrypted_parent_id_nonce: "YQ==" };
+    vi.mocked(filesApi.list).mockResolvedValueOnce({ files: [child] });
+    vi.mocked(cryptoApi.decryptParentId).mockRejectedValueOnce(new Error("parent unavailable"));
+    await files.refresh();
+    expect(files.filesWithParent(null)).toEqual([]);
+    expect(files.filesWithParent("album")).toEqual([]);
+    expect(files.unplacedFileCount).toBe(1);
+
+    vi.mocked(filesApi.list).mockResolvedValueOnce({ files: [child] });
+    vi.mocked(cryptoApi.decryptParentId).mockResolvedValueOnce("album");
+    folderKeyOfMock.mockReturnValueOnce(new Uint8Array(32));
+    await files.refresh();
+    expect(files.filesWithParent(null)).toEqual([]);
+    expect(files.filesWithParent("album")).toEqual([child]);
+    expect(files.unplacedFileCount).toBe(0);
+  });
+
+  it("keeps the newer listing when an older parent lookup finishes last", async () => {
+    useAuthStore().masterKey = new Uint8Array(32);
+    const files = useFilesStore();
+    const current = listingFile("moved");
+    const old = { ...current, encrypted_parent_id: "YQ==", encrypted_parent_id_nonce: "YQ==" };
+    const parent = deferred<string>();
+    vi.mocked(cryptoApi.decryptParentId).mockReturnValueOnce(parent.promise);
+    vi.mocked(filesApi.list).mockResolvedValueOnce({ files: [old] }).mockResolvedValueOnce({ files: [current] });
+    const olderRefresh = files.refresh();
+    await flushPromises();
+    await files.refresh();
+    expect(files.filesWithParent(null)).toEqual([current]);
+
+    parent.resolve("old-folder");
+    await olderRefresh;
+    expect(files.filesWithParent(null)).toEqual([current]);
+    expect(files.filesWithParent("old-folder")).toEqual([]);
+    expect(files.displayNames.moved).toBe("dl.txt");
   });
 
   it("upload runs create → putManifest → putChunk → finalize", async () => {

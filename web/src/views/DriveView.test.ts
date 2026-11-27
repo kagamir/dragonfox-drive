@@ -129,6 +129,25 @@ describe("DriveView", () => {
     expect(w.find('[data-testid="new-folder-btn"]').exists()).toBe(true);
   });
 
+  it("shows a loading status until the folder tree and file listing have both arrived", async () => {
+    setActivePinia(createPinia());
+    let finishTree!: () => void;
+    let finishFiles!: () => void;
+    STUB.loadTree.mockImplementationOnce(() => new Promise<void>((done) => { finishTree = done; }));
+    STUB.refresh.mockImplementationOnce(() => new Promise<void>((done) => { finishFiles = done; }));
+    const w = mount(DriveView, { global: { stubs, plugins: [i18n] } });
+    expect(w.get('[role="status"]').text()).toBe(i18n.global.t("common.loading"));
+    expect(w.text()).not.toContain(i18n.global.t("drive.empty"));
+    finishTree();
+    await flushPromises();
+    expect(w.get('[role="status"]').text()).toBe(i18n.global.t("common.loading"));
+    finishFiles();
+    await flushPromises();
+    expect(w.find('[role="status"]').exists()).toBe(false);
+    expect(w.text()).toContain(i18n.global.t("drive.empty"));
+    w.unmount();
+  });
+
   it("opens photo folders in the gallery and restores the folder type after a failed save", async () => {
     setActivePinia(createPinia());
     STUB.currentFolderId = "album";

@@ -21,6 +21,7 @@ import DfBreadcrumbs from "@/components/ui/DfBreadcrumbs.vue";
 import DfButton from "@/components/ui/DfButton.vue";
 import DfSegmented from "@/components/ui/DfSegmented.vue";
 import DfInput from "@/components/ui/DfInput.vue";
+import DfSpinner from "@/components/ui/DfSpinner.vue";
 import DfContextMenu from "@/components/ui/DfContextMenu.vue";
 import FilePreviewModal from "@/components/FilePreviewModal.vue";
 import MovePickerModal from "@/components/MovePickerModal.vue";
@@ -49,7 +50,15 @@ const bulkMoving = ref(false);
 const ctxMenu = ref<InstanceType<typeof DfContextMenu> | null>(null);
 const ctxTarget = ref<Entry | null>(null);
 
-onMounted(async () => { await folders.loadTree(); await files.refresh(); });
+const openingDrive = ref(true);
+onMounted(async () => {
+  try {
+    await folders.loadTree();
+    await files.refresh();
+  } finally {
+    openingDrive.value = false;
+  }
+});
 
 onBeforeUnmount(() => files.closePreview());
 
@@ -353,8 +362,17 @@ const queueUploads = computed(() =>
         {{ files.error || folders.error }}
       </p>
 
+      <p v-if="!openingDrive && files.unplacedFileCount" role="status" class="mt-4 text-sm text-fg-muted">
+        {{ t("drive.unreadableLocations", { n: files.unplacedFileCount }) }}
+      </p>
+
       <div class="mt-4">
-        <FileList
+        <div v-if="openingDrive || (files.loading && !folders.paginatedView.length)"
+          role="status" class="flex items-center justify-center gap-2 py-14 text-sm text-fg-muted">
+          <DfSpinner class="size-4 text-brand" />
+          {{ t("common.loading") }}
+        </div>
+        <FileList v-else
           :entries="folders.paginatedView"
           :display-names="files.displayNames"
           :search="search"
@@ -385,7 +403,7 @@ const queueUploads = computed(() =>
         <DfButton variant="danger" size="sm" data-testid="bulk-delete-btn" @click="bulkDelete">{{ t("common.delete") }}</DfButton>
       </div>
 
-      <nav v-if="folders.totalPages > 1" class="mt-6 flex items-center gap-3">
+      <nav v-if="!openingDrive && folders.totalPages > 1" class="mt-6 flex items-center gap-3">
         <DfButton variant="ghost" size="sm" data-testid="page-prev" :disabled="!showPrev" @click="folders.setPage(folders.page - 1)">{{ t("drive.prev") }}</DfButton>
         <span class="text-sm text-fg-muted">{{ t("drive.page", { cur: folders.page + 1, total: folders.totalPages }) }}</span>
         <DfButton variant="ghost" size="sm" data-testid="page-next" :disabled="!showNext" @click="folders.setPage(folders.page + 1)">{{ t("drive.next") }}</DfButton>

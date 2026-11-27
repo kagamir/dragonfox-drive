@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { computed, ref, shallowRef } from "vue";
+import { computed, ref, shallowRef, watch } from "vue";
 
 import { filesApi } from "@/api/files";
 import { refreshAuthToken, ApiError } from "@/api/client";
@@ -71,6 +71,19 @@ export const useFilesStore = defineStore("files", () => {
   const displayMimes = ref<Record<string, string>>({});
   let refreshId = 0;
   const fileParents = ref<Record<string, string | null>>({});
+  const unplacedFileCount = ref(0);
+  const auth = useAuthStore();
+  watch(() => auth.masterKey, () => {
+    ++refreshId;
+    files.value = [];
+    fileParents.value = {};
+    displayNames.value = {};
+    displayMimes.value = {};
+    unplacedFileCount.value = 0;
+    loading.value = false;
+    error.value = null;
+  }, { flush: "sync" });
+
   const activeUploads = ref<UploadSession[]>([]);
   const activeDownloads = ref<DownloadSession[]>([]);
   const preview = shallowRef<{
@@ -86,16 +99,15 @@ export const useFilesStore = defineStore("files", () => {
   const previewLoading = computed(() => previewRequest.value !== null);
 
   function masterKey(): Uint8Array {
-    const key = useAuthStore().masterKey;
+    const key = auth.masterKey;
     if (!key) throw new Error("not unlocked — master key missing");
     return key;
   }
 
   /** Resolve the key that wraps a file's file_key: the parent folder's
    *  folder_key, or master_key when the file lives at root. */
-  function wrapKeyForFile(id: string): Uint8Array {
+  function wrapKeyForFile(parentId: string | null): Uint8Array {
     const mk = masterKey();
-    const parentId = fileParents.value[id] ?? null;
     if (parentId === null) return mk;
     const foldersStore = useFoldersStore();
     const fk = foldersStore.folderKeyOf(parentId);
@@ -112,7 +124,7 @@ export const useFilesStore = defineStore("files", () => {
     encrypted_file_key_nonce: string | null;
     encrypted_manifest: string | null;
     encrypted_manifest_nonce: string | null;
-  }): Promise<{ fileKey: Uint8Array; manifest: Manifest }> {
+  }, parentId = fileParents.value[meta.id] ?? null): Promise<{ fileKey: Uint8Array; manifest: Manifest }> {
     if (
       !meta.encrypted_file_key ||
       !meta.encrypted_file_key_nonce ||
@@ -126,7 +138,7 @@ export const useFilesStore = defineStore("files", () => {
         ciphertext: fromBase64(meta.encrypted_file_key),
         iv: fromBase64(meta.encrypted_file_key_nonce),
       },
-      wrapKeyForFile(meta.id),
+      wrapKeyForFile(parentId),
     );
     const manifest = await cryptoApi.decryptManifestWithKey(
       fileKey,
@@ -136,33 +148,73 @@ export const useFilesStore = defineStore("files", () => {
     return { fileKey, manifest };
   }
 
+  async function resolveParent(file: FileMeta, previous?: FileMeta): Promise<string | null> {
+    const { encrypted_parent_id: parent, encrypted_parent_id_nonce: nonce } = file;
+    // Older root records can omit both fields.
+    if (parent == null && nonce == null) return null;
+    if (!parent || !nonce) throw new Error("incomplete encrypted parent");
+    const cached = fileParents.value[file.id];
+    if (cached !== undefined && previous?.encrypted_parent_id === parent && previous.encrypted_parent_id_nonce === nonce) {
+      return cached;
+    }
+    return cryptoApi.decryptParentId(masterKey(), fromBase64(parent), fromBase64(nonce));
+  }
+
   async function refresh(): Promise<void> {
     loading.value = true;
     error.value = null;
     const id = ++refreshId;
+    const baseline = files.value;
     try {
-      const res = await filesApi.list();
-      if (refreshId !== id) return;
-      const previous = new Map(files.value.map((f) => [f.id, f]));
-      for (const f of res.files) {
-        const old = previous.get(f.id);
-        previous.delete(f.id);
-        if (old?.encrypted_manifest !== f.encrypted_manifest || old?.encrypted_manifest_nonce !== f.encrypted_manifest_nonce) {
-          delete displayNames.value[f.id];
-          delete displayMimes.value[f.id];
+      const { files: rows } = await filesApi.list();
+      if (id !== refreshId) return;
+
+      // Build the next listing off-screen. Publishing rows before their parent
+      // and name are known makes every nested file briefly look like a root file.
+      const previous = new Map(baseline.map((f) => [f.id, f]));
+      const parents: Record<string, string | null> = {};
+      const names: Record<string, string> = {};
+      const mimes: Record<string, string> = {};
+      let unplaced = 0;
+      await asyncPool(4, rows, async (file) => {
+        if (id !== refreshId) return;
+        const old = previous.get(file.id);
+        let parent: string | null;
+        try {
+          parent = await resolveParent(file, old);
+        } catch {
+          unplaced++;
+          return;
         }
-        if (old?.encrypted_parent_id !== f.encrypted_parent_id || old?.encrypted_parent_id_nonce !== f.encrypted_parent_id_nonce) {
-          delete fileParents.value[f.id];
+        parents[file.id] = parent;
+        if (id !== refreshId || file.status !== "ready") return;
+        const cachedName = displayNames.value[file.id];
+        if (
+          cachedName !== undefined && old &&
+          old.encrypted_manifest === file.encrypted_manifest &&
+          old.encrypted_manifest_nonce === file.encrypted_manifest_nonce
+        ) {
+          names[file.id] = cachedName;
+          mimes[file.id] = displayMimes.value[file.id] ?? "";
+          return;
         }
-      }
-      for (const removedId of previous.keys()) {
-        delete displayNames.value[removedId];
-        delete displayMimes.value[removedId];
-        delete fileParents.value[removedId];
-      }
-      files.value = res.files;
-      await decryptParents(id);
-      await decryptNames(id);
+        try {
+          const { manifest } = await unlockFile(file, parent);
+          names[file.id] = manifest.name;
+          mimes[file.id] = manifest.mime || "";
+        } catch {
+          // A file with an unreadable manifest remains accessible by ID in its own folder.
+        }
+      });
+
+      if (id !== refreshId) return;
+      // A local move, rename or save completed while the server list was in flight.
+      if (files.value !== baseline) return refresh();
+      fileParents.value = parents;
+      displayNames.value = names;
+      displayMimes.value = mimes;
+      unplacedFileCount.value = unplaced;
+      files.value = rows;
     } catch (e) {
       if (id === refreshId) error.value = (e as Error).message;
     } finally {
@@ -170,70 +222,8 @@ export const useFilesStore = defineStore("files", () => {
     }
   }
 
-  /**
-   * Best-effort: decrypt each ready file's manifest to show its real name.
-   * Never rejects — if the key is unavailable or a single manifest fails to
-   * decrypt, we silently leave the file id as the display fallback.
-   */
-  async function decryptNames(id: number): Promise<void> {
-    if (id !== refreshId) return;
-    try {
-      masterKey();
-    } catch {
-      return;
-    }
-    for (const f of files.value) {
-      if (
-        f.status === "ready" &&
-        f.encrypted_manifest &&
-        f.encrypted_manifest_nonce &&
-        f.encrypted_file_key &&
-        f.encrypted_file_key_nonce &&
-        displayMimes.value[f.id] === undefined
-      ) {
-        try {
-          const { manifest: m } = await unlockFile(f);
-          if (id !== refreshId) return;
-          displayNames.value[f.id] = m.name;
-          displayMimes.value[f.id] = m.mime || "";
-        } catch {
-          /* leave id as the display fallback */
-        }
-      }
-    }
-  }
-
-  async function decryptParents(id: number): Promise<void> {
-    let key: Uint8Array;
-    try {
-      key = masterKey();
-    } catch {
-      return;
-    }
-    for (const f of files.value) {
-      if (fileParents.value[f.id] === undefined) {
-        if (f.encrypted_parent_id && f.encrypted_parent_id_nonce) {
-          try {
-            const parent = await cryptoApi.decryptParentId(
-              key,
-              fromBase64(f.encrypted_parent_id),
-              fromBase64(f.encrypted_parent_id_nonce),
-            );
-            if (id !== refreshId) return;
-            fileParents.value[f.id] = parent;
-          } catch {
-            if (id !== refreshId) return;
-            fileParents.value[f.id] = null;
-          }
-        } else {
-          fileParents.value[f.id] = null;
-        }
-      }
-    }
-  }
-
   function filesWithParent(parentId: string | null): FileMeta[] {
-    return files.value.filter((f) => (fileParents.value[f.id] ?? null) === parentId);
+    return files.value.filter((file) => fileParents.value[file.id] === parentId);
   }
 
   async function upload(file: File): Promise<string> {
@@ -706,6 +696,7 @@ export const useFilesStore = defineStore("files", () => {
     activeUploads,
     activeDownloads,
     fileParents,
+    unplacedFileCount,
     refresh,
     upload,
     cancelUpload,

@@ -41,6 +41,7 @@ export default {
     actions: "Actions for {name}",
   },
   drive: {
+    unreadableLocations: "Some file locations could not be read ({n}). Refresh to try again.",
     textReadError: "Unable to read this text file.",
     myFiles: "My files", newFolder: "New folder", searchHere: "Search this folder…",
     upload: "Upload", uploading: "Uploading", name: "Name", size: "Size", status: "Status",
